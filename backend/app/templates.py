@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import cv2
+import numpy as np
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -52,8 +53,8 @@ def _load_class_dir(
     for img_path in class_dir.iterdir():
         if img_path.suffix.lower() not in IMAGE_EXTS:
             continue
-        img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
-        if img is None:
+        img_gray = _load_template_gray(img_path)
+        if img_gray is None:
             continue
         templates.setdefault(project, {}).setdefault(class_name, []).append(
             TemplateImage(
@@ -61,6 +62,24 @@ def _load_class_dir(
                 class_name=class_name,
                 template_name=img_path.name,
                 path=img_path,
-                image_gray=img,
+                image_gray=img_gray,
             )
         )
+
+
+def _load_template_gray(img_path: Path) -> "cv2.typing.MatLike" | None:
+    img = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 2:
+        return img
+    if img.shape[2] == 4:
+        alpha = img[:, :, 3]
+        ys, xs = np.where(alpha > 0)
+        if ys.size > 0 and xs.size > 0:
+            y0, y1 = ys.min(), ys.max() + 1
+            x0, x1 = xs.min(), xs.max() + 1
+            img = img[y0:y1, x0:x1]
+        bgr = img[:, :, :3]
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)

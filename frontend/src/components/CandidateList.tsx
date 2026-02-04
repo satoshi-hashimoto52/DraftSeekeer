@@ -44,7 +44,7 @@ export default function CandidateList({
                 background: colorMap[c.class_name] || "#999",
               }}
             />
-            {idx + 1}. {c.class_name}
+            {idx + 1}. {c.class_name || "(未選択)"}
             {c.source === "manual" && (
               <span
                 style={{
@@ -58,6 +58,23 @@ export default function CandidateList({
                 MANUAL
               </span>
             )}
+            {c.segPolygon && (
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  borderRadius: 10,
+                  background: "#1a73e8",
+                  color: "#fff",
+                }}
+              >
+                SEG
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: "#666", display: "flex", gap: 8 }}>
+            <span>source: {c.source || "template"}</span>
+            <span>seg: {c.segPolygon ? "yes" : "no"}</span>
           </div>
           <div style={{ fontSize: 12, color: "#444" }}>score: {c.score.toFixed(4)}</div>
           <div style={{ fontSize: 12, color: "#666" }}>template: {c.template}</div>

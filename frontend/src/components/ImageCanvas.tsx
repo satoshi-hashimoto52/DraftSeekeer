@@ -15,6 +15,7 @@ type Props = {
   editMode: boolean;
   showVertices: boolean;
   selectedVertexIndex: number | null;
+  highlightAnnotationId: string | null;
   onSelectVertex: (index: number | null) => void;
   onUpdateEditablePolygon: (next: { x: number; y: number }[]) => void;
   onVertexDragStart: () => void;
@@ -22,6 +23,7 @@ type Props = {
   onCreateManualBBox: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onManualCreateStateChange: (active: boolean) => void;
   onResizeSelectedBBox: (bbox: { x: number; y: number; w: number; h: number }) => void;
+  onResizeSelectedAnnotation: (bbox: { x: number; y: number; w: number; h: number }) => void;
 };
 
 export type ImageCanvasHandle = {
@@ -42,6 +44,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   editMode,
   showVertices,
   selectedVertexIndex,
+  highlightAnnotationId,
   onSelectVertex,
   onUpdateEditablePolygon,
   onVertexDragStart,
@@ -49,6 +52,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onCreateManualBBox,
   onManualCreateStateChange,
   onResizeSelectedBBox,
+  onResizeSelectedAnnotation,
 }: Props,
   ref
 ) {
@@ -56,6 +60,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   const imgRef = useRef<HTMLImageElement | null>(null);
   const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const scaleRef = useRef<number>(1);
+  const [scale, setScale] = useState<number>(1);
   const dragRef = useRef<{ active: boolean; vertexIndex: number | null }>({
     active: false,
     vertexIndex: null,
@@ -72,6 +78,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     handle: "tl" | "tr" | "bl" | "br" | null;
     origin: { x: number; y: number; w: number; h: number } | null;
   }>({ active: false, handle: null, origin: null });
+  const panDragRef = useRef<{
+    active: boolean;
+    start: { x: number; y: number } | null;
+    origin: { x: number; y: number } | null;
+  }>({ active: false, start: null, origin: null });
+  const spacePressedRef = useRef<boolean>(false);
   const moveDragRef = useRef<{
     active: boolean;
     origin: { x: number; y: number; w: number; h: number } | null;
@@ -83,16 +95,43 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   } | null>(null);
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        spacePressedRef.current = true;
+        if (event.target instanceof HTMLElement) {
+          const tag = event.target.tagName.toLowerCase();
+          if (tag !== "input" && tag !== "textarea" && tag !== "select") {
+            event.preventDefault();
+          }
+        }
+      }
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        spacePressedRef.current = false;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
     panRef.current = { x: 0, y: 0 };
     setPanOffset({ x: 0, y: 0 });
+    scaleRef.current = 1;
+    setScale(1);
   }, [imageUrl]);
 
   useImperativeHandle(ref, () => ({
     panTo: (x: number, y: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const offsetX = Math.round(canvas.width / 2 - x);
-      const offsetY = Math.round(canvas.height / 2 - y);
+      const offsetX = Math.round(canvas.width / 2 - x * scaleRef.current);
+      const offsetY = Math.round(canvas.height / 2 - y * scaleRef.current);
       panRef.current = { x: offsetX, y: offsetY };
       setPanOffset({ x: offsetX, y: offsetY });
     },
@@ -111,9 +150,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, panOffset.x, panOffset.y);
+      ctx.setTransform(scale, 0, 0, scale, panOffset.x, panOffset.y);
+      ctx.drawImage(img, 0, 0);
 
-      const baseLine = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) * 0.003));
+      const baseLine = Math.max(0.35, Math.min(canvas.width, canvas.height) * 0.0007);
       const drawLabel = (x: number, y: number, text: string, color: string, alpha = 1) => {
         ctx.save();
         ctx.globalAlpha = alpha;
@@ -123,8 +163,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const metrics = ctx.measureText(text);
         const labelW = Math.ceil(metrics.width + paddingX * 2);
         const labelH = 16;
-        const bx = Math.max(0, x + panOffset.x);
-        const by = Math.max(0, y + panOffset.y - labelH - 2);
+        const bx = Math.max(0, x);
+        const by = Math.max(0, y - labelH - 2);
         ctx.fillStyle = "#ffffff";
         ctx.globalAlpha = alpha * 0.9;
         ctx.fillRect(bx, by, labelW, labelH);
@@ -137,24 +177,61 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.restore();
       };
 
-      const drawBox = (
+      const drawLabelSized = (
         x: number,
         y: number,
-        w: number,
-        h: number,
+        text: string,
         color: string,
-        lineWidth: number,
-        dashed: boolean,
-        alpha: number
+        alpha: number,
+        scaleFactor: number
       ) => {
         ctx.save();
         ctx.globalAlpha = alpha;
+        ctx.font = `${Math.round(12 * scaleFactor)}px \"IBM Plex Sans\", system-ui, sans-serif`;
+        const paddingX = 4;
+        const paddingY = 2;
+        const metrics = ctx.measureText(text);
+        const labelW = Math.ceil(metrics.width + paddingX * 2);
+        const labelH = Math.round(16 * scaleFactor);
+        const bx = Math.max(0, x);
+        const by = Math.max(0, y - labelH - 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillRect(bx, by, labelW, labelH);
         ctx.strokeStyle = color;
-        ctx.lineWidth = lineWidth;
-        ctx.setLineDash(dashed ? [6, 4] : []);
-        ctx.strokeRect(x + panOffset.x, y + panOffset.y, w, h);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, labelW, labelH);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.fillText(text, bx + paddingX, by + Math.round(12 * scaleFactor));
         ctx.restore();
       };
+
+  const drawBox = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    color: string,
+    lineWidth: number,
+    dashed: boolean,
+    alpha: number,
+    fillAlpha = 0
+  ) => {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(dashed ? [6, 4] : []);
+    if (fillAlpha > 0) {
+      ctx.globalAlpha = fillAlpha;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, w, h);
+      ctx.globalAlpha = alpha;
+    }
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+  };
 
       const drawPolygon = (
         points: { x: number; y: number }[],
@@ -169,9 +246,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.lineWidth = lineWidth;
         ctx.setLineDash([]);
         ctx.beginPath();
-        ctx.moveTo(points[0].x + panOffset.x, points[0].y + panOffset.y);
+        ctx.moveTo(points[0].x, points[0].y);
         for (let i = 1; i < points.length; i += 1) {
-          ctx.lineTo(points[i].x + panOffset.x, points[i].y + panOffset.y);
+          ctx.lineTo(points[i].x, points[i].y);
         }
         ctx.closePath();
         ctx.stroke();
@@ -190,7 +267,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.strokeStyle = color;
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.arc(pt.x + panOffset.x, pt.y + panOffset.y, radius, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
           ctx.restore();
@@ -202,25 +279,25 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const isSelected = c.id === selectedCandidateId;
           const color = colorMap[c.class_name] || "#ff2b2b";
           drawBox(
-          c.bbox.x,
-          c.bbox.y,
-          c.bbox.w,
-          c.bbox.h,
-          color,
-          isSelected ? baseLine * 1.8 : baseLine,
-          !isSelected,
-          isSelected ? 0.9 : 0.35
-        );
+            c.bbox.x,
+            c.bbox.y,
+            c.bbox.w,
+            c.bbox.h,
+            color,
+            isSelected ? baseLine * 1.3 : baseLine,
+            !isSelected,
+            isSelected ? 0.95 : 0.35
+          );
         if (c.segPolygon) {
           drawPolygon(
             c.segPolygon,
             color,
-            isSelected ? baseLine * 2.2 : baseLine * 1.6,
+            isSelected ? baseLine * 1.6 : baseLine * 1.2,
             isSelected ? 0.95 : 0.6
           );
         }
-          drawLabel(c.bbox.x, c.bbox.y, c.class_name, color, isSelected ? 0.9 : 0.45);
-        });
+        drawLabel(c.bbox.x, c.bbox.y, c.class_name, color, isSelected ? 0.9 : 0.45);
+      });
       }
 
       const selected = selectedCandidateId
@@ -240,13 +317,30 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.fillStyle = "#ffffff";
           ctx.strokeStyle = color;
           ctx.lineWidth = 2;
-          ctx.fillRect(pt.x + panOffset.x - size / 2, pt.y + panOffset.y - size / 2, size, size);
-          ctx.strokeRect(
-            pt.x + panOffset.x - size / 2,
-            pt.y + panOffset.y - size / 2,
-            size,
-            size
-          );
+          ctx.fillRect(pt.x - size / 2, pt.y - size / 2, size, size);
+          ctx.strokeRect(pt.x - size / 2, pt.y - size / 2, size, size);
+          ctx.restore();
+        });
+      }
+      const selectedAnn = selectedAnnotationId
+        ? annotations.find((a) => a.id === selectedAnnotationId) || null
+        : null;
+      if (selectedAnn) {
+        const size = Math.max(4, Math.round(baseLine * 2.0));
+        const color = colorMap[selectedAnn.class_name] || "#2e7d32";
+        const points = [
+          { x: selectedAnn.bbox.x, y: selectedAnn.bbox.y },
+          { x: selectedAnn.bbox.x + selectedAnn.bbox.w, y: selectedAnn.bbox.y },
+          { x: selectedAnn.bbox.x, y: selectedAnn.bbox.y + selectedAnn.bbox.h },
+          { x: selectedAnn.bbox.x + selectedAnn.bbox.w, y: selectedAnn.bbox.y + selectedAnn.bbox.h },
+        ];
+        points.forEach((pt) => {
+          ctx.save();
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.fillRect(pt.x - size / 2, pt.y - size / 2, size, size);
+          ctx.strokeRect(pt.x - size / 2, pt.y - size / 2, size, size);
           ctx.restore();
         });
       }
@@ -254,44 +348,49 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       if (showAnnotations) {
         annotations.forEach((a) => {
           const isSelected = a.id === selectedAnnotationId;
+          const isHighlighted = a.id === highlightAnnotationId;
           const color = colorMap[a.class_name] || "#ff2b2b";
-          const lineWidth = isSelected ? baseLine * 2.4 : baseLine * 1.8;
-          drawBox(a.bbox.x, a.bbox.y, a.bbox.w, a.bbox.h, color, lineWidth, false, 1);
-          if (a.segPolygon) {
-            drawPolygon(
-              a.segPolygon,
-              color,
-              isSelected ? baseLine * 2.6 : baseLine * 2.0,
-              1
-            );
-          }
-          if (isSelected) {
-            const size = Math.max(4, Math.round(baseLine * 2.2));
+          const lineWidth = isSelected ? baseLine * 1.4 : baseLine;
+          drawBox(a.bbox.x, a.bbox.y, a.bbox.w, a.bbox.h, color, lineWidth, false, 1, 0.12);
+        if (a.segPolygon) {
+          drawPolygon(
+            a.segPolygon,
+            color,
+            isSelected ? baseLine * 2.6 : baseLine * 2.0,
+            1
+          );
+        }
+        if (isSelected) {
+          const size = Math.max(4, Math.round(baseLine * 2.2));
           ctx.save();
           ctx.fillStyle = color;
-          ctx.fillRect(a.bbox.x + panOffset.x - size, a.bbox.y + panOffset.y - size, size, size);
+          ctx.fillRect(a.bbox.x - size, a.bbox.y - size, size, size);
           ctx.fillRect(
-            a.bbox.x + panOffset.x + a.bbox.w,
-            a.bbox.y + panOffset.y - size,
+            a.bbox.x + a.bbox.w,
+            a.bbox.y - size,
             size,
             size
           );
           ctx.fillRect(
-            a.bbox.x + panOffset.x - size,
-            a.bbox.y + panOffset.y + a.bbox.h,
+            a.bbox.x - size,
+            a.bbox.y + a.bbox.h,
             size,
             size
           );
           ctx.fillRect(
-            a.bbox.x + panOffset.x + a.bbox.w,
-            a.bbox.y + panOffset.y + a.bbox.h,
+            a.bbox.x + a.bbox.w,
+            a.bbox.y + a.bbox.h,
             size,
             size
           );
           ctx.restore();
         }
+        if (isHighlighted) {
+          drawLabelSized(a.bbox.x, a.bbox.y, a.class_name, color, 1, 1.6);
+        } else {
           drawLabel(a.bbox.x, a.bbox.y, a.class_name, color, 1);
-        });
+        }
+      });
       }
 
       if (editMode && editablePolygon && editablePolygon.length > 0) {
@@ -316,10 +415,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.fillStyle = "rgba(255, 152, 0, 0.15)";
         ctx.lineWidth = baseLine * 1.6;
         ctx.setLineDash([6, 4]);
-        ctx.strokeRect(left + panOffset.x, top + panOffset.y, w, h);
-        ctx.fillRect(left + panOffset.x, top + panOffset.y, w, h);
+        ctx.strokeRect(left, top, w, h);
+        ctx.fillRect(left, top, w, h);
         ctx.restore();
       }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     };
     img.src = imageUrl;
   }, [
@@ -337,6 +437,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     showVertices,
     selectedVertexIndex,
     manualPreview,
+    scale,
   ]);
 
   const getImageCoords = (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -347,8 +448,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     const scaleY = canvas.height / rect.height;
     const rawX = (event.clientX - rect.left) * scaleX;
     const rawY = (event.clientY - rect.top) * scaleY;
-    const x = Math.round(rawX - panRef.current.x);
-    const y = Math.round(rawY - panRef.current.y);
+    const x = Math.round((rawX - panRef.current.x) / scaleRef.current);
+    const y = Math.round((rawY - panRef.current.y) / scaleRef.current);
     return { x, y };
   };
 
@@ -371,6 +472,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     return candidates.find((c) => c.id === selectedCandidateId) || null;
   };
 
+  const getSelectedAnnotation = () => {
+    if (!selectedAnnotationId) return null;
+    return annotations.find((a) => a.id === selectedAnnotationId) || null;
+  };
+
   const isManualClassMissing = () => {
     const selected = getSelectedCandidate();
     return !!selected && selected.source === "manual" && !selected.class_name;
@@ -378,14 +484,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 
   const findResizeHandle = (x: number, y: number) => {
     const selected = getSelectedCandidate();
-    if (!selected || selected.source !== "manual") return null;
+    const selectedAnn = getSelectedAnnotation();
+    if (!selected && !selectedAnn) return null;
     const canvas = canvasRef.current;
     const size = canvas ? Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.01)) : 12;
+    const bbox = selectedAnn?.bbox || selected?.bbox;
+    if (!bbox) return null;
     const handles = [
-      { key: "tl" as const, x: selected.bbox.x, y: selected.bbox.y },
-      { key: "tr" as const, x: selected.bbox.x + selected.bbox.w, y: selected.bbox.y },
-      { key: "bl" as const, x: selected.bbox.x, y: selected.bbox.y + selected.bbox.h },
-      { key: "br" as const, x: selected.bbox.x + selected.bbox.w, y: selected.bbox.y + selected.bbox.h },
+      { key: "tl" as const, x: bbox.x, y: bbox.y },
+      { key: "tr" as const, x: bbox.x + bbox.w, y: bbox.y },
+      { key: "bl" as const, x: bbox.x, y: bbox.y + bbox.h },
+      { key: "br" as const, x: bbox.x + bbox.w, y: bbox.y + bbox.h },
     ];
     for (const h of handles) {
       const dx = h.x - x;
@@ -415,17 +524,29 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (event.button === 1 || spacePressedRef.current) {
+      const coords = getImageCoords(event);
+      if (!coords) return;
+      panDragRef.current = {
+        active: true,
+        start: { x: event.clientX, y: event.clientY },
+        origin: { ...panRef.current },
+      };
+      event.preventDefault();
+      return;
+    }
     if (!editMode) {
       const coords = getImageCoords(event);
       if (coords) {
         const handle = findResizeHandle(coords.x, coords.y);
         if (handle) {
           const selected = getSelectedCandidate();
-          if (selected) {
+          const selectedAnn = getSelectedAnnotation();
+          if (selected || selectedAnn) {
             resizeDragRef.current = {
               active: true,
               handle,
-              origin: { ...selected.bbox },
+              origin: { ...(selectedAnn?.bbox || selected!.bbox) },
             };
             return;
           }
@@ -455,6 +576,14 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const updateCursorByHandle = (x: number, y: number) => {
+    if (panDragRef.current.active) {
+      setCursorStyle("grabbing");
+      return;
+    }
+    if (spacePressedRef.current) {
+      setCursorStyle("grab");
+      return;
+    }
     if (findMoveEdge(x, y)) {
       setCursorStyle("move");
       return;
@@ -476,6 +605,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (panDragRef.current.active && panDragRef.current.start && panDragRef.current.origin) {
+      const dx = event.clientX - panDragRef.current.start.x;
+      const dy = event.clientY - panDragRef.current.start.y;
+      const next = {
+        x: Math.round(panDragRef.current.origin.x + dx),
+        y: Math.round(panDragRef.current.origin.y + dy),
+      };
+      panRef.current = next;
+      setPanOffset(next);
+      return;
+    }
     if (moveDragRef.current.active && moveDragRef.current.origin && moveDragRef.current.start) {
       const coords = getImageCoords(event);
       if (!coords) return;
@@ -506,7 +646,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const top = Math.min(y0, y1);
       const w = Math.max(2, Math.abs(x1 - x0));
       const h = Math.max(2, Math.abs(y1 - y0));
-      onResizeSelectedBBox({ x: Math.round(left), y: Math.round(top), w, h });
+      const nextBox = { x: Math.round(left), y: Math.round(top), w, h };
+      if (getSelectedAnnotation()) {
+        onResizeSelectedAnnotation(nextBox);
+      } else {
+        onResizeSelectedBBox(nextBox);
+      }
       return;
     }
     if (!editMode) {
@@ -530,6 +675,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseUp = () => {
+    if (panDragRef.current.active) {
+      panDragRef.current = { active: false, start: null, origin: null };
+      return;
+    }
     if (moveDragRef.current.active) {
       moveDragRef.current = { active: false, origin: null, start: null };
       return;
@@ -582,6 +731,33 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     onManualCreateStateChange(true);
   };
 
+  const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!event.ctrlKey) {
+      if (spacePressedRef.current) event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cursorX = (event.clientX - rect.left) * scaleX;
+    const cursorY = (event.clientY - rect.top) * scaleY;
+    const imgX = (cursorX - panRef.current.x) / scaleRef.current;
+    const imgY = (cursorY - panRef.current.y) / scaleRef.current;
+    const delta = event.deltaY > 0 ? -0.1 : 0.1;
+    const nextScale = Math.min(5, Math.max(0.2, scaleRef.current + delta));
+    scaleRef.current = nextScale;
+    setScale(nextScale);
+    const nextPan = {
+      x: Math.round(cursorX - imgX * nextScale),
+      y: Math.round(cursorY - imgY * nextScale),
+    };
+    panRef.current = nextPan;
+    setPanOffset(nextPan);
+  };
+
   return (
     <div style={{ width: "100%" }}>
       <canvas
@@ -591,6 +767,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         onMouseDownCapture={imageUrl ? handleMouseDownCapture : undefined}
         onMouseMove={imageUrl ? handleMouseMove : undefined}
         onMouseUp={imageUrl ? handleMouseUp : undefined}
+        onWheel={imageUrl ? handleWheel : undefined}
         onMouseLeave={(event) => {
           if (imageUrl) handleMouseUp();
           setCursorStyle(imageUrl ? "crosshair" : "default");
@@ -600,6 +777,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           border: "1px solid #ddd",
           background: "#fafafa",
           cursor: cursorStyle,
+          touchAction: "none",
         }}
       />
       {!imageUrl && (

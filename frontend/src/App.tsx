@@ -23,6 +23,7 @@ const DEFAULT_SCALE_MAX = 1.5;
 const DEFAULT_SCALE_STEPS = 12;
 
 export default function App() {
+  const headerScrollRef = useRef<HTMLDivElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageId, setImageId] = useState<string | null>(null);
   const [projects, setProjects] = useState<string[]>([]);
@@ -53,6 +54,8 @@ export default function App() {
   const [segSimplifyEps, setSegSimplifyEps] = useState<number>(2);
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
   const [isCreatingManualBBox, setIsCreatingManualBBox] = useState<boolean>(false);
+  const [highlightAnnotationId, setHighlightAnnotationId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
 
   const selectedCandidate = useMemo(() => {
     if (!selectedCandidateId) return null;
@@ -113,6 +116,8 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
     fetchProjects()
       .then((list) => {
         if (!mounted) return;
@@ -138,6 +143,7 @@ export default function App() {
       });
     return () => {
       mounted = false;
+      document.body.style.overflow = "";
     };
   }, [project]);
 
@@ -187,7 +193,7 @@ export default function App() {
         const next = { ...prev };
         nextCandidates.forEach((r) => {
           if (!next[r.class_name]) {
-            next[r.class_name] = normalizeToHex(randomColor(r.class_name));
+            next[r.class_name] = pickUniqueColor(next);
           }
         });
         return next;
@@ -296,6 +302,16 @@ export default function App() {
     }
   };
 
+  const pickUniqueColor = (existing: Record<string, string>) => {
+    const used = new Set(Object.values(existing));
+    for (let i = 0; i < 20; i += 1) {
+      const hue = Math.floor(Math.random() * 360);
+      const color = normalizeToHex(`hsl(${hue}, 70%, 50%)`);
+      if (!used.has(color)) return color;
+    }
+    return "#000000";
+  };
+
   const handleExportYolo = async () => {
     if (!imageId || !project) return;
     setError(null);
@@ -330,6 +346,14 @@ export default function App() {
     setSelectedVertexIndex(null);
     setSegUndoStack([]);
     setShowSegVertices(true);
+    setHighlightAnnotationId(annotation.id);
+    if (highlightTimerRef.current) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightAnnotationId(null);
+      highlightTimerRef.current = null;
+    }, 1500);
     const centerX = annotation.bbox.x + annotation.bbox.w / 2;
     const centerY = annotation.bbox.y + annotation.bbox.h / 2;
     canvasRef.current?.panTo(centerX, centerY);
@@ -368,95 +392,236 @@ export default function App() {
   };
 
   return (
-    <div style={{ fontFamily: "\"IBM Plex Sans\", system-ui, sans-serif" }}>
-      <div style={{ padding: "16px 20px", borderBottom: "1px solid #eee" }}>
-        <div style={{ fontSize: 18, fontWeight: 700 }}>Annotator MVP</div>
-        <div style={{ fontSize: 12, color: "#666" }}>画像クリックでテンプレ照合</div>
+    <div
+      style={{
+        fontFamily: "\"IBM Plex Sans\", system-ui, sans-serif",
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "12px 20px",
+          borderBottom: "1px solid #eee",
+          position: "sticky",
+          top: 0,
+          background: "#fff",
+          zIndex: 10,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>Annotator MVP</div>
+            <div style={{ fontSize: 12, color: "#666" }}>画像クリックでテンプレ照合</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 40,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fafafa",
+              }}
+            >
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                style={{ fontSize: 12 }}
+              />
+              <span style={{ fontSize: 12, fontWeight: 600 }}>画像アップロード</span>
+            </label>
+            <button
+              type="button"
+              onClick={handleExportYolo}
+              disabled={annotations.length === 0 || !imageId}
+              style={{
+                padding: "8px 10px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+                borderRadius: 10,
+                border: "1px solid #e3e3e3",
+                background: "#fff",
+              }}
+            >
+              ⤴ YOLOエクスポート
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        ref={headerScrollRef}
+        onWheel={(e) => {
+          if (!headerScrollRef.current) return;
+          headerScrollRef.current.scrollLeft += e.deltaY;
+          e.preventDefault();
+        }}
+        style={{
+          padding: "8px 20px",
+          borderBottom: "1px solid #eee",
+          background: "#fff",
+          overflowX: "auto",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <div style={{ display: "inline-flex", gap: 14, alignItems: "center" }}>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 70 }}>プロジェクト</span>
+            <select
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+              style={{ minWidth: 180, height: 36, fontSize: 14 }}
+            >
+              {projects.length === 0 && <option value="">(none)</option>}
+              {projects.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
+            <input
+              type="number"
+              min={10}
+              value={roiSize}
+              step={10}
+              onChange={(e) => setRoiSize(Number(e.target.value))}
+              style={{ width: 120, height: 36, fontSize: 14 }}
+            />
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 70 }}>上位件数</span>
+            <input
+              type="number"
+              min={1}
+              max={3}
+              value={topk}
+              onChange={(e) => setTopk(Number(e.target.value))}
+              style={{ width: 120, height: 36, fontSize: 14 }}
+            />
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 70 }}>最小スケール</span>
+            <input
+              type="number"
+              step={0.1}
+              min={0.1}
+              value={scaleMin}
+              onChange={(e) => setScaleMin(Number(e.target.value))}
+              style={{ width: 120, height: 36, fontSize: 14 }}
+            />
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 70 }}>最大スケール</span>
+            <input
+              type="number"
+              step={0.1}
+              min={0.1}
+              value={scaleMax}
+              onChange={(e) => setScaleMax(Number(e.target.value))}
+              style={{ width: 120, height: 36, fontSize: 14 }}
+            />
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              height: 48,
+              padding: "6px 8px",
+              border: "1px solid #e3e3e3",
+              borderRadius: 10,
+              background: "#fff",
+            }}
+          >
+            <span style={{ fontSize: 13, minWidth: 80 }}>スケール分割数</span>
+            <input
+              type="number"
+              min={1}
+              value={scaleSteps}
+              onChange={(e) => setScaleSteps(Number(e.target.value))}
+              style={{ width: 120, height: 36, fontSize: 14 }}
+            />
+          </label>
+        </div>
       </div>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 320px",
+          gridTemplateColumns: "1fr 360px",
           gap: 20,
-          padding: 20,
+          padding: 16,
+          flex: 1,
+          minHeight: 0,
         }}
       >
-        <div>
-          <div style={{ marginBottom: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <input type="file" accept="image/*" onChange={handleFileChange} />
-              <span style={{ fontSize: 13 }}>画像アップロード</span>
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>プロジェクト</span>
-              <select
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                style={{ minWidth: 140 }}
-              >
-                {projects.length === 0 && <option value="">(none)</option>}
-                {projects.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>ROIサイズ</span>
-              <input
-                type="number"
-                min={10}
-                value={roiSize}
-                step={10}
-                onChange={(e) => setRoiSize(Number(e.target.value))}
-                style={{ width: 80 }}
-              />
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>上位件数</span>
-              <input
-                type="number"
-                min={1}
-                value={topk}
-                onChange={(e) => setTopk(Number(e.target.value))}
-                style={{ width: 60 }}
-              />
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>最小スケール</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMin}
-                onChange={(e) => setScaleMin(Number(e.target.value))}
-                style={{ width: 70 }}
-              />
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>最大スケール</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMax}
-                onChange={(e) => setScaleMax(Number(e.target.value))}
-                style={{ width: 70 }}
-              />
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12 }}>スケール分割数</span>
-              <input
-                type="number"
-                min={1}
-                value={scaleSteps}
-                onChange={(e) => setScaleSteps(Number(e.target.value))}
-                style={{ width: 60 }}
-              />
-            </label>
-          </div>
+        <div style={{ minHeight: 0, display: "flex", flexDirection: "column" }}>
 
           {error && (
             <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
@@ -465,61 +630,116 @@ export default function App() {
             <div style={{ marginBottom: 12, color: "#1b5e20", fontSize: 12 }}>{notice}</div>
           )}
 
-          <ImageCanvas
-            ref={canvasRef}
-            imageUrl={imageUrl}
-            candidates={candidates}
-            selectedCandidateId={selectedCandidateId}
-            annotations={annotations}
-            selectedAnnotationId={selectedAnnotationId}
-            colorMap={colorMap}
-            showCandidates={showCandidates}
-            showAnnotations={showAnnotations}
-            editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
-            editMode={segEditMode}
-            showVertices={showSegVertices}
-            selectedVertexIndex={selectedVertexIndex}
-            onSelectVertex={setSelectedVertexIndex}
-            onUpdateEditablePolygon={(next) => {
-              if (!selectedAnnotation) return;
-              setAnnotations((prev) =>
-                prev.map((a) => (a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a))
-              );
-            }}
-            onVertexDragStart={() => {
-              if (!selectedAnnotation?.segPolygon) return;
-              setSegUndoStack((prev) => [
-                ...prev,
-                selectedAnnotation.segPolygon!.map((p) => ({ ...p })),
-              ]);
-            }}
-            onClickPoint={handleClickPoint}
-            onCreateManualBBox={(bbox) => {
-              const id = `${Date.now()}-${Math.random()}`;
-              const manualCandidate: Candidate = {
-                id,
-                class_name: "",
-                score: 1.0,
-                bbox,
-                template: "manual",
-                scale: 1.0,
-                source: "manual",
-              };
-              setCandidates((prev) => [...prev, manualCandidate]);
-              setSelectedCandidateId(id);
-            }}
-            onManualCreateStateChange={setIsCreatingManualBBox}
-            onResizeSelectedBBox={(bbox) => {
-              if (!selectedCandidateId) return;
-              setCandidates((prev) =>
-                prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
-              );
-            }}
-          />
+          <div style={{ position: "sticky", top: 0 }}>
+            <ImageCanvas
+              ref={canvasRef}
+              imageUrl={imageUrl}
+              candidates={candidates}
+              selectedCandidateId={selectedCandidateId}
+              annotations={annotations}
+              selectedAnnotationId={selectedAnnotationId}
+              colorMap={colorMap}
+              showCandidates={showCandidates}
+              showAnnotations={showAnnotations}
+              editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
+              editMode={segEditMode}
+              showVertices={showSegVertices}
+              selectedVertexIndex={selectedVertexIndex}
+              highlightAnnotationId={highlightAnnotationId}
+              onSelectVertex={setSelectedVertexIndex}
+              onUpdateEditablePolygon={(next) => {
+                if (!selectedAnnotation) return;
+                setAnnotations((prev) =>
+                  prev.map((a) =>
+                    a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a
+                  )
+                );
+              }}
+              onVertexDragStart={() => {
+                if (!selectedAnnotation?.segPolygon) return;
+                setSegUndoStack((prev) => [
+                  ...prev,
+                  selectedAnnotation.segPolygon!.map((p) => ({ ...p })),
+                ]);
+              }}
+              onClickPoint={handleClickPoint}
+              onCreateManualBBox={(bbox) => {
+                const id = `${Date.now()}-${Math.random()}`;
+                const manualCandidate: Candidate = {
+                  id,
+                  class_name: "",
+                  score: 1.0,
+                  bbox,
+                  template: "manual",
+                  scale: 1.0,
+                  source: "manual",
+                };
+                setCandidates((prev) => [...prev, manualCandidate]);
+                setSelectedCandidateId(id);
+              }}
+              onManualCreateStateChange={setIsCreatingManualBBox}
+              onResizeSelectedBBox={(bbox) => {
+                if (!selectedCandidateId) return;
+                setCandidates((prev) =>
+                  prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
+                );
+              }}
+              onResizeSelectedAnnotation={(bbox) => {
+                if (!selectedAnnotationId) return;
+                setAnnotations((prev) =>
+                  prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
+                );
+              }}
+            />
+          </div>
           {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
+          {Object.keys(colorMap).length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>シリーズ配色</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {Object.entries(colorMap).map(([name, color]) => {
+                  const hexColor = normalizeToHex(color);
+                  return (
+                    <label
+                      key={name}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 8px",
+                        border: "1px solid #e3e3e3",
+                        borderRadius: 999,
+                        background: "#fff",
+                        fontSize: 12,
+                      }}
+                    >
+                      <input
+                        type="color"
+                        value={hexColor}
+                        onChange={(e) =>
+                          setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                        }
+                        style={{ width: 24, height: 24, padding: 0, border: "none" }}
+                      />
+                      <span>{name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        <div style={{ borderLeft: "1px solid #eee", paddingLeft: 16 }}>
+        <div
+          style={{
+            borderLeft: "1px solid #eee",
+            paddingLeft: 16,
+            minHeight: 0,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
               <input
@@ -538,14 +758,32 @@ export default function App() {
               <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
             </label>
           </div>
-          <div style={{ marginBottom: 18 }}>
+          <div
+            style={{
+              marginBottom: 18,
+              position: "relative",
+              paddingBottom: 8,
+              borderBottom: "1px solid #eee",
+              flex: "0 0 auto",
+            }}
+          >
             <CandidateList
               candidates={candidates}
               selectedCandidateId={selectedCandidateId}
               onSelect={setSelectedCandidateId}
               colorMap={colorMap}
             />
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                gap: 8,
+                position: "sticky",
+                bottom: 0,
+                background: "#fff",
+                paddingBottom: 8,
+              }}
+            >
               <button
                 type="button"
                 onClick={handleConfirmCandidate}
@@ -594,10 +832,10 @@ export default function App() {
                       );
                       if (nextClass) {
                         setColorMap((prev) => {
-                          if (prev[nextClass]) return prev;
-                          return { ...prev, [nextClass]: normalizeToHex(randomColor(nextClass)) };
-                        });
-                      }
+                      if (prev[nextClass]) return prev;
+                      return { ...prev, [nextClass]: pickUniqueColor(prev) };
+                    });
+                  }
                     }}
                     style={{ minWidth: 160 }}
                   >
@@ -613,10 +851,10 @@ export default function App() {
             )}
           </div>
 
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              確定アノテーション（合計 {annotations.length}件）
-            </div>
+            <div style={{ marginBottom: 18, paddingTop: 6, flex: "1 1 auto", minHeight: 0 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                確定アノテーション（合計 {annotations.length}件）
+              </div>
             <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
               {annotations.length === 0
                 ? "内訳: なし"
@@ -629,68 +867,94 @@ export default function App() {
                     .map(([name, count]) => `${name}: ${count}`)
                     .join(" / ")}
             </div>
-            {annotations.length === 0 && (
-              <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
-            )}
-            {annotations.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  padding: "8px 10px",
-                  marginBottom: 8,
-                  border: "1px solid #e3e3e3",
-                  borderRadius: 6,
-                  background: selectedAnnotationId === a.id ? "#eef6ff" : "#fff",
-                  cursor: "pointer",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-                onClick={() => handleSelectAnnotation(a)}
-              >
-                <div>
-                  <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span>{a.class_name}</span>
-                    {a.segPolygon && a.segMethod && (
+            <div style={{ overflowY: "auto", maxHeight: "40vh", paddingRight: 6 }}>
+              {annotations.length === 0 && (
+                <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
+              )}
+              {annotations.map((a) => (
+                <div
+                  key={a.id}
+                  style={{
+                    padding: "8px 10px",
+                    marginBottom: 8,
+                    border: "1px solid #e3e3e3",
+                    borderRadius: 6,
+                    background: selectedAnnotationId === a.id ? "#eef6ff" : "#fff",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                  onClick={() => handleSelectAnnotation(a)}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>{a.class_name}</span>
                       <span
                         style={{
                           fontSize: 10,
                           padding: "2px 6px",
                           borderRadius: 10,
-                          background: a.segMethod === "sam" ? "#2e7d32" : "#888",
+                          background: "#455a64",
                           color: "#fff",
                         }}
                       >
-                        {a.segMethod.toUpperCase()}
+                        {a.source.toUpperCase()}
                       </span>
-                    )}
+                      {a.segPolygon && a.segMethod && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            borderRadius: 10,
+                            background: a.segMethod === "sam" ? "#2e7d32" : "#888",
+                            color: "#fff",
+                          }}
+                        >
+                          {a.segMethod.toUpperCase()}
+                        </span>
+                      )}
+                      {a.segPolygon && !a.segMethod && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            borderRadius: 10,
+                            background: "#1a73e8",
+                            color: "#fff",
+                          }}
+                        >
+                          SEG
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#666" }}>
+                      bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, color: "#666" }}>
-                    bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="delete"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAnnotations((prev) => prev.filter((item) => item.id !== a.id));
+                      if (selectedAnnotationId === a.id) {
+                        setSelectedAnnotationId(null);
+                      }
+                    }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: 16,
+                    }}
+                  >
+                    🗑
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  aria-label="delete"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAnnotations((prev) => prev.filter((item) => item.id !== a.id));
-                    if (selectedAnnotationId === a.id) {
-                      setSelectedAnnotationId(null);
-                    }
-                  }}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    fontSize: 16,
-                  }}
-                >
-                  🗑
-                </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
           {selectedAnnotation?.segPolygon && (
@@ -754,14 +1018,6 @@ export default function App() {
           )}
 
           <div style={{ marginBottom: 18 }}>
-            <button
-              type="button"
-              onClick={handleExportYolo}
-              disabled={annotations.length === 0 || !imageId}
-              style={{ padding: "8px 10px", fontSize: 12, cursor: "pointer" }}
-            >
-              ⤴ YOLOエクスポート
-            </button>
             {exportPreview !== null && (
               <pre
                 style={{
@@ -778,29 +1034,6 @@ export default function App() {
               </pre>
             )}
           </div>
-          {Object.keys(colorMap).length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>シリーズ配色</div>
-              {Object.entries(colorMap).map(([name, color]) => {
-                const hexColor = normalizeToHex(color);
-                return (
-                <div
-                  key={name}
-                  style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}
-                >
-                  <input
-                    type="color"
-                    value={hexColor}
-                    onChange={(e) =>
-                      setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                    }
-                  />
-                  <span style={{ fontSize: 12 }}>{name}</span>
-                </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       </div>
     </div>
