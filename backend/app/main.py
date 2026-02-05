@@ -20,7 +20,13 @@ from .config import (
 )
 from .contours import find_roi_contours
 from .filters import filter_bboxes
-from .matching import MatchResult, match_templates
+from .matching import (
+    MatchResult,
+    apply_vertical_padding,
+    filter_overlapping_matches,
+    match_templates,
+    refine_match_bboxes,
+)
 from .nms import nms
 from .schemas import (
     DetectFullRequest,
@@ -60,6 +66,9 @@ app.add_middleware(
 )
 
 templates_cache = scan_templates(TEMPLATES_ROOT)
+BBOX_PAD_DEFAULT_TOP = 2
+BBOX_PAD_DEFAULT_BOTTOM = 3
+BBOX_PAD_MAP: Dict[str, Dict[str, int]] = {}
 
 
 @app.get("/templates", response_model=List[ProjectInfo])
@@ -136,6 +145,20 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
         scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
     )
+    image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    matches = refine_match_bboxes(
+        image_gray,
+        matches,
+        click_xy=(payload.x, payload.y),
+        pad=12,
+    )
+    matches = apply_vertical_padding(
+        matches,
+        image_gray.shape[0],
+        default_top=BBOX_PAD_DEFAULT_TOP,
+        default_bottom=BBOX_PAD_DEFAULT_BOTTOM,
+        class_pad_map=BBOX_PAD_MAP,
+    )
 
     filtered_matches = filter_bboxes(matches, payload.roi_size, payload.score_threshold)
 
@@ -157,6 +180,11 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             best_per_class[match.class_name] = match
 
     representative = list(best_per_class.values())
+    representative = filter_overlapping_matches(
+        representative,
+        payload.confirmed_boxes,
+        iou_threshold=0.5,
+    )
     representative.sort(key=lambda r: r.score, reverse=True)
     representative = representative[: payload.topk]
 
@@ -231,6 +259,14 @@ def detect_full(payload: DetectFullRequest) -> DetectFullResponse:
                     )
                 )
 
+    matches = apply_vertical_padding(
+        matches,
+        image.shape[0],
+        default_top=BBOX_PAD_DEFAULT_TOP,
+        default_bottom=BBOX_PAD_DEFAULT_BOTTOM,
+        class_pad_map=BBOX_PAD_MAP,
+    )
+
     filtered_matches = filter_bboxes(matches, tile_size, payload.score_threshold)
 
     grouped: Dict[str, List[int]] = {}
@@ -251,6 +287,11 @@ def detect_full(payload: DetectFullRequest) -> DetectFullResponse:
             best_per_class[match.class_name] = match
 
     representative = list(best_per_class.values())
+    representative = filter_overlapping_matches(
+        representative,
+        payload.confirmed_boxes,
+        iou_threshold=0.5,
+    )
     representative.sort(key=lambda r: r.score, reverse=True)
     representative = representative[: payload.topk]
 

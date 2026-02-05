@@ -12,7 +12,6 @@ import {
   uploadImage,
 } from "./api";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
-import CandidateList from "./components/CandidateList";
 import { normalizeToHex } from "./utils/color";
 import { clampToImage, simplifyPolygon } from "./utils/polygon";
 
@@ -56,6 +55,22 @@ export default function App() {
   const [isCreatingManualBBox, setIsCreatingManualBBox] = useState<boolean>(false);
   const [highlightAnnotationId, setHighlightAnnotationId] = useState<string | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
+  const [showHints, setShowHints] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("draftSeeker.hideHints") !== "1";
+    } catch {
+      return true;
+    }
+  });
+
+  const dismissHints = () => {
+    setShowHints(false);
+    try {
+      localStorage.setItem("draftSeeker.hideHints", "1");
+    } catch {
+      // ignore
+    }
+  };
 
   const selectedCandidate = useMemo(() => {
     if (!selectedCandidateId) return null;
@@ -185,6 +200,12 @@ export default function App() {
         scale_max: scaleMax,
         scale_steps: scaleSteps,
         topk,
+        confirmed_boxes: annotations.map((a) => ({
+          x: a.bbox.x,
+          y: a.bbox.y,
+          w: a.bbox.w,
+          h: a.bbox.h,
+        })),
       });
       const nextCandidates = toCandidates(res);
       setCandidates(nextCandidates);
@@ -302,6 +323,44 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!selectedCandidate) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+      const key = event.key;
+      if (key === "Enter") {
+        event.preventDefault();
+        if (!manualClassMissing) handleConfirmCandidate();
+        return;
+      }
+      if (key === "Backspace" || key === "Delete") {
+        event.preventDefault();
+        handleRejectCandidate();
+        return;
+      }
+      if (key === "n" || key === "N") {
+        event.preventDefault();
+        handleNextCandidate();
+        return;
+      }
+      if (key === "s" || key === "S") {
+        event.preventDefault();
+        handleSegCandidate();
+        return;
+      }
+      if (key === "Escape") {
+        event.preventDefault();
+        setSelectedCandidateId(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [selectedCandidate, manualClassMissing]);
+
   const pickUniqueColor = (existing: Record<string, string>) => {
     const used = new Set(Object.values(existing));
     for (let i = 0; i < 20; i += 1) {
@@ -412,9 +471,12 @@ export default function App() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>Annotator MVP</div>
-            <div style={{ fontSize: 12, color: "#666" }}>画像クリックでテンプレ照合</div>
+          <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
+            <img
+              src="/lgo_DraftSeeker.png"
+              alt="DraftSeeker"
+              style={{ height: 30, width: "auto", display: "block" }}
+            />
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <label
@@ -611,6 +673,51 @@ export default function App() {
         </div>
       </div>
 
+      {showHints && (
+        <div
+          style={{
+            position: "fixed",
+            left: 16,
+            bottom: 16,
+            background: "rgba(255,255,255,0.95)",
+            border: "1px solid #e0e0e0",
+            borderRadius: 10,
+            padding: "8px 10px",
+            fontSize: 11,
+            color: "#444",
+            zIndex: 30,
+            boxShadow: "0 6px 16px rgba(0,0,0,0.08)",
+            maxWidth: 220,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>操作ヒント</div>
+            <button
+              type="button"
+              onClick={dismissHints}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: 12,
+                color: "#666",
+                padding: 0,
+              }}
+              aria-label="Close hints"
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ marginTop: 6, lineHeight: 1.5 }}>
+            <div>Ctrl+Wheel: Zoom</div>
+            <div>Space+Drag: Pan</div>
+            <div>Shift+Drag: Manual BBox</div>
+            <div>Enter: Confirm / Del: Reject</div>
+            <div>N: Next / S: Seg</div>
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",
@@ -693,9 +800,39 @@ export default function App() {
             />
           </div>
           {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
+        </div>
+
+        <div
+          style={{
+            borderLeft: "1px solid #eee",
+            paddingLeft: 16,
+            minHeight: 0,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <input
+                type="checkbox"
+                checked={showCandidates}
+                onChange={(e) => setShowCandidates(e.target.checked)}
+              />
+              <span style={{ fontSize: 12 }}>未確定候補を表示</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={showAnnotations}
+                onChange={(e) => setShowAnnotations(e.target.checked)}
+              />
+              <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
+            </label>
+          </div>
           {Object.keys(colorMap).length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>シリーズ配色</div>
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 {Object.entries(colorMap).map(([name, color]) => {
                   const hexColor = normalizeToHex(color);
@@ -728,128 +865,135 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
-
-        <div
-          style={{
-            borderLeft: "1px solid #eee",
-            paddingLeft: 16,
-            minHeight: 0,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-              <input
-                type="checkbox"
-                checked={showCandidates}
-                onChange={(e) => setShowCandidates(e.target.checked)}
-              />
-              <span style={{ fontSize: 12 }}>未確定候補を表示</span>
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={showAnnotations}
-                onChange={(e) => setShowAnnotations(e.target.checked)}
-              />
-              <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
-            </label>
-          </div>
           <div
             style={{
-              marginBottom: 18,
-              position: "relative",
-              paddingBottom: 8,
-              borderBottom: "1px solid #eee",
-              flex: "0 0 auto",
+              marginBottom: 16,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
             }}
           >
-            <CandidateList
-              candidates={candidates}
-              selectedCandidateId={selectedCandidateId}
-              onSelect={setSelectedCandidateId}
-              colorMap={colorMap}
-            />
-            <div
+            <button
+              type="button"
+              onClick={handleConfirmCandidate}
+              disabled={!selectedCandidate || manualClassMissing}
               style={{
-                marginTop: 12,
-                display: "flex",
-                gap: 8,
-                position: "sticky",
-                bottom: 0,
-                background: "#fff",
-                paddingBottom: 8,
+                flex: "1 1 80px",
+                minWidth: 80,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid #1a73e8",
+                background: "#1a73e8",
+                color: "#fff",
+                fontWeight: 700,
+                letterSpacing: 0.2,
+                boxShadow: "0 6px 12px rgba(26,115,232,0.18)",
+                cursor: "pointer",
+                opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
               }}
             >
-              <button
-                type="button"
-                onClick={handleConfirmCandidate}
-                disabled={!selectedCandidate || manualClassMissing}
-                style={{ padding: "8px 10px", fontSize: 12, cursor: "pointer" }}
-              >
-                ✔ この候補を確定
-              </button>
-              <button
-                type="button"
-                onClick={handleRejectCandidate}
-                disabled={!selectedCandidate}
-                style={{ padding: "8px 10px", fontSize: 12, cursor: "pointer" }}
-              >
-                ✖ 破棄（候補から除外）
-              </button>
-              <button
-                type="button"
-                onClick={handleNextCandidate}
-                disabled={candidates.length === 0}
-                style={{ padding: "8px 10px", fontSize: 12, cursor: "pointer" }}
-              >
-                ▶ 次の候補へ
-              </button>
-              <button
-                type="button"
-                onClick={handleSegCandidate}
-                disabled={!selectedCandidate}
-                style={{ padding: "8px 10px", fontSize: 12, cursor: "pointer" }}
-              >
-                🧩 Seg生成（SAM）
-              </button>
-            </div>
-            {isManualSelected && (
-              <div style={{ marginTop: 10 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 12, minWidth: 60 }}>クラス選択</span>
-                  <select
-                    value={selectedCandidate?.class_name || ""}
-                    onChange={(e) => {
-                      const nextClass = e.target.value;
-                      setCandidates((prev) =>
-                        prev.map((c) =>
-                          c.id === selectedCandidate?.id ? { ...c, class_name: nextClass } : c
-                        )
-                      );
-                      if (nextClass) {
-                        setColorMap((prev) => {
-                      if (prev[nextClass]) return prev;
-                      return { ...prev, [nextClass]: pickUniqueColor(prev) };
-                    });
-                  }
-                    }}
-                    style={{ minWidth: 160 }}
-                  >
-                    <option value="">クラスを選択</option>
-                    {classOptions.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
+              Decision
+            </button>
+            <button
+              type="button"
+              onClick={handleRejectCandidate}
+              disabled={!selectedCandidate}
+              style={{
+                flex: "1 1 80px",
+                minWidth: 80,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid #e0e0e0",
+                background: "#fff",
+                cursor: "pointer",
+                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                opacity: !selectedCandidate ? 0.45 : 1,
+              }}
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={handleNextCandidate}
+              disabled={candidates.length === 0}
+              style={{
+                flex: "1 1 80px",
+                minWidth: 80,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid #e0e0e0",
+                background: "#fff",
+                cursor: "pointer",
+                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                opacity: candidates.length === 0 ? 0.45 : 1,
+              }}
+            >
+              Next
+            </button>
+            <button
+              type="button"
+              onClick={handleSegCandidate}
+              disabled={!selectedCandidate}
+              style={{
+                flex: "1 1 80px",
+                minWidth: 80,
+                height: 36,
+                borderRadius: 10,
+                border: "1px solid #e0e0e0",
+                background: "#fff",
+                cursor: "pointer",
+                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                opacity: !selectedCandidate ? 0.45 : 1,
+              }}
+            >
+              SAM
+            </button>
           </div>
+          {isManualSelected && (
+            <div
+              style={{
+                marginBottom: 18,
+                paddingBottom: 12,
+                borderBottom: "1px solid #eee",
+                flex: "0 0 auto",
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>手動候補: クラス指定</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, minWidth: 60 }}>クラス選択</span>
+                <select
+                  value={selectedCandidate?.class_name || ""}
+                  onChange={(e) => {
+                    const nextClass = e.target.value;
+                    setCandidates((prev) =>
+                      prev.map((c) =>
+                        c.id === selectedCandidate?.id ? { ...c, class_name: nextClass } : c
+                      )
+                    );
+                    if (nextClass) {
+                      setColorMap((prev) => {
+                        if (prev[nextClass]) return prev;
+                        return { ...prev, [nextClass]: pickUniqueColor(prev) };
+                      });
+                    }
+                  }}
+                  style={{ minWidth: 200, height: 36 }}
+                >
+                  <option value="">クラスを選択</option>
+                  {classOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {manualClassMissing && (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#b00020" }}>
+                  手動候補はクラス指定が必要です
+                </div>
+              )}
+            </div>
+          )}
 
             <div style={{ marginBottom: 18, paddingTop: 6, flex: "1 1 auto", minHeight: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>

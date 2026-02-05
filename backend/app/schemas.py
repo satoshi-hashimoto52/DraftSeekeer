@@ -34,6 +34,8 @@ class DetectPointRequest(BaseModel):
     iou_threshold: float = Field(0.4, ge=0, le=1)
     topk: int = Field(3, gt=0)
     template_off: bool = False
+    confirmed_boxes: List[BBox] = Field(default_factory=list)
+    exclude_same_class_only: bool = False
 
 
 class BBox(BaseModel):
@@ -65,6 +67,8 @@ class DetectFullRequest(BaseModel):
     score_threshold: float = Field(-1.0, ge=-1.0, le=1.0)
     iou_threshold: float = Field(0.4, ge=0, le=1)
     topk: int = Field(20, gt=0)
+    confirmed_boxes: List[BBox] = Field(default_factory=list)
+    exclude_same_class_only: bool = False
 
 
 class DetectFullResult(BaseModel):

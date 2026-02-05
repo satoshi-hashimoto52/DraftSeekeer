@@ -172,6 +172,8 @@ export async function detectPoint(params: {
   iou_threshold?: number;
   topk: number;
   template_off?: boolean;
+  confirmed_boxes?: { x: number; y: number; w: number; h: number }[];
+  exclude_same_class_only?: boolean;
 }): Promise<DetectPointResponse> {
   const res = await fetch(`${API_BASE}/detect/point`, {
     method: "POST",
