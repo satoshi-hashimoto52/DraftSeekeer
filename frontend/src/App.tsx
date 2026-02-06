@@ -3,6 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Annotation,
   Candidate,
+  DatasetInfo,
+  DatasetImageEntry,
+  ProjectTemplates,
   detectPoint,
   fetchProjects,
   fetchTemplates,
@@ -35,26 +38,8 @@ export default function App() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageId, setImageId] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState<string | null>(null);
-  const [datasetInfo, setDatasetInfo] = useState<{
-    project_name: string;
-    images: string[];
-    total_images: number;
-    annotated_images: number;
-    bbox_count: number;
-    seg_count: number;
-    updated_at?: string | null;
-  } | null>(null);
-  const [projectList, setProjectList] = useState<
-    {
-      project_name: string;
-      images: string[];
-      total_images: number;
-      annotated_images: number;
-      bbox_count: number;
-      seg_count: number;
-      updated_at?: string | null;
-    }[]
-  >([]);
+  const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
+  const [projectList, setProjectList] = useState<DatasetInfo[]>([]);
   const [newProjectName, setNewProjectName] = useState<string>("");
   const [newProjectFiles, setNewProjectFiles] = useState<FileList | null>(null);
   const [datasetSelectedName, setDatasetSelectedName] = useState<string | null>(null);
@@ -183,7 +168,9 @@ export default function App() {
   }, [annotations, selectedAnnotationId]);
 
   const splitSummary = useMemo(() => {
-    const images = datasetInfo?.images || [];
+    const images = (datasetInfo?.images || [])
+      .map((entry: DatasetImageEntry) => entry.original_filename || entry.filename || "")
+      .filter((name) => !!name);
     const total = images.length;
     const ratios = [
       { key: "train", value: Math.max(0, splitTrain) },
@@ -306,25 +293,27 @@ export default function App() {
     document.body.style.margin = "0";
     document.body.style.overflow = "hidden";
     fetchProjects()
-      .then((list) => {
+      .then((list: string[]) => {
         if (!mounted) return;
         setProjects(list);
         if (!project && list.length > 0) {
           setProject(list[0]);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : "Projects fetch failed");
       });
     fetchTemplates()
-      .then((list) => {
+      .then((list: ProjectTemplates[]) => {
         if (!mounted) return;
-        const selected = list.find((p) => p.name === project) || list[0];
-        const classes = selected ? selected.classes.map((c) => c.class_name) : [];
+        const selected = list.find((p: ProjectTemplates) => p.name === project) || list[0];
+        const classes = selected
+          ? selected.classes.map((c: { class_name: string; count: number }) => c.class_name)
+          : [];
         setClassOptions(classes);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : "Templates fetch failed");
       });
@@ -401,7 +390,7 @@ export default function App() {
         saveColorMapForProject(projectName, nextColors);
       }
       if (info.images.length > 0) {
-        await loadDatasetImage(projectName, info.images[0]);
+        await loadDatasetImage(projectName, info.images[0].original_filename);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project open failed");
@@ -442,7 +431,7 @@ export default function App() {
     try {
       await createDatasetProject(name);
       if (newProjectFiles && newProjectFiles.length > 0) {
-        await importDataset({ project_name: name, files: newProjectFiles });
+        await importDataset({ project_name: name, files: Array.from(newProjectFiles) });
       }
       setNewProjectName("");
       setNewProjectFiles(null);
@@ -603,7 +592,7 @@ export default function App() {
       setSelectedCandidateId(nextCandidates.length > 0 ? nextCandidates[0].id : null);
       setColorMap((prev) => {
         const next = { ...prev };
-        nextCandidates.forEach((r) => {
+        nextCandidates.forEach((r: Candidate) => {
           if (!next[r.class_name]) {
             next[r.class_name] = pickUniqueColor(next);
           }
@@ -631,7 +620,7 @@ export default function App() {
           ? "sam"
           : "template";
     const segPolygon = selectedCandidate.segPolygon
-      ? selectedCandidate.segPolygon.map((p) => ({ ...p }))
+      ? selectedCandidate.segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
       : undefined;
     const segMethod = selectedCandidate.segMethod;
     setAnnotations((prev) => [
@@ -643,7 +632,9 @@ export default function App() {
         source,
         created_at: createdAt,
         segPolygon,
-        originalSegPolygon: segPolygon ? segPolygon.map((p) => ({ ...p })) : undefined,
+        originalSegPolygon: segPolygon
+          ? segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
+          : undefined,
         segMethod,
       },
     ]);
@@ -838,15 +829,19 @@ export default function App() {
     const last = segUndoStack[segUndoStack.length - 1];
     setSegUndoStack((prev) => prev.slice(0, -1));
     setAnnotations((prev) =>
-      prev.map((a) =>
-        a.id === selectedAnnotation.id ? { ...a, segPolygon: last.map((p) => ({ ...p })) } : a
-      )
-    );
+        prev.map((a) =>
+          a.id === selectedAnnotation.id
+            ? { ...a, segPolygon: last.map((p: { x: number; y: number }) => ({ ...p })) }
+            : a
+        )
+      );
   };
 
   const handleSegReset = () => {
     if (!selectedAnnotation?.originalSegPolygon) return;
-    const reset = selectedAnnotation.originalSegPolygon.map((p) => ({ ...p }));
+    const reset = selectedAnnotation.originalSegPolygon.map((p: { x: number; y: number }) => ({
+      ...p,
+    }));
     setSegUndoStack([]);
     setAnnotations((prev) =>
       prev.map((a) => (a.id === selectedAnnotation.id ? { ...a, segPolygon: reset } : a))
@@ -1547,14 +1542,18 @@ export default function App() {
             )}
             {datasetInfo && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {datasetInfo.images.map((name, idx) => {
-                  const indexLabel = `${idx + 1}`.padStart(3, "0");
+                {datasetInfo.images.map((entry: DatasetImageEntry, idx: number) => {
+                  const name = entry.original_filename || entry.filename || "";
+                  const indexLabel = entry.internal_id || "000";
+                  if (!name) {
+                    return null;
+                  }
                   const count = imageStatusMap[name] || 0;
                   const isDone = count > 0;
                   const isActive = datasetSelectedName === name;
                   return (
                     <div
-                      key={name}
+                      key={name || `${entry.internal_id}-${idx}`}
                       onClick={() => handleSelectDatasetImage(name)}
                       style={{
                         display: "grid",
@@ -1669,7 +1668,9 @@ export default function App() {
                   if (!selectedAnnotation?.segPolygon) return;
                   setSegUndoStack((prev) => [
                     ...prev,
-                    selectedAnnotation.segPolygon!.map((p) => ({ ...p })),
+                    selectedAnnotation.segPolygon!.map((p: { x: number; y: number }) => ({
+                      ...p,
+                    })),
                   ]);
                 }}
                 onClickPoint={handleClickPoint}

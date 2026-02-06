@@ -73,6 +73,10 @@
 - seg は必要時のみ付与
 - Annotation 保存は `annotations/<image>.json`
 
+## Dataset 内部メタ
+
+- meta.json に `images` を保持\n- 画像エントリは `original_filename` / `internal_id` / `import_order` を保持\n- 並び順は `import_order` のみで決定
+
 ## 制約 / 設計意図
 
 - 回転テンプレは未対応

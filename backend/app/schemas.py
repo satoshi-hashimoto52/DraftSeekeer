@@ -19,6 +19,7 @@ class UploadResponse(BaseModel):
     image_id: str
     width: int
     height: int
+    filename: str | None = None
 
 
 class DetectPointRequest(BaseModel):
@@ -210,7 +211,7 @@ class DatasetImportResponse(BaseModel):
 
 class DatasetInfo(BaseModel):
     project_name: str
-    images: List[str]
+    images: List["DatasetImageEntry"]
     total_images: int = 0
     annotated_images: int = 0
     bbox_count: int = 0
@@ -219,9 +220,17 @@ class DatasetInfo(BaseModel):
 
 
 class DatasetSelectRequest(BaseModel):
-    project_name: str
-    filename: str
+    project_name: str | None = None
+    dataset_id: str | None = None
+    filename: str | None = None
 
 
 class ProjectCreateRequest(BaseModel):
     project_name: str
+
+
+class DatasetImageEntry(BaseModel):
+    original_filename: str
+    filename: str | None = None
+    internal_id: str
+    import_order: int

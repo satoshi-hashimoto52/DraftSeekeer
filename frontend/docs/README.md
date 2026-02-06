@@ -38,6 +38,8 @@
 - `segEditMode` / `segUndoStack` / `segSimplifyEps`
 - `showExportDrawer` / `exportResult` / `splitTrain` など
 
+`datasetInfo.images` は `original_filename` / `internal_id` / `import_order` を持つ。
+
 ## Canvas 操作
 
 - クリック: `onClickPoint` → /detect/point

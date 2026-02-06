@@ -2,6 +2,7 @@ export type UploadResponse = {
   image_id: string;
   width: number;
   height: number;
+  filename?: string;
 };
 
 export type DetectResult = {
@@ -157,12 +158,18 @@ export type DatasetImportResponse = {
 
 export type DatasetInfo = {
   project_name: string;
-  images: string[];
+  images: DatasetImageEntry[];
   total_images: number;
   annotated_images: number;
   bbox_count: number;
   seg_count: number;
   updated_at?: string | null;
+};
+
+export type DatasetImageEntry = {
+  original_filename: string;
+  internal_id: string;
+  import_order: number;
 };
 
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {

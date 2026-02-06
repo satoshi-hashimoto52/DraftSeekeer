@@ -32,6 +32,11 @@
 - `app/storage.py`
   - 画像アップロード保存 / path 解決
 
+## Dataset メタ構造
+
+- `data/datasets/<project>/meta.json` に images 配列を保持
+- 各 entry は `original_filename` / `internal_id` / `import_order`
+
 ## ルーティング追加手順
 
 1. `app/schemas.py` に request/response を追加

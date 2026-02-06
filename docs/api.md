@@ -206,6 +206,8 @@ Query:
 
 ## Dataset API
 
+`images` は `original_filename` / `internal_id` / `import_order` を持つ配列。
+
 ### GET /dataset/projects
 
 プロジェクト一覧（data/datasets）を返す。
@@ -247,7 +249,11 @@ Response:
 ```json
 {
   "project_name": "estimate",
-  "images": ["a.jpg", "c.jpg", "b.jpg"],
+  "images": [
+    {"original_filename": "a.jpg", "internal_id": "001", "import_order": 1},
+    {"original_filename": "c.jpg", "internal_id": "002", "import_order": 2},
+    {"original_filename": "b.jpg", "internal_id": "003", "import_order": 3}
+  ],
   "total_images": 3,
   "annotated_images": 2,
   "bbox_count": 14,

@@ -177,10 +177,97 @@ def _project_meta_path(project_name: str) -> Path:
     return _project_dir(project_name) / "meta.json"
 
 
+def _parse_internal_id(value: object, fallback: int) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return fallback
+
+
+def _load_meta_entries(project_name: str) -> List[Dict[str, object]]:
+    meta_path = _project_meta_path(project_name)
+    if not meta_path.exists():
+        return []
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    images = meta.get("images", [])
+    if not isinstance(images, list):
+        return []
+    if not images:
+        return []
+    if isinstance(images[0], str):
+        entries = []
+        for idx, name in enumerate(images, start=1):
+            entries.append(
+                {
+                    "original_filename": str(name),
+                    "internal_id": f"{idx:03d}",
+                    "import_order": idx,
+                }
+            )
+        return entries
+    entries = []
+    for idx, item in enumerate(images, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("original_filename") or item.get("filename") or item.get("name") or "")
+        if not name:
+            continue
+        import_order = int(item.get("import_order") or idx)
+        internal_raw = item.get("internal_id")
+        internal_num = _parse_internal_id(internal_raw, import_order)
+        entries.append(
+            {
+                "original_filename": name,
+                "internal_id": f"{internal_num:03d}",
+                "import_order": import_order,
+            }
+        )
+    return entries
+
+
+def _entries_to_filenames(entries: List[Dict[str, object]]) -> List[str]:
+    ordered = sorted(entries, key=lambda e: int(e.get("import_order") or 0))
+    return [str(e.get("original_filename")) for e in ordered if e.get("original_filename")]
+
+
+def _entries_to_api(entries: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    ordered = sorted(entries, key=lambda e: int(e.get("import_order") or 0))
+    return [
+        {
+            "original_filename": str(e.get("original_filename")),
+            "filename": str(e.get("original_filename")),
+            "internal_id": str(e.get("internal_id")),
+            "import_order": int(e.get("import_order") or 0),
+        }
+        for e in ordered
+        if e.get("original_filename")
+    ]
+
+
 def _project_stats(project_name: str) -> Dict[str, object]:
     images_dir = _project_images_dir(project_name)
     annotations_dir = _project_annotations_dir(project_name)
-    images = sorted([p.name for p in images_dir.iterdir() if p.is_file()]) if images_dir.exists() else []
+    meta_entries = _load_meta_entries(project_name)
+    images = _entries_to_api(meta_entries)
+    if not images:
+        images = (
+            [
+                {
+                    "original_filename": p.name,
+                    "internal_id": f"{idx:03d}",
+                    "import_order": idx,
+                }
+                for idx, p in enumerate(
+                    sorted([p for p in images_dir.iterdir() if p.is_file()]), start=1
+                )
+            ]
+            if images_dir.exists()
+            else []
+        )
     total_images = len(images)
     annotated_images = 0
     bbox_count = 0
@@ -298,17 +385,13 @@ def import_dataset(
     annotations_dir = _project_annotations_dir(project_name)
     annotations_dir.mkdir(parents=True, exist_ok=True)
 
-    meta_path = _project_meta_path(project_name)
-    prev_images: List[str] = []
-    if meta_path.exists():
-        try:
-            prev_meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            prev_images = [Path(p).name for p in prev_meta.get("images", []) if p]
-        except Exception:
-            prev_images = []
+    meta_entries = _load_meta_entries(project_name)
+    prev_images = [e["original_filename"] for e in meta_entries if e.get("original_filename")]
+    prev_set = set(prev_images)
 
-    saved_names: List[str] = []
     incoming_order: List[str] = []
+    incoming_set: set[str] = set()
+    new_files: List[str] = []
     for f in files:
         original = Path(f.filename or "").name
         if not original:
@@ -316,20 +399,41 @@ def import_dataset(
         suffix = Path(original).suffix.lower()
         if suffix not in IMAGE_EXTS:
             continue
+        if original in prev_set:
+            if original not in incoming_set:
+                incoming_order.append(original)
+                incoming_set.add(original)
+            continue
         data = f.file.read()
         if not data:
             continue
         dest_name = original
         with (images_dir / dest_name).open("wb") as out:
             out.write(data)
-        saved_names.append(dest_name)
+        new_files.append(dest_name)
         if dest_name not in incoming_order:
             incoming_order.append(dest_name)
+            incoming_set.add(dest_name)
 
-    incoming_set = set(incoming_order)
     prev_filtered = [name for name in prev_images if name in incoming_set]
-    appended = [name for name in incoming_order if name not in prev_images]
-    images = prev_filtered + appended
+    appended = [name for name in incoming_order if name not in prev_set]
+
+    max_order = max([int(e.get("import_order") or 0) for e in meta_entries], default=0)
+    max_internal = max(
+        [_parse_internal_id(e.get("internal_id"), int(e.get("import_order") or 0)) for e in meta_entries],
+        default=0,
+    )
+    kept_entries = [e for e in meta_entries if e.get("original_filename") in incoming_set]
+    for name in appended:
+        max_order += 1
+        max_internal += 1
+        kept_entries.append(
+            {
+                "original_filename": name,
+                "internal_id": f"{max_internal:03d}",
+                "import_order": max_order,
+            }
+        )
 
     # remove files/annotations not present in the new import set
     for path in images_dir.iterdir():
@@ -347,9 +451,9 @@ def import_dataset(
             continue
         ann_path.unlink(missing_ok=True)
 
-    meta = {"project_name": project_name, "images": images}
+    meta = {"project_name": project_name, "images": _entries_to_api(kept_entries)}
     _project_meta_path(project_name).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    return DatasetImportResponse(project_name=project_name, count=len(saved_names))
+    return DatasetImportResponse(project_name=project_name, count=len(new_files))
 
 
 @app.get("/dataset/{project_name}", response_model=DatasetInfo)
@@ -374,14 +478,30 @@ def get_dataset_image(project_name: str, filename: str) -> FileResponse:
     safe_name = Path(filename).name
     image_path = _project_images_dir(project_name) / safe_name
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail="image not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"image not found: project={project_name} filename={safe_name}",
+        )
     return FileResponse(image_path)
 
 
 @app.post("/dataset/select", response_model=UploadResponse)
 def select_dataset_image(payload: DatasetSelectRequest) -> UploadResponse:
-    safe_name = Path(payload.filename).name
-    image_path = _project_images_dir(payload.project_name) / safe_name
+    project_name = payload.project_name or payload.dataset_id
+    if not project_name:
+        raise HTTPException(status_code=400, detail="project_name or dataset_id is required")
+
+    filename = payload.filename
+    if not filename:
+        entries = _load_meta_entries(project_name)
+        if entries:
+            entries.sort(key=lambda e: int(e.get("import_order") or 0))
+            filename = entries[0].get("original_filename")
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required or dataset has no images")
+
+    safe_name = Path(filename).name
+    image_path = _project_images_dir(project_name) / safe_name
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="image not found")
     try:
@@ -394,7 +514,7 @@ def select_dataset_image(payload: DatasetSelectRequest) -> UploadResponse:
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     dest = IMAGES_DIR / image_id
     dest.write_bytes(image_path.read_bytes())
-    return UploadResponse(image_id=image_id, width=width, height=height)
+    return UploadResponse(image_id=image_id, width=width, height=height, filename=safe_name)
 
 
 @app.post("/annotations/save")
@@ -438,7 +558,8 @@ def export_dataset_bbox(payload: ExportDatasetBBoxRequest) -> ExportDatasetBBoxR
     except Exception:
         return ExportDatasetBBoxResponse(ok=False, error="invalid meta")
 
-    images = meta.get("images", [])
+    meta_entries = _load_meta_entries(payload.project_name)
+    images = _entries_to_filenames(meta_entries)
     if not images:
         return ExportDatasetBBoxResponse(ok=False, error="no images")
     parent_name = meta.get("project_name", payload.project_name)
@@ -586,7 +707,8 @@ def export_dataset_seg(payload: ExportDatasetSegRequest) -> ExportDatasetSegResp
     except Exception:
         return ExportDatasetSegResponse(ok=False, error="invalid meta")
 
-    images = meta.get("images", [])
+    meta_entries = _load_meta_entries(payload.project_name)
+    images = _entries_to_filenames(meta_entries)
     if not images:
         return ExportDatasetSegResponse(ok=False, error="no images")
     parent_name = meta.get("project_name", payload.project_name)
