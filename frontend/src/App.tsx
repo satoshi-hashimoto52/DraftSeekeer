@@ -1040,112 +1040,7 @@ export default function App() {
             overflowX: "auto",
             whiteSpace: "nowrap",
           }}
-        >
-          <div style={{ display: "inline-flex", gap: 14, alignItems: "center" }}>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#fff",
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
-              <input
-                type="number"
-                min={10}
-                value={roiSize}
-                step={10}
-                onChange={(e) => setRoiSize(Number(e.target.value))}
-                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                style={{ width: 110, height: 36, fontSize: 14 }}
-              />
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#fff",
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 52 }}>スケール</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMin}
-                onChange={(e) => setScaleMin(Number(e.target.value))}
-                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                style={{ width: 80, height: 36, fontSize: 14 }}
-              />
-              <span style={{ fontSize: 12, color: "#888" }}>〜</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMax}
-                onChange={(e) => setScaleMax(Number(e.target.value))}
-                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                style={{ width: 80, height: 36, fontSize: 14 }}
-              />
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#fff",
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 70 }}>上位件数</span>
-              <input
-                type="number"
-                min={1}
-                max={3}
-                value={topk}
-                onChange={(e) => setTopk(Number(e.target.value))}
-                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                style={{ width: 64, height: 36, fontSize: 14 }}
-              />
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#f7f7f7",
-                opacity: 0.7,
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 80 }}>スケール分割数</span>
-              <input
-                type="number"
-                min={1}
-                value={scaleSteps}
-                onChange={(e) => setScaleSteps(Number(e.target.value))}
-                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                style={{ width: 64, height: 36, fontSize: 14 }}
-              />
-            </label>
-          </div>
-        </div>
+        />
       )}
       {showExportDrawer && (
         <>
@@ -1768,6 +1663,65 @@ export default function App() {
             </div>
             {showAdvanced && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>検出パラメータ</div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, minWidth: 90 }}>ROIサイズ</span>
+                  <input
+                    type="number"
+                    min={10}
+                    value={roiSize}
+                    step={10}
+                    onChange={(e) => setRoiSize(Number(e.target.value))}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                    style={{ width: 100, height: 28 }}
+                  />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, minWidth: 90 }}>スケール</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0.1}
+                    value={scaleMin}
+                    onChange={(e) => setScaleMin(Number(e.target.value))}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                    style={{ width: 70, height: 28 }}
+                  />
+                  <span style={{ fontSize: 12, color: "#888" }}>〜</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0.1}
+                    value={scaleMax}
+                    onChange={(e) => setScaleMax(Number(e.target.value))}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                    style={{ width: 70, height: 28 }}
+                  />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, minWidth: 90 }}>上位件数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={3}
+                    value={topk}
+                    onChange={(e) => setTopk(Number(e.target.value))}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                    style={{ width: 60, height: 28 }}
+                  />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, minWidth: 90 }}>スケール分割数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={scaleSteps}
+                    onChange={(e) => setScaleSteps(Number(e.target.value))}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                    style={{ width: 60, height: 28 }}
+                  />
+                </label>
+                <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
                 <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <input
                     type="checkbox"
