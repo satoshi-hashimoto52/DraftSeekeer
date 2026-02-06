@@ -90,6 +90,7 @@ export default function App() {
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [annotationFilterClass, setAnnotationFilterClass] = useState<string>("all");
   const [colorMap, setColorMap] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +169,22 @@ export default function App() {
     if (!selectedAnnotationId) return null;
     return annotations.find((a) => a.id === selectedAnnotationId) || null;
   }, [annotations, selectedAnnotationId]);
+
+  const filteredAnnotations = useMemo(() => {
+    if (annotationFilterClass === "all") return annotations;
+    return annotations.filter((a) => a.class_name === annotationFilterClass);
+  }, [annotations, annotationFilterClass]);
+
+  useEffect(() => {
+    if (annotationFilterClass === "all") return;
+    if (!selectedAnnotationId) return;
+    const stillVisible = annotations.some(
+      (a) => a.id === selectedAnnotationId && a.class_name === annotationFilterClass
+    );
+    if (!stillVisible) {
+      setSelectedAnnotationId(null);
+    }
+  }, [annotationFilterClass, annotations, selectedAnnotationId]);
 
   const splitSummary = useMemo(() => {
     const images = (datasetInfo?.images || [])
@@ -978,6 +995,27 @@ export default function App() {
             >
               Project Homeへ戻る
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!exportOutputDir.trim()) {
+                  setExportOutputDir("~/Downloads");
+                }
+                setExportResult(null);
+                setShowExportDrawer(true);
+              }}
+              style={{
+                height: 30,
+                padding: "0 10px",
+                borderRadius: 8,
+                border: "1px solid #e3e3e3",
+                background: "#fff",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Export dataset
+            </button>
             <label
               style={{
                 display: "inline-flex",
@@ -1574,7 +1612,7 @@ export default function App() {
                 imageUrl={imageUrl}
                 candidates={candidates}
                 selectedCandidateId={selectedCandidateId}
-                annotations={annotations}
+                annotations={filteredAnnotations}
                 selectedAnnotationId={selectedAnnotationId}
                 colorMap={colorMap}
                 showCandidates={showCandidates}
@@ -2035,13 +2073,28 @@ export default function App() {
 
             <div style={{ marginBottom: 12, paddingTop: 4, flex: "1 1 auto", minHeight: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                確定アノテーション（合計 {annotations.length}件）
+                確定アノテーション（表示 {filteredAnnotations.length}件）
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
+                <select
+                  value={annotationFilterClass}
+                  onChange={(e) => setAnnotationFilterClass(e.target.value)}
+                  style={{ height: 24, fontSize: 11 }}
+                >
+                  <option value="all">すべて表示</option>
+                  {classOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                {annotations.length === 0
+                {filteredAnnotations.length === 0
                   ? "内訳: なし"
                   : Object.entries(
-                      annotations.reduce<Record<string, number>>((acc, a) => {
+                      filteredAnnotations.reduce<Record<string, number>>((acc, a) => {
                         acc[a.class_name] = (acc[a.class_name] || 0) + 1;
                         return acc;
                       }, {})
@@ -2050,10 +2103,10 @@ export default function App() {
                       .join(" / ")}
               </div>
               <div style={{ overflowY: "auto", maxHeight: "36vh", paddingRight: 6 }}>
-                {annotations.length === 0 && (
+                {filteredAnnotations.length === 0 && (
                   <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
                 )}
-                {annotations.map((a) => (
+                {filteredAnnotations.map((a) => (
                   <div
                     key={a.id}
                     style={{
@@ -2199,29 +2252,7 @@ export default function App() {
             </div>
           )}
 
-            <div style={{ marginBottom: 18 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!exportOutputDir.trim()) {
-                    setExportOutputDir("~/Downloads");
-                  }
-                  setExportResult(null);
-                  setShowExportDrawer(true);
-                }}
-                style={{
-                  width: "100%",
-                  height: 36,
-                  borderRadius: 8,
-                  border: "1px solid #e3e3e3",
-                  background: "#fff",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
-              >
-                Export dataset
-              </button>
-            </div>
+            <div style={{ marginBottom: 18 }} />
           </div>
         </div>
       ) : (
