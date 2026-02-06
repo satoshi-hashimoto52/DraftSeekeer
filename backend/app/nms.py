@@ -12,6 +12,10 @@ def _as_box_tuple(box: BoxLike) -> BBox:
         if len(box) != 4:
             raise ValueError("bbox tuple must have 4 elements")
         return int(box[0]), int(box[1]), int(box[2]), int(box[3])
+    if hasattr(box, "x") and hasattr(box, "y") and hasattr(box, "w") and hasattr(box, "h"):
+        return int(getattr(box, "x")), int(getattr(box, "y")), int(getattr(box, "w")), int(
+            getattr(box, "h")
+        )
     return int(box["x"]), int(box["y"]), int(box["w"]), int(box["h"])
 
 

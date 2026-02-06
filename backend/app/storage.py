@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 from PIL import Image
 
-from .config import RUNS_DIR
+from .config import DATASETS_DIR, RUNS_DIR
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -16,6 +16,10 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 def get_runs_dir() -> Path:
     return RUNS_DIR
+
+
+def get_datasets_dir() -> Path:
+    return DATASETS_DIR
 
 
 def save_upload(image_file: UploadFile, images_dir: Path) -> Tuple[str, int, int]:

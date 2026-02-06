@@ -3,23 +3,31 @@ from __future__ import annotations
 from typing import Dict, List
 
 import cv2
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import tempfile
+import zipfile
+from PIL import Image
 import numpy as np
 import json
 from pathlib import Path
+from uuid import uuid4
+import shutil
+from datetime import datetime
+import random
 
 from .config import (
     DEFAULT_SCALE_MAX,
     DEFAULT_SCALE_MIN,
     DEFAULT_SCALE_STEPS,
     DEFAULT_TOPK,
+    DATASETS_DIR,
     IMAGES_DIR,
     TEMPLATES_ROOT,
 )
 from .contours import find_roi_contours
-from .filters import filter_bboxes
+from .filters import exclude_confirmed_candidates, filter_bboxes
 from .matching import (
     MatchResult,
     apply_vertical_padding,
@@ -35,6 +43,16 @@ from .schemas import (
     DetectPointRequest,
     DetectPointResponse,
     DetectResult,
+    DatasetImportResponse,
+    DatasetInfo,
+    DatasetSelectRequest,
+    ProjectCreateRequest,
+    LoadAnnotationsResponse,
+    ExportDatasetBBoxRequest,
+    ExportDatasetBBoxResponse,
+    ExportDatasetSegRequest,
+    ExportDatasetSegResponse,
+    SaveAnnotationsRequest,
     SegmentCandidateRequest,
     SegmentCandidateResponse,
     SegmentMeta,
@@ -44,12 +62,13 @@ from .schemas import (
     TemplateInfo,
     UploadResponse,
 )
-from .storage import RUNS_DIR, resolve_image_path, save_upload
+from .storage import IMAGE_EXTS, RUNS_DIR, resolve_image_path, save_upload
 from .templates import scan_templates
 from .sam_service import get_sam_predictor
 from .sam_device import get_sam_device
 from .polygon import mask_to_polygon, polygon_to_bbox
 from .export_yolo import make_yolo_lines
+from .export_yolo import normalize_bbox
 
 
 app = FastAPI(title="Annotator MVP")
@@ -66,9 +85,137 @@ app.add_middleware(
 )
 
 templates_cache = scan_templates(TEMPLATES_ROOT)
-BBOX_PAD_DEFAULT_TOP = 2
-BBOX_PAD_DEFAULT_BOTTOM = 3
+BBOX_PAD_DEFAULT_TOP = 0
+BBOX_PAD_DEFAULT_BOTTOM = 0
 BBOX_PAD_MAP: Dict[str, Dict[str, int]] = {}
+
+
+def _get_project_class_names(project: str) -> List[str]:
+    project_dir = TEMPLATES_ROOT / project
+    if project_dir.exists() and project_dir.is_dir():
+        class_names = sorted([p.name for p in project_dir.iterdir() if p.is_dir()])
+        if class_names:
+            return class_names
+    project_templates = templates_cache.get(project)
+    if project_templates:
+        return sorted(project_templates.keys())
+    return []
+
+
+def _split_counts(total: int, ratios: List[int]) -> List[int]:
+    ratio_sum = sum(max(0, r) for r in ratios)
+    if total <= 0 or ratio_sum <= 0:
+        return [0 for _ in ratios]
+    raw = [(r / ratio_sum) * total for r in ratios]
+    floors = [int(v) for v in raw]
+    remaining = total - sum(floors)
+    fracs = sorted(
+        [(i, raw[i] - floors[i]) for i in range(len(raw))],
+        key=lambda t: t[1],
+        reverse=True,
+    )
+    counts = floors[:]
+    for i in range(len(fracs)):
+        if remaining <= 0:
+            break
+        idx = fracs[i][0]
+        counts[idx] += 1
+        remaining -= 1
+    return counts
+
+
+def _load_matching_table(dataset_dir: Path) -> List[dict]:
+    table_path = dataset_dir / "matching_table.json"
+    if not table_path.exists():
+        return []
+    try:
+        data = json.loads(table_path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
+
+def _save_matching_table(dataset_dir: Path, rows: List[dict]) -> None:
+    table_path = dataset_dir / "matching_table.json"
+    table_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_export_index(dataset_dir: Path) -> Dict[str, str]:
+    index_path = dataset_dir / "exports_index.json"
+    if not index_path.exists():
+        return {}
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        return {}
+    return {}
+
+
+def _save_export_index(dataset_dir: Path, index: Dict[str, str]) -> None:
+    index_path = dataset_dir / "exports_index.json"
+    index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _project_dir(name: str) -> Path:
+    safe = Path(name).name
+    return DATASETS_DIR / safe
+
+
+def _project_images_dir(project_name: str) -> Path:
+    return _project_dir(project_name) / "images"
+
+
+def _project_annotations_dir(project_name: str) -> Path:
+    return _project_dir(project_name) / "annotations"
+
+
+def _project_meta_path(project_name: str) -> Path:
+    return _project_dir(project_name) / "meta.json"
+
+
+def _project_stats(project_name: str) -> Dict[str, object]:
+    images_dir = _project_images_dir(project_name)
+    annotations_dir = _project_annotations_dir(project_name)
+    images = sorted([p.name for p in images_dir.iterdir() if p.is_file()]) if images_dir.exists() else []
+    total_images = len(images)
+    annotated_images = 0
+    bbox_count = 0
+    seg_count = 0
+    latest_ts = 0.0
+    if annotations_dir.exists():
+        for ann_path in annotations_dir.glob("*.json"):
+            try:
+                data = json.loads(ann_path.read_text(encoding="utf-8"))
+                if data:
+                    annotated_images += 1
+                for ann in data or []:
+                    if ann.get("bbox"):
+                        bbox_count += 1
+                    poly = ann.get("segPolygon")
+                    if isinstance(poly, list) and len(poly) >= 3:
+                        seg_count += 1
+            except Exception:
+                continue
+            latest_ts = max(latest_ts, ann_path.stat().st_mtime)
+    if images_dir.exists():
+        for p in images_dir.iterdir():
+            try:
+                latest_ts = max(latest_ts, p.stat().st_mtime)
+            except Exception:
+                continue
+    updated_at = datetime.fromtimestamp(latest_ts).isoformat() if latest_ts > 0 else None
+    return {
+        "images": images,
+        "total_images": total_images,
+        "annotated_images": annotated_images,
+        "bbox_count": bbox_count,
+        "seg_count": seg_count,
+        "updated_at": updated_at,
+    }
 
 
 @app.get("/templates", response_model=List[ProjectInfo])
@@ -88,6 +235,479 @@ def list_templates() -> List[ProjectInfo]:
 @app.get("/projects", response_model=List[str])
 def list_projects() -> List[str]:
     return sorted(templates_cache.keys())
+
+
+@app.get("/dataset/projects", response_model=List[DatasetInfo])
+def list_dataset_projects() -> List[DatasetInfo]:
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    projects: List[DatasetInfo] = []
+    for p in sorted([d for d in DATASETS_DIR.iterdir() if d.is_dir()]):
+        stats = _project_stats(p.name)
+        projects.append(
+            DatasetInfo(
+                project_name=p.name,
+                images=stats["images"],
+                total_images=stats["total_images"],
+                annotated_images=stats["annotated_images"],
+                bbox_count=stats["bbox_count"],
+                seg_count=stats["seg_count"],
+                updated_at=stats["updated_at"],
+            )
+        )
+    return projects
+
+
+@app.post("/dataset/projects", response_model=DatasetInfo)
+def create_dataset_project(payload: ProjectCreateRequest) -> DatasetInfo:
+    project_name = Path(payload.project_name).name
+    if not project_name:
+        raise HTTPException(status_code=400, detail="invalid project_name")
+    project_dir = _project_dir(project_name)
+    if project_dir.exists():
+        raise HTTPException(status_code=400, detail="project already exists")
+    project_dir.mkdir(parents=True, exist_ok=True)
+    _project_images_dir(project_name).mkdir(parents=True, exist_ok=True)
+    _project_annotations_dir(project_name).mkdir(parents=True, exist_ok=True)
+    meta = {"project_name": project_name, "images": []}
+    _project_meta_path(project_name).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return DatasetInfo(project_name=project_name, images=[], total_images=0, annotated_images=0, bbox_count=0, seg_count=0, updated_at=None)
+
+
+@app.delete("/dataset/projects/{project_name}")
+def delete_dataset_project(project_name: str) -> Dict[str, bool]:
+    project_dir = _project_dir(project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+    shutil.rmtree(project_dir)
+    return {"ok": True}
+
+
+@app.post("/dataset/import", response_model=DatasetImportResponse)
+def import_dataset(
+    project_name: str = Form(...),
+    files: List[UploadFile] = File(...),
+) -> DatasetImportResponse:
+    if not files:
+        raise HTTPException(status_code=400, detail="no files")
+    project_name = Path(project_name).name
+    project_dir = _project_dir(project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=400, detail="project not found")
+    images_dir = _project_images_dir(project_name)
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_names: List[str] = []
+    for f in files:
+        original = Path(f.filename or "").name
+        if not original:
+            continue
+        suffix = Path(original).suffix.lower()
+        if suffix not in IMAGE_EXTS:
+            continue
+        data = f.file.read()
+        if not data:
+            continue
+        dest_name = original
+        counter = 1
+        while (images_dir / dest_name).exists():
+            stem = Path(original).stem
+            dest_name = f"{stem}_{counter}{suffix}"
+            counter += 1
+        with (images_dir / dest_name).open("wb") as out:
+            out.write(data)
+        saved_names.append(dest_name)
+
+    images = sorted([p.name for p in images_dir.iterdir() if p.is_file()])
+    meta = {"project_name": project_name, "images": images}
+    _project_meta_path(project_name).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return DatasetImportResponse(project_name=project_name, count=len(saved_names))
+
+
+@app.get("/dataset/{project_name}", response_model=DatasetInfo)
+def get_dataset(project_name: str) -> DatasetInfo:
+    project_dir = _project_dir(project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+    stats = _project_stats(project_name)
+    return DatasetInfo(
+        project_name=project_name,
+        images=stats["images"],
+        total_images=stats["total_images"],
+        annotated_images=stats["annotated_images"],
+        bbox_count=stats["bbox_count"],
+        seg_count=stats["seg_count"],
+        updated_at=stats["updated_at"],
+    )
+
+
+@app.get("/dataset/{project_name}/image/{filename}")
+def get_dataset_image(project_name: str, filename: str) -> FileResponse:
+    safe_name = Path(filename).name
+    image_path = _project_images_dir(project_name) / safe_name
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="image not found")
+    return FileResponse(image_path)
+
+
+@app.post("/dataset/select", response_model=UploadResponse)
+def select_dataset_image(payload: DatasetSelectRequest) -> UploadResponse:
+    safe_name = Path(payload.filename).name
+    image_path = _project_images_dir(payload.project_name) / safe_name
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="image not found")
+    try:
+        with Image.open(image_path) as img:
+            width, height = img.size
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid image") from exc
+    suffix = image_path.suffix.lower()
+    image_id = f"{uuid4().hex}{suffix}"
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    dest = IMAGES_DIR / image_id
+    dest.write_bytes(image_path.read_bytes())
+    return UploadResponse(image_id=image_id, width=width, height=height)
+
+
+@app.post("/annotations/save")
+def save_annotations(payload: SaveAnnotationsRequest) -> Dict[str, bool]:
+    project_dir = _project_dir(payload.project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+    annotations_dir = _project_annotations_dir(payload.project_name)
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+    safe_key = Path(payload.image_key).name
+    out_path = annotations_dir / f"{safe_key}.json"
+    data = [ann.model_dump() for ann in payload.annotations]
+    out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True}
+
+
+@app.get("/annotations/load", response_model=LoadAnnotationsResponse)
+def load_annotations(project_name: str, image_key: str) -> LoadAnnotationsResponse:
+    project_dir = _project_dir(project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+    safe_key = Path(image_key).name
+    path = _project_annotations_dir(project_name) / f"{safe_key}.json"
+    if not path.exists():
+        return LoadAnnotationsResponse(ok=True, annotations=[])
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="invalid annotations") from exc
+    return LoadAnnotationsResponse(ok=True, annotations=data)
+
+
+@app.post("/export/dataset/bbox", response_model=ExportDatasetBBoxResponse)
+def export_dataset_bbox(payload: ExportDatasetBBoxRequest) -> ExportDatasetBBoxResponse:
+    project_dir = _project_dir(payload.project_name)
+    meta_path = _project_meta_path(payload.project_name)
+    if not meta_path.exists():
+        return ExportDatasetBBoxResponse(ok=False, error="project not found")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ExportDatasetBBoxResponse(ok=False, error="invalid meta")
+
+    images = meta.get("images", [])
+    if not images:
+        return ExportDatasetBBoxResponse(ok=False, error="no images")
+    parent_name = meta.get("project_name", payload.project_name)
+
+    class_names = _get_project_class_names(payload.project)
+    if not class_names:
+        return ExportDatasetBBoxResponse(ok=False, error="invalid project")
+    class_to_id = {name: idx for idx, name in enumerate(class_names)}
+
+    ratios = [payload.split_train, payload.split_val, payload.split_test]
+    counts = _split_counts(len(images), ratios)
+    rng = random.Random(payload.seed)
+    shuffled = images[:]
+    rng.shuffle(shuffled)
+
+    train_count, val_count, test_count = counts
+    train_images = shuffled[:train_count]
+    val_images = shuffled[train_count : train_count + val_count]
+    test_images = shuffled[train_count + val_count : train_count + val_count + test_count]
+
+    output_dir = Path(payload.output_dir).expanduser()
+    if not output_dir.is_absolute():
+        return ExportDatasetBBoxResponse(ok=False, error="output_dir must be absolute")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y%m%d")
+    output_root = output_dir / f"dataset_{parent_name}_{date_str}"
+    for split in ["train", "val", "test"]:
+        (output_root / split / "images").mkdir(parents=True, exist_ok=True)
+        (output_root / split / "labels").mkdir(parents=True, exist_ok=True)
+        (output_root / split / "classes.txt").write_text(
+            "\n".join(class_names), encoding="utf-8"
+        )
+        notes = {
+            "categories": [{"id": idx, "name": name} for name, idx in class_to_id.items()],
+            "info": {"year": datetime.now().year, "version": "1.0", "contributor": "DraftSeeker"},
+        }
+        (output_root / split / "notes.json").write_text(
+            json.dumps(notes, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    table_rows = _load_matching_table(project_dir)
+    def export_split(split_name: str, split_images: List[str], start_idx: int) -> int:
+        idx = start_idx
+        for image_key in split_images:
+            src = _project_images_dir(payload.project_name) / image_key
+            if not src.exists():
+                continue
+            suffix = src.suffix.lower()
+            out_name = f"{idx:03d}{suffix}"
+            out_img = output_root / split_name / "images" / out_name
+            out_lbl = output_root / split_name / "labels" / f"{idx:03d}.txt"
+            out_img.write_bytes(src.read_bytes())
+            rel_out = out_img.relative_to(output_root.parent).as_posix()
+            rel_out = out_img.relative_to(output_root.parent).as_posix()
+
+            ann_path = _project_annotations_dir(payload.project_name) / f"{Path(image_key).name}.json"
+            annotations = []
+            if ann_path.exists():
+                try:
+                    annotations = json.loads(ann_path.read_text(encoding="utf-8"))
+                except Exception:
+                    annotations = []
+
+            if not annotations and payload.include_negatives:
+                out_lbl.write_text("", encoding="utf-8")
+                table_rows.append(
+                    {
+                        "image_name": image_key,
+                        "index": idx,
+                        "split": split_name,
+                        "dataset_type": "bbox",
+                        "output_path": rel_out,
+                    }
+                )
+                idx += 1
+                continue
+            if not annotations and not payload.include_negatives:
+                idx += 1
+                continue
+
+            image = cv2.imread(str(src))
+            if image is None:
+                out_lbl.write_text("", encoding="utf-8")
+                idx += 1
+                continue
+            height, width = image.shape[:2]
+            lines: List[str] = []
+            for ann in annotations:
+                class_name = ann.get("class_name")
+                if class_name not in class_to_id:
+                    continue
+                bbox = ann.get("bbox")
+                if not bbox:
+                    continue
+                cx, cy, w, h = normalize_bbox(bbox, width, height)
+                parts = [
+                    str(class_to_id[class_name]),
+                    f"{cx:.6f}",
+                    f"{cy:.6f}",
+                    f"{w:.6f}",
+                    f"{h:.6f}",
+                ]
+                lines.append(" ".join(parts))
+            out_lbl.write_text("\n".join(lines), encoding="utf-8")
+            table_rows.append(
+                {
+                    "image_name": image_key,
+                    "index": idx,
+                    "split": split_name,
+                    "dataset_type": "bbox",
+                    "output_path": rel_out,
+                }
+            )
+            idx += 1
+        return idx
+
+    idx = 1
+    idx = export_split("train", train_images, idx)
+    idx = export_split("val", val_images, idx)
+    idx = export_split("test", test_images, idx)
+
+    _save_matching_table(project_dir, table_rows)
+    index = _load_export_index(project_dir)
+    index[output_root.name] = str(output_root)
+    _save_export_index(project_dir, index)
+
+    return ExportDatasetBBoxResponse(
+        ok=True,
+        output_dir=str(output_root),
+        export_id=output_root.name,
+        counts={"train": len(train_images), "val": len(val_images), "test": len(test_images)},
+    )
+
+
+@app.post("/export/dataset/seg", response_model=ExportDatasetSegResponse)
+def export_dataset_seg(payload: ExportDatasetSegRequest) -> ExportDatasetSegResponse:
+    project_dir = _project_dir(payload.project_name)
+    meta_path = _project_meta_path(payload.project_name)
+    if not meta_path.exists():
+        return ExportDatasetSegResponse(ok=False, error="project not found")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ExportDatasetSegResponse(ok=False, error="invalid meta")
+
+    images = meta.get("images", [])
+    if not images:
+        return ExportDatasetSegResponse(ok=False, error="no images")
+    parent_name = meta.get("project_name", payload.project_name)
+
+    class_names = _get_project_class_names(payload.project)
+    if not class_names:
+        return ExportDatasetSegResponse(ok=False, error="invalid project")
+    class_to_id = {name: idx for idx, name in enumerate(class_names)}
+
+    ratios = [payload.split_train, payload.split_val, payload.split_test]
+    rng = random.Random(payload.seed)
+    shuffled = images[:]
+    rng.shuffle(shuffled)
+
+    # filter images that have at least one segPolygon
+    seg_images: List[str] = []
+    annotations_dir = _project_annotations_dir(payload.project_name)
+    for image_key in shuffled:
+        ann_path = annotations_dir / f"{Path(image_key).name}.json"
+        if not ann_path.exists():
+            continue
+        try:
+            anns = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if any(isinstance(a.get("segPolygon"), list) and len(a.get("segPolygon")) >= 3 for a in anns):
+            seg_images.append(image_key)
+
+    counts = _split_counts(len(seg_images), ratios)
+    train_count, val_count, test_count = counts
+    train_images = seg_images[:train_count]
+    val_images = seg_images[train_count : train_count + val_count]
+    test_images = seg_images[train_count + val_count : train_count + val_count + test_count]
+
+    output_dir = Path(payload.output_dir).expanduser()
+    if not output_dir.is_absolute():
+        return ExportDatasetSegResponse(ok=False, error="output_dir must be absolute")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y%m%d")
+    output_root = output_dir / f"dataset_{parent_name}_{date_str}_seg"
+    for split in ["train", "val", "test"]:
+        (output_root / split / "images").mkdir(parents=True, exist_ok=True)
+        (output_root / split / "labels").mkdir(parents=True, exist_ok=True)
+        (output_root / split / "classes.txt").write_text(
+            "\n".join(class_names), encoding="utf-8"
+        )
+        notes = {
+            "categories": [{"id": idx, "name": name} for name, idx in class_to_id.items()],
+            "info": {"year": datetime.now().year, "version": "1.0", "contributor": "DraftSeeker"},
+        }
+        (output_root / split / "notes.json").write_text(
+            json.dumps(notes, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def export_split(split_name: str, split_images: List[str], start_idx: int) -> int:
+        idx = start_idx
+        for image_key in split_images:
+            src = _project_images_dir(payload.project_name) / image_key
+            if not src.exists():
+                continue
+            suffix = src.suffix.lower()
+            out_name = f"{idx:03d}{suffix}"
+            out_img = output_root / split_name / "images" / out_name
+            out_lbl = output_root / split_name / "labels" / f"{idx:03d}.txt"
+            out_img.write_bytes(src.read_bytes())
+
+            ann_path = annotations_dir / f"{Path(image_key).name}.json"
+            try:
+                annotations = json.loads(ann_path.read_text(encoding="utf-8"))
+            except Exception:
+                annotations = []
+
+            image = cv2.imread(str(src))
+            if image is None:
+                out_lbl.write_text("", encoding="utf-8")
+                idx += 1
+                continue
+            height, width = image.shape[:2]
+            lines: List[str] = []
+            for ann in annotations:
+                poly = ann.get("segPolygon")
+                if not (isinstance(poly, list) and len(poly) >= 3):
+                    continue
+                class_name = ann.get("class_name")
+                if class_name not in class_to_id:
+                    continue
+                coords = []
+                for pt in poly:
+                    if len(pt) < 2:
+                        continue
+                    x = max(0.0, min(1.0, float(pt["x"]) / float(width)))
+                    y = max(0.0, min(1.0, float(pt["y"]) / float(height)))
+                    coords.extend([x, y])
+                if len(coords) < 6:
+                    continue
+                parts = [str(class_to_id[class_name])] + [f"{v:.6f}" for v in coords]
+                lines.append(" ".join(parts))
+            out_lbl.write_text("\n".join(lines), encoding="utf-8")
+            table_rows.append(
+                {
+                    "image_name": image_key,
+                    "index": idx,
+                    "split": split_name,
+                    "dataset_type": "seg",
+                    "output_path": rel_out,
+                }
+            )
+            idx += 1
+        return idx
+
+    idx = 1
+    idx = export_split("train", train_images, idx)
+    idx = export_split("val", val_images, idx)
+    idx = export_split("test", test_images, idx)
+
+    _save_matching_table(project_dir, table_rows)
+    index = _load_export_index(project_dir)
+    index[output_root.name] = str(output_root)
+    _save_export_index(project_dir, index)
+
+    return ExportDatasetSegResponse(
+        ok=True,
+        output_dir=str(output_root),
+        export_id=output_root.name,
+        counts={"train": len(train_images), "val": len(val_images), "test": len(test_images)},
+    )
+
+
+@app.get("/dataset/export/download")
+def download_dataset_export(project_name: str, export_id: str) -> FileResponse:
+    project_dir = _project_dir(project_name)
+    index = _load_export_index(project_dir)
+    export_path = index.get(export_id)
+    if not export_path:
+        raise HTTPException(status_code=404, detail="export not found")
+    export_dir = Path(export_path)
+    if not export_dir.exists() or not export_dir.is_dir():
+        raise HTTPException(status_code=404, detail="export not found")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp.close()
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in export_dir.rglob("*"):
+            if path.is_dir():
+                continue
+            rel = path.relative_to(export_dir.parent).as_posix()
+            zf.write(path, rel)
+    return FileResponse(
+        tmp.name,
+        media_type="application/zip",
+        filename=f"{export_id}.zip",
+    )
 
 
 @app.post("/image/upload", response_model=UploadResponse)
@@ -146,12 +766,13 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
     )
     image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    matches = refine_match_bboxes(
-        image_gray,
-        matches,
-        click_xy=(payload.x, payload.y),
-        pad=12,
-    )
+    if payload.refine_contour:
+        matches = refine_match_bboxes(
+            image_gray,
+            matches,
+            click_xy=(payload.x, payload.y),
+            pad=12,
+        )
     matches = apply_vertical_padding(
         matches,
         image_gray.shape[0],
@@ -180,11 +801,19 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             best_per_class[match.class_name] = match
 
     representative = list(best_per_class.values())
-    representative = filter_overlapping_matches(
-        representative,
-        payload.confirmed_boxes,
-        iou_threshold=0.5,
-    )
+    if payload.exclude_enabled:
+        confirmed = []
+        if payload.confirmed_annotations:
+            confirmed = [ann.model_dump() for ann in payload.confirmed_annotations]
+        elif payload.confirmed_boxes:
+            confirmed = [{"bbox": b.model_dump() if hasattr(b, "model_dump") else b} for b in payload.confirmed_boxes]
+        representative = exclude_confirmed_candidates(
+            representative,
+            confirmed,
+            exclude_mode=payload.exclude_mode,
+            center_check=payload.exclude_center,
+            iou_threshold=payload.exclude_iou_threshold,
+        )
     representative.sort(key=lambda r: r.score, reverse=True)
     representative = representative[: payload.topk]
 
@@ -287,11 +916,19 @@ def detect_full(payload: DetectFullRequest) -> DetectFullResponse:
             best_per_class[match.class_name] = match
 
     representative = list(best_per_class.values())
-    representative = filter_overlapping_matches(
-        representative,
-        payload.confirmed_boxes,
-        iou_threshold=0.5,
-    )
+    if payload.exclude_enabled:
+        confirmed = []
+        if payload.confirmed_annotations:
+            confirmed = [ann.model_dump() for ann in payload.confirmed_annotations]
+        elif payload.confirmed_boxes:
+            confirmed = [{"bbox": b.model_dump() if hasattr(b, "model_dump") else b} for b in payload.confirmed_boxes]
+        representative = exclude_confirmed_candidates(
+            representative,
+            confirmed,
+            exclude_mode=payload.exclude_mode,
+            center_check=payload.exclude_center,
+            iou_threshold=payload.exclude_iou_threshold,
+        )
     representative.sort(key=lambda r: r.score, reverse=True)
     representative = representative[: payload.topk]
 
@@ -431,25 +1068,53 @@ def export_yolo(payload: ExportYoloRequest) -> ExportYoloResponse:
     except FileNotFoundError:
         return ExportYoloResponse(ok=False, error="invalid image_id")
 
+    output_dir = Path(payload.output_dir).expanduser()
+    if not output_dir.is_absolute():
+        return ExportYoloResponse(ok=False, error="output_dir must be absolute")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     image = cv2.imread(str(image_path))
     if image is None:
         return ExportYoloResponse(ok=False, error="failed to read image")
     height, width = image.shape[:2]
 
-    project_templates = templates_cache.get(payload.project)
-    if project_templates is None:
+    class_names = _get_project_class_names(payload.project)
+    if not class_names:
         return ExportYoloResponse(ok=False, error="invalid project")
-    class_names = sorted(project_templates.keys())
     class_to_id = {name: idx for idx, name in enumerate(class_names)}
 
     annotations = [ann.model_dump() for ann in payload.annotations]
     lines = make_yolo_lines(annotations, class_to_id, width, height)
 
-    project_dir = RUNS_DIR / payload.project
-    project_dir.mkdir(parents=True, exist_ok=True)
-    classes_path = project_dir / "classes.json"
-    classes_path.write_text(json.dumps(class_to_id, ensure_ascii=False, indent=2), encoding="utf-8")
-    output_path = project_dir / f"{payload.image_id}.txt"
+    parent_name = "images"
+    if payload.project_name and payload.image_key:
+        meta_path = _project_meta_path(payload.project_name)
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                parent_name = meta.get("project_name", parent_name)
+            except Exception:
+                pass
+    date_str = datetime.now().strftime("%Y%m%d")
+    output_root = output_dir / f"dataset_{parent_name}_{date_str}"
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    classes_json_path = output_root / "classes.json"
+    classes_json_path.write_text(
+        json.dumps(class_to_id, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    classes_txt_path = output_root / "classes.txt"
+    classes_txt_path.write_text("\n".join(class_names), encoding="utf-8")
+    notes_path = output_root / "notes.json"
+    notes_path.write_text(
+        json.dumps(
+            {"class_names": class_names, "class_to_id": class_to_id},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    output_path = output_root / f"{payload.image_id}.txt"
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
     preview_lines = lines[:5]

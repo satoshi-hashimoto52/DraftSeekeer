@@ -4,12 +4,21 @@ import {
   Annotation,
   Candidate,
   detectPoint,
-  exportYolo,
   fetchProjects,
   fetchTemplates,
   segmentCandidate,
   toCandidates,
-  uploadImage,
+  importDataset,
+  fetchDataset,
+  selectDatasetImage,
+  API_BASE,
+  saveAnnotations,
+  loadAnnotations,
+  exportDatasetBBox,
+  exportDatasetSeg,
+  listDatasetProjects,
+  createDatasetProject,
+  deleteDatasetProject,
 } from "./api";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
 import { normalizeToHex } from "./utils/color";
@@ -25,6 +34,57 @@ export default function App() {
   const headerScrollRef = useRef<HTMLDivElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageId, setImageId] = useState<string | null>(null);
+  const [datasetId, setDatasetId] = useState<string | null>(null);
+  const [datasetInfo, setDatasetInfo] = useState<{
+    project_name: string;
+    images: string[];
+    total_images: number;
+    annotated_images: number;
+    bbox_count: number;
+    seg_count: number;
+    updated_at?: string | null;
+  } | null>(null);
+  const [projectList, setProjectList] = useState<
+    {
+      project_name: string;
+      images: string[];
+      total_images: number;
+      annotated_images: number;
+      bbox_count: number;
+      seg_count: number;
+      updated_at?: string | null;
+    }[]
+  >([]);
+  const [newProjectName, setNewProjectName] = useState<string>("");
+  const [datasetSelectedName, setDatasetSelectedName] = useState<string | null>(null);
+  const [imageStatusMap, setImageStatusMap] = useState<Record<string, number>>({});
+  const isLoadingAnnotationsRef = useRef<boolean>(false);
+  const [splitTrain, setSplitTrain] = useState<number>(7);
+  const [splitVal, setSplitVal] = useState<number>(2);
+  const [splitTest, setSplitTest] = useState<number>(1);
+  const [splitSeed, setSplitSeed] = useState<number>(42);
+  const [includeNegatives, setIncludeNegatives] = useState<boolean>(true);
+  const [datasetType, setDatasetType] = useState<"bbox" | "seg">("bbox");
+  const [exportFormat, setExportFormat] = useState<"folder" | "zip">("folder");
+  const [refineContour, setRefineContour] = useState<boolean>(false);
+  const [excludeEnabled, setExcludeEnabled] = useState<boolean>(true);
+  const [excludeMode, setExcludeMode] = useState<"same_class" | "any_class">("same_class");
+  const [excludeCenter, setExcludeCenter] = useState<boolean>(true);
+  const [excludeIouThreshold, setExcludeIouThreshold] = useState<number>(0.6);
+  const [uiPhase, setUiPhase] = useState<"annotate" | "export">("annotate");
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
+  const interactionTimeoutRef = useRef<number | null>(null);
+  const [exportOutputDir, setExportOutputDir] = useState<string>("");
+  const [exportDirHistory, setExportDirHistory] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("draftSeeker.exportDirHistory");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [projects, setProjects] = useState<string[]>([]);
   const [project, setProject] = useState<string>("");
   const [classOptions, setClassOptions] = useState<string[]>([]);
@@ -45,7 +105,6 @@ export default function App() {
   const [showAnnotations, setShowAnnotations] = useState<boolean>(true);
   const canvasRef = useRef<ImageCanvasHandle | null>(null);
   const [lastClick, setLastClick] = useState<{ x: number; y: number } | null>(null);
-  const [exportPreview, setExportPreview] = useState<string | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
   const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null);
@@ -62,6 +121,7 @@ export default function App() {
       return true;
     }
   });
+  const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
 
   const dismissHints = () => {
     setShowHints(false);
@@ -69,6 +129,29 @@ export default function App() {
       localStorage.setItem("draftSeeker.hideHints", "1");
     } catch {
       // ignore
+    }
+  };
+
+  const addExportDirHistory = (dir: string) => {
+    const cleaned = dir.trim();
+    if (!cleaned) return;
+    setExportDirHistory((prev) => {
+      const next = [cleaned, ...prev.filter((item) => item !== cleaned)].slice(0, 8);
+      try {
+        localStorage.setItem("draftSeeker.exportDirHistory", JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const refreshProjectList = async () => {
+    try {
+      const list = await listDatasetProjects();
+      setProjectList(list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project list failed");
     }
   };
 
@@ -90,6 +173,47 @@ export default function App() {
     if (!selectedAnnotationId) return null;
     return annotations.find((a) => a.id === selectedAnnotationId) || null;
   }, [annotations, selectedAnnotationId]);
+
+  const splitSummary = useMemo(() => {
+    const images = datasetInfo?.images || [];
+    const total = images.length;
+    const ratios = [
+      { key: "train", value: Math.max(0, splitTrain) },
+      { key: "val", value: Math.max(0, splitVal) },
+      { key: "test", value: Math.max(0, splitTest) },
+    ];
+    const ratioSum = ratios.reduce((acc, r) => acc + r.value, 0);
+    if (total === 0 || ratioSum === 0) {
+      return { total, train: 0, val: 0, test: 0 };
+    }
+    const raw = ratios.map((r) => ({
+      key: r.key,
+      count: (r.value / ratioSum) * total,
+    }));
+    const floors = raw.map((r) => Math.floor(r.count));
+    let remaining = total - floors.reduce((acc, v) => acc + v, 0);
+    const order = raw
+      .map((r, idx) => ({ idx, frac: r.count - floors[idx] }))
+      .sort((a, b) => b.frac - a.frac);
+    const counts = [...floors];
+    for (let i = 0; i < order.length && remaining > 0; i += 1) {
+      counts[order[i].idx] += 1;
+      remaining -= 1;
+    }
+    const shuffled = seededShuffle(images, splitSeed);
+    const trainCount = counts[0];
+    const valCount = counts[1];
+    const testCount = counts[2];
+    const _train = shuffled.slice(0, trainCount);
+    const _val = shuffled.slice(trainCount, trainCount + valCount);
+    const _test = shuffled.slice(trainCount + valCount, trainCount + valCount + testCount);
+    return {
+      total,
+      train: _train.length,
+      val: _val.length,
+      test: _test.length,
+    };
+  }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -156,26 +280,225 @@ export default function App() {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : "Templates fetch failed");
       });
+    refreshProjectList();
     return () => {
       mounted = false;
       document.body.style.overflow = "";
     };
   }, [project]);
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+
+  const handleFolderImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!datasetId) {
+      setError("プロジェクトを選択してください");
+      return;
+    }
+    const files = Array.from(event.target.files || []).filter((file) => {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      return ext === "jpg" || ext === "jpeg" || ext === "png";
+    });
+    if (files.length === 0) return;
+    setError(null);
+    setNotice(null);
+    setDatasetImporting(true);
+    try {
+      const res = await importDataset({ project_name: datasetId, files });
+      const info = await fetchDataset(res.project_name);
+      setDatasetInfo(info);
+      setImageStatusMap({});
+      setDatasetSelectedName(null);
+      setNotice(`Dataset imported: ${res.project_name} (${res.count} files)`);
+      refreshProjectList();
+      setImageId(null);
+      setImageUrl(null);
+      setCandidates([]);
+      setSelectedCandidateId(null);
+      setAnnotations([]);
+      setSelectedAnnotationId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dataset import failed");
+    } finally {
+      setDatasetImporting(false);
+      event.target.value = "";
+    }
+  };
+
+  const handleSelectDatasetImage = async (filename: string) => {
+    if (!datasetId) return;
     setError(null);
     setBusy(true);
     try {
-      const res = await uploadImage(file);
+      const res = await selectDatasetImage({ project_name: datasetId, filename });
       setImageId(res.image_id);
-      setImageUrl(URL.createObjectURL(file));
+      setImageUrl(`${API_BASE}/dataset/${datasetId}/image/${encodeURIComponent(filename)}`);
       setImageSize({ w: res.width, h: res.height });
       setCandidates([]);
       setSelectedCandidateId(null);
+      setSelectedAnnotationId(null);
+      setDatasetSelectedName(filename);
+      isLoadingAnnotationsRef.current = true;
+      const loaded = await loadAnnotations({ project_name: datasetId, image_key: filename });
+      setAnnotations(loaded.annotations || []);
+      isLoadingAnnotationsRef.current = false;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      setError(err instanceof Error ? err.message : "Dataset select failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOpenProject = async (projectName: string) => {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const info = await fetchDataset(projectName);
+      setDatasetId(projectName);
+      setDatasetInfo(info);
+      setDatasetSelectedName(null);
+      setImageStatusMap({});
+      setImageId(null);
+      setImageUrl(null);
+      setCandidates([]);
+      setSelectedCandidateId(null);
+      setAnnotations([]);
+      setSelectedAnnotationId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project open failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleBackToHome = () => {
+    setError(null);
+    setNotice(null);
+    setBusy(false);
+    setDatasetId(null);
+    setDatasetInfo(null);
+    setDatasetSelectedName(null);
+    setImageStatusMap({});
+    setImageId(null);
+    setImageUrl(null);
+    setCandidates([]);
+    setSelectedCandidateId(null);
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+  };
+
+  const handleCreateProject = async () => {
+    const name = newProjectName.trim();
+    if (!name) {
+      setError("プロジェクト名を入力してください");
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    try {
+      await createDatasetProject(name);
+      setNewProjectName("");
+      await refreshProjectList();
+      await handleOpenProject(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project create failed");
+    }
+  };
+
+  const handleDeleteProject = async (name: string) => {
+    if (!window.confirm(`本当に削除しますか？\n${name}`)) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await deleteDatasetProject(name);
+      if (datasetId === name) {
+        setDatasetId(null);
+        setDatasetInfo(null);
+        setDatasetSelectedName(null);
+        setImageId(null);
+        setImageUrl(null);
+        setCandidates([]);
+        setSelectedCandidateId(null);
+        setAnnotations([]);
+        setSelectedAnnotationId(null);
+      }
+      await refreshProjectList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Project delete failed");
+    }
+  };
+
+  const handleExportDatasetBBox = async () => {
+    if (!datasetId || !datasetInfo) return;
+    if (!exportOutputDir.trim()) {
+      setError("保存先ディレクトリを指定してください");
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const res = await exportDatasetBBox({
+        project_name: datasetId,
+        project,
+        split_train: splitTrain,
+        split_val: splitVal,
+        split_test: splitTest,
+        seed: splitSeed,
+        include_negatives: includeNegatives,
+        output_dir: exportOutputDir.trim(),
+      });
+      if (!res.ok) {
+        setError(res.error || "Dataset export failed");
+        return;
+      }
+      setNotice(`Dataset export: ${res.output_dir || ""}`);
+      addExportDirHistory(exportOutputDir.trim());
+      if (exportFormat === "zip" && res.export_id) {
+        const url = `${API_BASE}/dataset/export/download?project_name=${encodeURIComponent(
+          datasetId
+        )}&export_id=${encodeURIComponent(res.export_id)}`;
+        window.location.href = url;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dataset export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleExportDatasetSeg = async () => {
+    if (!datasetId || !datasetInfo) return;
+    if (!exportOutputDir.trim()) {
+      setError("保存先ディレクトリを指定してください");
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const res = await exportDatasetSeg({
+        project_name: datasetId,
+        project,
+        split_train: splitTrain,
+        split_val: splitVal,
+        split_test: splitTest,
+        seed: splitSeed,
+        output_dir: exportOutputDir.trim(),
+      });
+      if (!res.ok) {
+        setError(res.error || "Dataset export failed");
+        return;
+      }
+      setNotice(`Seg dataset export: ${res.output_dir || ""}`);
+      addExportDirHistory(exportOutputDir.trim());
+      if (exportFormat === "zip" && res.export_id) {
+        const url = `${API_BASE}/dataset/export/download?project_name=${encodeURIComponent(
+          datasetId
+        )}&export_id=${encodeURIComponent(res.export_id)}`;
+        window.location.href = url;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dataset export failed");
     } finally {
       setBusy(false);
     }
@@ -206,6 +529,15 @@ export default function App() {
           w: a.bbox.w,
           h: a.bbox.h,
         })),
+        refine_contour: refineContour,
+        confirmed_annotations: annotations.map((a) => ({
+          class_name: a.class_name,
+          bbox: { x: a.bbox.x, y: a.bbox.y, w: a.bbox.w, h: a.bbox.h },
+        })),
+        exclude_enabled: excludeEnabled,
+        exclude_mode: excludeMode,
+        exclude_center: excludeCenter,
+        exclude_iou_threshold: excludeIouThreshold,
       });
       const nextCandidates = toCandidates(res);
       setCandidates(nextCandidates);
@@ -371,33 +703,6 @@ export default function App() {
     return "#000000";
   };
 
-  const handleExportYolo = async () => {
-    if (!imageId || !project) return;
-    setError(null);
-    setNotice(null);
-    setBusy(true);
-    try {
-      const res = await exportYolo({
-        project,
-        image_id: imageId,
-        annotations: annotations.map((a) => ({
-          class_name: a.class_name,
-          bbox: a.bbox,
-          segPolygon: a.segPolygon,
-        })),
-      });
-      if (!res.ok) {
-        setError(res.error || "Export failed");
-        return;
-      }
-      setExportPreview(res.text_preview || "");
-      setNotice(`Exported: ${res.saved_path || ""}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Export failed");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handleSelectAnnotation = (annotation: Annotation) => {
     setSelectedAnnotationId(annotation.id);
@@ -450,6 +755,35 @@ export default function App() {
     );
   };
 
+  useEffect(() => {
+    if (!datasetSelectedName) return;
+    setImageStatusMap((prev) => ({
+      ...prev,
+      [datasetSelectedName]: annotations.length,
+    }));
+  }, [annotations.length, datasetSelectedName]);
+
+  useEffect(() => {
+    if (!datasetId || !datasetSelectedName) return;
+    if (isLoadingAnnotationsRef.current) return;
+    const payload = {
+      project_name: datasetId,
+      image_key: datasetSelectedName,
+      annotations,
+    };
+    saveAnnotations(payload).catch(() => {
+      // ignore save errors for now
+    });
+  }, [annotations, datasetId, datasetSelectedName]);
+
+  useEffect(() => {
+    return () => {
+      if (interactionTimeoutRef.current) {
+        window.clearTimeout(interactionTimeoutRef.current);
+      }
+    };
+  }, []);
+
   return (
     <div
       style={{
@@ -479,199 +813,210 @@ export default function App() {
             />
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            {datasetId && (
+              <button
+                type="button"
+                onClick={handleBackToHome}
+                style={{
+                  height: 40,
+                  padding: "0 12px",
+                  borderRadius: 10,
+                  border: "1px solid #e3e3e3",
+                  background: "#fff",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Project Homeへ戻る
+              </button>
+            )}
+            {datasetId && (
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  height: 40,
+                  padding: "6px 8px",
+                  border: "1px solid #e3e3e3",
+                  borderRadius: 10,
+                  background: "#fafafa",
+                }}
+              >
+                <input
+                  type="file"
+                  multiple
+                  {...({ webkitdirectory: "true", directory: "true" } as React.InputHTMLAttributes<HTMLInputElement>)}
+                  onChange={handleFolderImport}
+                  style={{ fontSize: 12 }}
+                />
+                <span style={{ fontSize: 12, fontWeight: 600 }}>親フォルダ選択</span>
+              </label>
+            )}
+          </div>
+        </div>
+        {datasetImporting && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
+            Dataset import中...
+          </div>
+        )}
+      </div>
+
+      {datasetId && (
+        <div
+          ref={headerScrollRef}
+          onWheel={(e) => {
+            if (!headerScrollRef.current) return;
+            headerScrollRef.current.scrollLeft += e.deltaY;
+            e.preventDefault();
+          }}
+          style={{
+            padding: "8px 20px",
+            borderBottom: "1px solid #eee",
+            background: "#fff",
+            overflowX: "auto",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <div style={{ display: "inline-flex", gap: 14, alignItems: "center" }}>
             <label
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
-                height: 40,
+                height: 48,
                 padding: "6px 8px",
                 border: "1px solid #e3e3e3",
                 borderRadius: 10,
-                background: "#fafafa",
-              }}
-            >
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                style={{ fontSize: 12 }}
-              />
-              <span style={{ fontSize: 12, fontWeight: 600 }}>画像アップロード</span>
-            </label>
-            <button
-              type="button"
-              onClick={handleExportYolo}
-              disabled={annotations.length === 0 || !imageId}
-              style={{
-                padding: "8px 10px",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-                borderRadius: 10,
-                border: "1px solid #e3e3e3",
                 background: "#fff",
               }}
             >
-              ⤴ YOLOエクスポート
-            </button>
+              <span style={{ fontSize: 13, minWidth: 70 }}>プロジェクト</span>
+              <select
+                value={project}
+                onChange={(e) => setProject(e.target.value)}
+                style={{ minWidth: 180, height: 36, fontSize: 14 }}
+              >
+                {projects.length === 0 && <option value="">(none)</option>}
+                {projects.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fff",
+              }}
+            >
+              <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
+              <input
+                type="number"
+                min={10}
+                value={roiSize}
+                step={10}
+                onChange={(e) => setRoiSize(Number(e.target.value))}
+                style={{ width: 120, height: 36, fontSize: 14 }}
+              />
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fff",
+              }}
+            >
+              <span style={{ fontSize: 13, minWidth: 70 }}>上位件数</span>
+              <input
+                type="number"
+                min={1}
+                max={3}
+                value={topk}
+                onChange={(e) => setTopk(Number(e.target.value))}
+                style={{ width: 120, height: 36, fontSize: 14 }}
+              />
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fff",
+              }}
+            >
+              <span style={{ fontSize: 13, minWidth: 70 }}>最小スケール</span>
+              <input
+                type="number"
+                step={0.1}
+                min={0.1}
+                value={scaleMin}
+                onChange={(e) => setScaleMin(Number(e.target.value))}
+                style={{ width: 120, height: 36, fontSize: 14 }}
+              />
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fff",
+              }}
+            >
+              <span style={{ fontSize: 13, minWidth: 70 }}>最大スケール</span>
+              <input
+                type="number"
+                step={0.1}
+                min={0.1}
+                value={scaleMax}
+                onChange={(e) => setScaleMax(Number(e.target.value))}
+                style={{ width: 120, height: 36, fontSize: 14 }}
+              />
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                height: 48,
+                padding: "6px 8px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                background: "#fff",
+              }}
+            >
+              <span style={{ fontSize: 13, minWidth: 80 }}>スケール分割数</span>
+              <input
+                type="number"
+                min={1}
+                value={scaleSteps}
+                onChange={(e) => setScaleSteps(Number(e.target.value))}
+                style={{ width: 120, height: 36, fontSize: 14 }}
+              />
+            </label>
           </div>
         </div>
-      </div>
-
-      <div
-        ref={headerScrollRef}
-        onWheel={(e) => {
-          if (!headerScrollRef.current) return;
-          headerScrollRef.current.scrollLeft += e.deltaY;
-          e.preventDefault();
-        }}
-        style={{
-          padding: "8px 20px",
-          borderBottom: "1px solid #eee",
-          background: "#fff",
-          overflowX: "auto",
-          whiteSpace: "nowrap",
-        }}
-      >
-        <div style={{ display: "inline-flex", gap: 14, alignItems: "center" }}>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 70 }}>プロジェクト</span>
-            <select
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
-              style={{ minWidth: 180, height: 36, fontSize: 14 }}
-            >
-              {projects.length === 0 && <option value="">(none)</option>}
-              {projects.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
-            <input
-              type="number"
-              min={10}
-              value={roiSize}
-              step={10}
-              onChange={(e) => setRoiSize(Number(e.target.value))}
-              style={{ width: 120, height: 36, fontSize: 14 }}
-            />
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 70 }}>上位件数</span>
-            <input
-              type="number"
-              min={1}
-              max={3}
-              value={topk}
-              onChange={(e) => setTopk(Number(e.target.value))}
-              style={{ width: 120, height: 36, fontSize: 14 }}
-            />
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 70 }}>最小スケール</span>
-            <input
-              type="number"
-              step={0.1}
-              min={0.1}
-              value={scaleMin}
-              onChange={(e) => setScaleMin(Number(e.target.value))}
-              style={{ width: 120, height: 36, fontSize: 14 }}
-            />
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 70 }}>最大スケール</span>
-            <input
-              type="number"
-              step={0.1}
-              min={0.1}
-              value={scaleMax}
-              onChange={(e) => setScaleMax(Number(e.target.value))}
-              style={{ width: 120, height: 36, fontSize: 14 }}
-            />
-          </label>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              height: 48,
-              padding: "6px 8px",
-              border: "1px solid #e3e3e3",
-              borderRadius: 10,
-              background: "#fff",
-            }}
-          >
-            <span style={{ fontSize: 13, minWidth: 80 }}>スケール分割数</span>
-            <input
-              type="number"
-              min={1}
-              value={scaleSteps}
-              onChange={(e) => setScaleSteps(Number(e.target.value))}
-              style={{ width: 120, height: 36, fontSize: 14 }}
-            />
-          </label>
-        </div>
-      </div>
+      )}
 
       {showHints && (
         <div
@@ -718,101 +1063,295 @@ export default function App() {
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 360px",
-          gap: 20,
-          padding: 16,
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
-        <div style={{ minHeight: 0, display: "flex", flexDirection: "column" }}>
-
-          {error && (
-            <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
-          )}
-          {notice && (
-            <div style={{ marginBottom: 12, color: "#1b5e20", fontSize: 12 }}>{notice}</div>
-          )}
-
-          <div style={{ position: "sticky", top: 0 }}>
-            <ImageCanvas
-              ref={canvasRef}
-              imageUrl={imageUrl}
-              candidates={candidates}
-              selectedCandidateId={selectedCandidateId}
-              annotations={annotations}
-              selectedAnnotationId={selectedAnnotationId}
-              colorMap={colorMap}
-              showCandidates={showCandidates}
-              showAnnotations={showAnnotations}
-              editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
-              editMode={segEditMode}
-              showVertices={showSegVertices}
-              selectedVertexIndex={selectedVertexIndex}
-              highlightAnnotationId={highlightAnnotationId}
-              onSelectVertex={setSelectedVertexIndex}
-              onUpdateEditablePolygon={(next) => {
-                if (!selectedAnnotation) return;
-                setAnnotations((prev) =>
-                  prev.map((a) =>
-                    a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a
-                  )
-                );
-              }}
-              onVertexDragStart={() => {
-                if (!selectedAnnotation?.segPolygon) return;
-                setSegUndoStack((prev) => [
-                  ...prev,
-                  selectedAnnotation.segPolygon!.map((p) => ({ ...p })),
-                ]);
-              }}
-              onClickPoint={handleClickPoint}
-              onCreateManualBBox={(bbox) => {
-                const id = `${Date.now()}-${Math.random()}`;
-                const manualCandidate: Candidate = {
-                  id,
-                  class_name: "",
-                  score: 1.0,
-                  bbox,
-                  template: "manual",
-                  scale: 1.0,
-                  source: "manual",
-                };
-                setCandidates((prev) => [...prev, manualCandidate]);
-                setSelectedCandidateId(id);
-              }}
-              onManualCreateStateChange={setIsCreatingManualBBox}
-              onResizeSelectedBBox={(bbox) => {
-                if (!selectedCandidateId) return;
-                setCandidates((prev) =>
-                  prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
-                );
-              }}
-              onResizeSelectedAnnotation={(bbox) => {
-                if (!selectedAnnotationId) return;
-                setAnnotations((prev) =>
-                  prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
-                );
-              }}
-            />
-          </div>
-          {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
-        </div>
-
+      {datasetId ? (
         <div
           style={{
-            borderLeft: "1px solid #eee",
-            paddingLeft: 16,
+            display: "grid",
+            gridTemplateColumns: "260px 1fr 360px",
+            gap: 16,
+            padding: 16,
+            flex: 1,
             minHeight: 0,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
           }}
         >
-          <div style={{ marginBottom: 12 }}>
+          <div
+            style={{
+              borderRight: "1px solid #eee",
+              paddingRight: 12,
+              minHeight: 0,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>
+              Dataset
+              {datasetInfo?.project_name ? `: ${datasetInfo.project_name}` : ""}
+            </div>
+            {!datasetInfo && (
+              <div style={{ fontSize: 12, color: "#666" }}>
+                親フォルダを読み込むとサムネ一覧が表示されます。
+              </div>
+            )}
+            {datasetInfo && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {datasetInfo.images.map((name, idx) => {
+                  const indexLabel = `${idx + 1}`.padStart(3, "0");
+                  const count = imageStatusMap[name] || 0;
+                  const isDone = count > 0;
+                  const isActive = datasetSelectedName === name;
+                  return (
+                    <div
+                      key={name}
+                      onClick={() => handleSelectDatasetImage(name)}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "54px 1fr",
+                        gap: 6,
+                        padding: 4,
+                        borderRadius: 8,
+                        border: isActive ? "1px solid #1a73e8" : "1px solid #e3e3e3",
+                        background: isActive ? "#eef6ff" : "#fff",
+                        cursor: "pointer",
+                        alignItems: "center",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 54,
+                          height: 54,
+                          borderRadius: 6,
+                          overflow: "hidden",
+                          background: "#f4f4f4",
+                          border: "1px solid #e6e6e6",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 10,
+                          color: "#666",
+                        }}
+                      >
+                        <img
+                          src={`${API_BASE}/dataset/${datasetId}/image/${encodeURIComponent(name)}`}
+                          alt={name}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        />
+                      </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600 }}>
+                          {indexLabel}{" "}
+                          <span
+                            style={{
+                              fontSize: 10,
+                              marginLeft: 6,
+                              padding: "2px 6px",
+                              borderRadius: 10,
+                              background: isDone ? "#e8f5e9" : "#f1f1f1",
+                              color: isDone ? "#2e7d32" : "#666",
+                            }}
+                          >
+                            {isDone ? `済 ${count}` : "未"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 10, color: "#666" }}>{name}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              position: "relative",
+              opacity: uiPhase === "export" ? 0.45 : 1,
+              filter: uiPhase === "export" ? "grayscale(0.6)" : "none",
+              transition: "opacity 160ms ease, filter 160ms ease",
+            }}
+            onPointerDown={() => setIsCanvasInteracting(true)}
+            onPointerUp={() => setIsCanvasInteracting(false)}
+            onPointerLeave={() => setIsCanvasInteracting(false)}
+            onWheel={() => {
+              setIsCanvasInteracting(true);
+              if (interactionTimeoutRef.current) {
+                window.clearTimeout(interactionTimeoutRef.current);
+              }
+              interactionTimeoutRef.current = window.setTimeout(() => {
+                setIsCanvasInteracting(false);
+              }, 140);
+            }}
+          >
+            {error && (
+              <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
+            )}
+            <div style={{ position: "sticky", top: 0 }}>
+              <ImageCanvas
+                ref={canvasRef}
+                imageUrl={imageUrl}
+                candidates={candidates}
+                selectedCandidateId={selectedCandidateId}
+                annotations={annotations}
+                selectedAnnotationId={selectedAnnotationId}
+                colorMap={colorMap}
+                showCandidates={showCandidates}
+                showAnnotations={showAnnotations}
+                editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
+                editMode={segEditMode}
+                showVertices={showSegVertices}
+                selectedVertexIndex={selectedVertexIndex}
+                highlightAnnotationId={highlightAnnotationId}
+                onSelectVertex={setSelectedVertexIndex}
+                onUpdateEditablePolygon={(next) => {
+                  if (!selectedAnnotation) return;
+                  setAnnotations((prev) =>
+                    prev.map((a) =>
+                      a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a
+                    )
+                  );
+                }}
+                onVertexDragStart={() => {
+                  if (!selectedAnnotation?.segPolygon) return;
+                  setSegUndoStack((prev) => [
+                    ...prev,
+                    selectedAnnotation.segPolygon!.map((p) => ({ ...p })),
+                  ]);
+                }}
+                onClickPoint={handleClickPoint}
+                onCreateManualBBox={(bbox) => {
+                  const id = `${Date.now()}-${Math.random()}`;
+                  const manualCandidate: Candidate = {
+                    id,
+                    class_name: "",
+                    score: 1.0,
+                    bbox,
+                    template: "manual",
+                    scale: 1.0,
+                    source: "manual",
+                  };
+                  setCandidates((prev) => [...prev, manualCandidate]);
+                  setSelectedCandidateId(id);
+                }}
+                onManualCreateStateChange={setIsCreatingManualBBox}
+                onResizeSelectedBBox={(bbox) => {
+                  if (!selectedCandidateId) return;
+                  setCandidates((prev) =>
+                    prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
+                  );
+                }}
+                onResizeSelectedAnnotation={(bbox) => {
+                  if (!selectedAnnotationId) return;
+                  setAnnotations((prev) =>
+                    prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
+                  );
+                }}
+              />
+            </div>
+            <div
+              style={{
+                position: "absolute",
+                right: 16,
+                bottom: 16,
+                display: "flex",
+                gap: 8,
+                zIndex: 5,
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleConfirmCandidate}
+                disabled={!selectedCandidate || manualClassMissing}
+                style={{
+                  minWidth: 92,
+                  height: 36,
+                  borderRadius: 10,
+                  border: "1px solid #1a73e8",
+                  background: "#1a73e8",
+                  color: "#fff",
+                  fontWeight: 700,
+                  letterSpacing: 0.2,
+                  boxShadow: "0 6px 12px rgba(26,115,232,0.18)",
+                  cursor: "pointer",
+                  opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
+                }}
+              >
+                Decision
+              </button>
+              <button
+                type="button"
+                onClick={handleRejectCandidate}
+                disabled={!selectedCandidate}
+                style={{
+                  minWidth: 92,
+                  height: 36,
+                  borderRadius: 10,
+                  border: "1px solid #e0e0e0",
+                  background: "#fff",
+                  cursor: "pointer",
+                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                  opacity: !selectedCandidate ? 0.45 : 1,
+                }}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={handleNextCandidate}
+                disabled={candidates.length === 0}
+                style={{
+                  minWidth: 92,
+                  height: 36,
+                  borderRadius: 10,
+                  border: "1px solid #e0e0e0",
+                  background: "#fff",
+                  cursor: "pointer",
+                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                  opacity: candidates.length === 0 ? 0.45 : 1,
+                }}
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                onClick={handleSegCandidate}
+                disabled={!selectedCandidate}
+                style={{
+                  minWidth: 92,
+                  height: 36,
+                  borderRadius: 10,
+                  border: "1px solid #e0e0e0",
+                  background: "#fff",
+                  cursor: "pointer",
+                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
+                  opacity: !selectedCandidate ? 0.45 : 1,
+                }}
+              >
+                SAM
+              </button>
+            </div>
+            {notice && (
+              <div style={{ marginTop: 12, color: "#1b5e20", fontSize: 12 }}>{notice}</div>
+            )}
+            {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
+          </div>
+
+          <div
+            style={{
+              borderLeft: "1px solid #eee",
+              paddingLeft: 16,
+              minHeight: 0,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              opacity: isCanvasInteracting ? 0.6 : 1,
+              transition: "opacity 160ms ease",
+            }}
+          >
+            <div style={{ marginBottom: 8 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
               <input
                 type="checkbox"
@@ -829,25 +1368,98 @@ export default function App() {
               />
               <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
             </label>
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((prev) => !prev)}
+                style={{
+                  width: "100%",
+                  height: 32,
+                  borderRadius: 8,
+                  border: "1px solid #e3e3e3",
+                  background: "#fff",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Advanced settings
+              </button>
+            </div>
+            {showAdvanced && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={excludeEnabled}
+                    onChange={(e) => setExcludeEnabled(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 12 }}>確定BBoxを除外</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={excludeCenter}
+                    disabled={!excludeEnabled}
+                    onChange={(e) => setExcludeCenter(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 12 }}>中心点で除外</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, minWidth: 64 }}>除外モード</span>
+                  <select
+                    value={excludeMode}
+                    disabled={!excludeEnabled}
+                    onChange={(e) =>
+                      setExcludeMode(e.target.value as "same_class" | "any_class")
+                    }
+                    style={{ height: 28 }}
+                  >
+                    <option value="same_class">same_class</option>
+                    <option value="any_class">any_class</option>
+                  </select>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, minWidth: 64 }}>IoU</span>
+                  <input
+                    type="number"
+                    step={0.05}
+                    min={0.4}
+                    max={0.8}
+                    disabled={!excludeEnabled}
+                    value={excludeIouThreshold}
+                    onChange={(e) => setExcludeIouThreshold(Number(e.target.value))}
+                    style={{ width: 72, height: 28 }}
+                  />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={refineContour}
+                    onChange={(e) => setRefineContour(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
+                </label>
+              </div>
+            )}
           </div>
-          {Object.keys(colorMap).length > 0 && (
-            <div style={{ marginBottom: 18 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                {Object.entries(colorMap).map(([name, color]) => {
-                  const hexColor = normalizeToHex(color);
-                  return (
-                    <label
-                      key={name}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 8px",
+            {Object.keys(colorMap).length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {Object.entries(colorMap).map(([name, color]) => {
+                    const hexColor = normalizeToHex(color);
+                    return (
+                      <label
+                        key={name}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                        padding: "4px 6px",
                         border: "1px solid #e3e3e3",
                         borderRadius: 999,
                         background: "#fff",
-                        fontSize: 12,
+                        fontSize: 11,
                       }}
                     >
                       <input
@@ -856,7 +1468,7 @@ export default function App() {
                         onChange={(e) =>
                           setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
                         }
-                        style={{ width: 24, height: 24, padding: 0, border: "none" }}
+                        style={{ width: 20, height: 20, padding: 0, border: "none" }}
                       />
                       <span>{name}</span>
                     </label>
@@ -865,321 +1477,553 @@ export default function App() {
               </div>
             </div>
           )}
-          <div
-            style={{
-              marginBottom: 16,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            <button
-              type="button"
-              onClick={handleConfirmCandidate}
-              disabled={!selectedCandidate || manualClassMissing}
-              style={{
-                flex: "1 1 80px",
-                minWidth: 80,
-                height: 36,
-                borderRadius: 10,
-                border: "1px solid #1a73e8",
-                background: "#1a73e8",
-                color: "#fff",
-                fontWeight: 700,
-                letterSpacing: 0.2,
-                boxShadow: "0 6px 12px rgba(26,115,232,0.18)",
-                cursor: "pointer",
-                opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
-              }}
-            >
-              Decision
-            </button>
-            <button
-              type="button"
-              onClick={handleRejectCandidate}
-              disabled={!selectedCandidate}
-              style={{
-                flex: "1 1 80px",
-                minWidth: 80,
-                height: 36,
-                borderRadius: 10,
-                border: "1px solid #e0e0e0",
-                background: "#fff",
-                cursor: "pointer",
-                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                opacity: !selectedCandidate ? 0.45 : 1,
-              }}
-            >
-              Discard
-            </button>
-            <button
-              type="button"
-              onClick={handleNextCandidate}
-              disabled={candidates.length === 0}
-              style={{
-                flex: "1 1 80px",
-                minWidth: 80,
-                height: 36,
-                borderRadius: 10,
-                border: "1px solid #e0e0e0",
-                background: "#fff",
-                cursor: "pointer",
-                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                opacity: candidates.length === 0 ? 0.45 : 1,
-              }}
-            >
-              Next
-            </button>
-            <button
-              type="button"
-              onClick={handleSegCandidate}
-              disabled={!selectedCandidate}
-              style={{
-                flex: "1 1 80px",
-                minWidth: 80,
-                height: 36,
-                borderRadius: 10,
-                border: "1px solid #e0e0e0",
-                background: "#fff",
-                cursor: "pointer",
-                boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                opacity: !selectedCandidate ? 0.45 : 1,
-              }}
-            >
-              SAM
-            </button>
-          </div>
-          {isManualSelected && (
-            <div
-              style={{
-                marginBottom: 18,
-                paddingBottom: 12,
-                borderBottom: "1px solid #eee",
-                flex: "0 0 auto",
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>手動候補: クラス指定</div>
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12, minWidth: 60 }}>クラス選択</span>
-                <select
-                  value={selectedCandidate?.class_name || ""}
-                  onChange={(e) => {
-                    const nextClass = e.target.value;
-                    setCandidates((prev) =>
-                      prev.map((c) =>
-                        c.id === selectedCandidate?.id ? { ...c, class_name: nextClass } : c
-                      )
-                    );
-                    if (nextClass) {
-                      setColorMap((prev) => {
-                        if (prev[nextClass]) return prev;
-                        return { ...prev, [nextClass]: pickUniqueColor(prev) };
-                      });
-                    }
-                  }}
-                  style={{ minWidth: 200, height: 36 }}
-                >
-                  <option value="">クラスを選択</option>
-                  {classOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {manualClassMissing && (
-                <div style={{ marginTop: 6, fontSize: 12, color: "#b00020" }}>
-                  手動候補はクラス指定が必要です
-                </div>
-              )}
-            </div>
-          )}
+            <div style={{ marginBottom: 16 }} />
+            {isManualSelected && (
+              <div
+                style={{
+                  marginBottom: 18,
+                  paddingBottom: 12,
+                  borderBottom: "1px solid #eee",
+                  flex: "0 0 auto",
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>手動候補: クラス指定</div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, minWidth: 60 }}>クラス選択</span>
+                  <select
+                    value={selectedCandidate?.class_name || ""}
+                    onChange={(e) => {
+                      const nextClass = e.target.value;
+                      setCandidates((prev) =>
+                        prev.map((c) =>
+                          c.id === selectedCandidate?.id ? { ...c, class_name: nextClass } : c
+                        )
+                      );
+                      if (nextClass) {
+                        setColorMap((prev) => {
+                          if (prev[nextClass]) return prev;
+                          return { ...prev, [nextClass]: pickUniqueColor(prev) };
+                        });
+                      }
+                    }}
+                    style={{ minWidth: 200, height: 36 }}
+                  >
+                    <option value="">クラスを選択</option>
+                    {classOptions.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {manualClassMissing && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#b00020" }}>
+                    手動候補はクラス指定が必要です
+                  </div>
+                )}
+              </div>
+            )}
 
-            <div style={{ marginBottom: 18, paddingTop: 6, flex: "1 1 auto", minHeight: 0 }}>
+            <div style={{ marginBottom: 12, paddingTop: 4, flex: "1 1 auto", minHeight: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
                 確定アノテーション（合計 {annotations.length}件）
               </div>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-              {annotations.length === 0
-                ? "内訳: なし"
-                : Object.entries(
-                    annotations.reduce<Record<string, number>>((acc, a) => {
-                      acc[a.class_name] = (acc[a.class_name] || 0) + 1;
-                      return acc;
-                    }, {})
-                  )
-                    .map(([name, count]) => `${name}: ${count}`)
-                    .join(" / ")}
-            </div>
-            <div style={{ overflowY: "auto", maxHeight: "40vh", paddingRight: 6 }}>
-              {annotations.length === 0 && (
-                <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
-              )}
-              {annotations.map((a) => (
-                <div
-                  key={a.id}
-                  style={{
-                    padding: "8px 10px",
-                    marginBottom: 8,
-                    border: "1px solid #e3e3e3",
-                    borderRadius: 6,
-                    background: selectedAnnotationId === a.id ? "#eef6ff" : "#fff",
-                    cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                  onClick={() => handleSelectAnnotation(a)}
-                >
-                  <div>
-                    <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>{a.class_name}</span>
-                      <span
-                        style={{
-                          fontSize: 10,
-                          padding: "2px 6px",
-                          borderRadius: 10,
-                          background: "#455a64",
-                          color: "#fff",
-                        }}
-                      >
-                        {a.source.toUpperCase()}
-                      </span>
-                      {a.segPolygon && a.segMethod && (
-                        <span
-                          style={{
-                            fontSize: 10,
-                            padding: "2px 6px",
-                            borderRadius: 10,
-                            background: a.segMethod === "sam" ? "#2e7d32" : "#888",
-                            color: "#fff",
-                          }}
-                        >
-                          {a.segMethod.toUpperCase()}
-                        </span>
-                      )}
-                      {a.segPolygon && !a.segMethod && (
-                        <span
-                          style={{
-                            fontSize: 10,
-                            padding: "2px 6px",
-                            borderRadius: 10,
-                            background: "#1a73e8",
-                            color: "#fff",
-                          }}
-                        >
-                          SEG
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#666" }}>
-                      bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="delete"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAnnotations((prev) => prev.filter((item) => item.id !== a.id));
-                      if (selectedAnnotationId === a.id) {
-                        setSelectedAnnotationId(null);
-                      }
-                    }}
+              <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                {annotations.length === 0
+                  ? "内訳: なし"
+                  : Object.entries(
+                      annotations.reduce<Record<string, number>>((acc, a) => {
+                        acc[a.class_name] = (acc[a.class_name] || 0) + 1;
+                        return acc;
+                      }, {})
+                    )
+                      .map(([name, count]) => `${name}: ${count}`)
+                      .join(" / ")}
+              </div>
+              <div style={{ overflowY: "auto", maxHeight: "36vh", paddingRight: 6 }}>
+                {annotations.length === 0 && (
+                  <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
+                )}
+                {annotations.map((a) => (
+                  <div
+                    key={a.id}
                     style={{
-                      border: "none",
-                      background: "transparent",
+                      padding: "6px 8px",
+                      marginBottom: 6,
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 6,
+                      background: selectedAnnotationId === a.id ? "#eef6ff" : "#fff",
                       cursor: "pointer",
-                      fontSize: 16,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 8,
                     }}
+                    onClick={() => handleSelectAnnotation(a)}
                   >
-                    🗑
-                  </button>
-                </div>
-              ))}
+                    <div>
+                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                        <span>{a.class_name}</span>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            borderRadius: 10,
+                            background: "#455a64",
+                            color: "#fff",
+                          }}
+                        >
+                          {a.source.toUpperCase()}
+                        </span>
+                        {a.segPolygon && a.segMethod && (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: "2px 6px",
+                              borderRadius: 10,
+                              background: a.segMethod === "sam" ? "#2e7d32" : "#888",
+                              color: "#fff",
+                            }}
+                          >
+                            {a.segMethod.toUpperCase()}
+                          </span>
+                        )}
+                        {a.segPolygon && !a.segMethod && (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: "2px 6px",
+                              borderRadius: 10,
+                              background: "#1a73e8",
+                              color: "#fff",
+                            }}
+                          >
+                            SEG
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#666" }}>
+                        bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAnnotations((prev) => prev.filter((item) => item.id !== a.id));
+                        if (selectedAnnotationId === a.id) {
+                          setSelectedAnnotationId(null);
+                        }
+                      }}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: 16,
+                      }}
+                    >
+                      🗑
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
 
           {selectedAnnotation?.segPolygon && (
             <div style={{ marginBottom: 18 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>Seg編集</div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={segEditMode}
-                  onChange={(e) => {
-                    const next = e.target.checked;
-                    if (!next && segEditMode) {
-                      applySegSimplify();
-                    }
-                    setSegEditMode(next);
-                  }}
-                />
-                <span style={{ fontSize: 12 }}>編集モードON/OFF</span>
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={showSegVertices}
-                  onChange={(e) => setShowSegVertices(e.target.checked)}
-                  disabled={!segEditMode}
-                />
-                <span style={{ fontSize: 12 }}>頂点を表示</span>
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 12, minWidth: 70 }}>簡略化</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={segSimplifyEps}
-                  onChange={(e) => setSegSimplifyEps(Number(e.target.value))}
-                  disabled={!segEditMode}
-                />
-                <span style={{ fontSize: 12 }}>{segSimplifyEps}</span>
-              </label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={handleSegUndo}
-                  disabled={!segEditMode || segUndoStack.length === 0}
-                  style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
-                >
-                  Undo
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSegReset}
-                  disabled={!segEditMode || !selectedAnnotation.originalSegPolygon}
-                  style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
-                >
-                  Reset
-                </button>
-              </div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Seg編集</div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={segEditMode}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      if (!next && segEditMode) {
+                        applySegSimplify();
+                      }
+                      setSegEditMode(next);
+                    }}
+                  />
+                  <span style={{ fontSize: 12 }}>編集モードON/OFF</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={showSegVertices}
+                    onChange={(e) => setShowSegVertices(e.target.checked)}
+                    disabled={!segEditMode}
+                  />
+                  <span style={{ fontSize: 12 }}>頂点を表示</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, minWidth: 70 }}>簡略化</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={segSimplifyEps}
+                    onChange={(e) => setSegSimplifyEps(Number(e.target.value))}
+                    disabled={!segEditMode}
+                  />
+                  <span style={{ fontSize: 12 }}>{segSimplifyEps}</span>
+                </label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={handleSegUndo}
+                    disabled={!segEditMode || segUndoStack.length === 0}
+                    style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+                  >
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSegReset}
+                    disabled={!segEditMode || !selectedAnnotation.originalSegPolygon}
+                    style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+                  >
+                    Reset
+                  </button>
+                </div>
             </div>
           )}
 
-          <div style={{ marginBottom: 18 }}>
-            {exportPreview !== null && (
-              <pre
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ marginBottom: 12 }}>
+                {uiPhase === "annotate" ? (
+                  <button
+                    type="button"
+                    onClick={() => setUiPhase("export")}
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #e3e3e3",
+                      background: "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Export
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setUiPhase("annotate")}
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #e3e3e3",
+                      background: "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    アノテへ戻る
+                  </button>
+                )}
+              </div>
+              {uiPhase === "export" && (
+              <>
+              <div
                 style={{
-                  marginTop: 8,
-                  padding: 8,
-                  background: "#f6f6f6",
                   border: "1px solid #e3e3e3",
-                  borderRadius: 6,
-                  fontSize: 12,
-                  whiteSpace: "pre-wrap",
+                  borderRadius: 8,
+                  padding: 10,
+                  background: "#fff",
+                  marginBottom: 12,
                 }}
               >
-                {exportPreview}
-              </pre>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Split</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 11, color: "#666" }}>Train</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={splitTrain}
+                      onChange={(e) => setSplitTrain(Number(e.target.value))}
+                      style={{ height: 32, padding: "0 8px" }}
+                    />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 11, color: "#666" }}>Val</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={splitVal}
+                      onChange={(e) => setSplitVal(Number(e.target.value))}
+                      style={{ height: 32, padding: "0 8px" }}
+                    />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 11, color: "#666" }}>Test</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={splitTest}
+                      onChange={(e) => setSplitTest(Number(e.target.value))}
+                      style={{ height: 32, padding: "0 8px" }}
+                    />
+                  </label>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                  <span style={{ fontSize: 11, color: "#666" }}>Seed</span>
+                  <input
+                    type="number"
+                    value={splitSeed}
+                    onChange={(e) => setSplitSeed(Number(e.target.value))}
+                    style={{ height: 32, padding: "0 8px", width: 120 }}
+                  />
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, color: "#444" }}>
+                  {splitSummary.total} images → Train {splitSummary.train} / Val {splitSummary.val} /
+                  Test {splitSummary.test}
+                </div>
+              </div>
+              <div
+                style={{
+                  border: "1px solid #e3e3e3",
+                  borderRadius: 8,
+                  padding: 10,
+                  background: "#fff",
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Export確認</div>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: "#666" }}>保存先ディレクトリ（絶対パス）</span>
+                  <input
+                    type="text"
+                    placeholder="/Users/you/exports"
+                    value={exportOutputDir}
+                    onChange={(e) => setExportOutputDir(e.target.value)}
+                    style={{ height: 32, padding: "0 8px" }}
+                  />
+                </label>
+                {exportDirHistory.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                    {exportDirHistory.map((dir) => (
+                      <button
+                        key={dir}
+                        type="button"
+                        onClick={() => setExportOutputDir(dir)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #e0e0e0",
+                          background: "#f7f7f7",
+                          fontSize: 11,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {dir}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div style={{ fontSize: 12, color: "#444", marginBottom: 6 }}>
+                  Split: {splitTrain}:{splitVal}:{splitTest} / Seed: {splitSeed}
+                </div>
+                <div style={{ fontSize: 12, color: "#444", marginBottom: 10 }}>
+                  Count: Train {splitSummary.train} / Val {splitSummary.val} / Test{" "}
+                  {splitSummary.test}
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeNegatives}
+                    onChange={(e) => setIncludeNegatives(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 12 }}>未アノテ（ネガティブ）を含める</span>
+                </label>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setDatasetType("bbox")}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: datasetType === "bbox" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
+                      background: datasetType === "bbox" ? "#e8f0fe" : "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    bbox dataset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDatasetType("seg")}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: datasetType === "seg" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
+                      background: datasetType === "seg" ? "#e8f0fe" : "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    seg dataset
+                  </button>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("folder")}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: exportFormat === "folder" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
+                      background: exportFormat === "folder" ? "#e8f0fe" : "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    フォルダ生成
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("zip")}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: exportFormat === "zip" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
+                      background: exportFormat === "zip" ? "#e8f0fe" : "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    zipダウンロード
+                  </button>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    onClick={datasetType === "seg" ? handleExportDatasetSeg : handleExportDatasetBBox}
+                    disabled={!datasetId}
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #1a73e8",
+                      background:
+                        !datasetId
+                          ? "#f2f2f2"
+                          : "#1a73e8",
+                      color:
+                        !datasetId
+                          ? "#888"
+                          : "#fff",
+                      fontWeight: 600,
+                      cursor:
+                        !datasetId
+                          ? "not-allowed"
+                          : "pointer",
+                    }}
+                  >
+                    {datasetType === "seg" ? "Export seg dataset" : "Export bbox dataset"}
+                  </button>
+                </div>
+              </div>
+              {false && null}
+              </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: 24 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Project Home</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <input
+              type="text"
+              placeholder="project_name"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              style={{ height: 36, padding: "0 10px", minWidth: 240 }}
+            />
+            <button
+              type="button"
+              onClick={handleCreateProject}
+              style={{
+                height: 36,
+                padding: "0 12px",
+                borderRadius: 8,
+                border: "1px solid #1a73e8",
+                background: "#1a73e8",
+                color: "#fff",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              新規プロジェクト作成
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+            {projectList.map((p) => (
+              <div
+                key={p.project_name}
+                style={{
+                  border: "1px solid #e3e3e3",
+                  borderRadius: 10,
+                  padding: 12,
+                  background: "#fff",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>{p.project_name}</div>
+                <div style={{ fontSize: 12, color: "#666" }}>
+                  画像: {p.total_images} / アノテ済: {p.annotated_images}
+                </div>
+                <div style={{ fontSize: 12, color: "#666" }}>
+                  bbox: {p.bbox_count} / seg: {p.seg_count}
+                </div>
+                <div style={{ fontSize: 11, color: "#999" }}>
+                  更新: {p.updated_at || "-"}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenProject(p.project_name)}
+                    style={{
+                      flex: 1,
+                      height: 32,
+                      borderRadius: 8,
+                      border: "1px solid #1a73e8",
+                      background: "#e8f0fe",
+                      cursor: "pointer",
+                    }}
+                  >
+                    開く
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProject(p.project_name)}
+                    style={{
+                      height: 32,
+                      borderRadius: 8,
+                      border: "1px solid #e3e3e3",
+                      background: "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    削除
+                  </button>
+                </div>
+              </div>
+            ))}
+            {projectList.length === 0 && (
+              <div style={{ color: "#666" }}>プロジェクトがありません。</div>
             )}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1192,4 +2036,24 @@ function randomColor(seed: string): string {
   }
   const hue = Math.abs(hash) % 360;
   return `hsl(${hue}, 70%, 50%)`;
+}
+
+function mulberry32(seed: number): () => number {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle<T>(items: T[], seed: number): T[] {
+  const arr = [...items];
+  const rnd = mulberry32(seed);
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rnd() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }

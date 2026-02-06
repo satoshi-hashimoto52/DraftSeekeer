@@ -36,6 +36,12 @@ class DetectPointRequest(BaseModel):
     template_off: bool = False
     confirmed_boxes: List[BBox] = Field(default_factory=list)
     exclude_same_class_only: bool = False
+    refine_contour: bool = False
+    confirmed_annotations: List["ConfirmedAnnotation"] | None = None
+    exclude_enabled: bool = True
+    exclude_mode: str = Field("same_class", pattern="^(same_class|any_class)$")
+    exclude_center: bool = True
+    exclude_iou_threshold: float = Field(0.6, ge=0, le=1)
 
 
 class BBox(BaseModel):
@@ -69,11 +75,21 @@ class DetectFullRequest(BaseModel):
     topk: int = Field(20, gt=0)
     confirmed_boxes: List[BBox] = Field(default_factory=list)
     exclude_same_class_only: bool = False
+    confirmed_annotations: List["ConfirmedAnnotation"] | None = None
+    exclude_enabled: bool = True
+    exclude_mode: str = Field("same_class", pattern="^(same_class|any_class)$")
+    exclude_center: bool = True
+    exclude_iou_threshold: float = Field(0.6, ge=0, le=1)
 
 
 class DetectFullResult(BaseModel):
     class_name: str
     score: float
+    bbox: BBox
+
+
+class ConfirmedAnnotation(BaseModel):
+    class_name: str
     bbox: BBox
 
 
@@ -118,6 +134,9 @@ class ExportYoloRequest(BaseModel):
     project: str
     image_id: str
     annotations: List[ExportAnnotation]
+    output_dir: str
+    project_name: str | None = None
+    image_key: str | None = None
 
 
 class ExportYoloResponse(BaseModel):
@@ -125,3 +144,84 @@ class ExportYoloResponse(BaseModel):
     saved_path: str | None = None
     text_preview: str | None = None
     error: str | None = None
+
+
+class AnnotationPayload(BaseModel):
+    class_name: str
+    bbox: BBox
+    segPolygon: List[Point] | None = None
+    source: str | None = None
+    created_at: str | None = None
+    segMethod: str | None = None
+
+
+class SaveAnnotationsRequest(BaseModel):
+    project_name: str
+    image_key: str
+    annotations: List[AnnotationPayload]
+
+
+class LoadAnnotationsResponse(BaseModel):
+    ok: bool
+    annotations: List[AnnotationPayload]
+
+
+class ExportDatasetBBoxRequest(BaseModel):
+    project_name: str
+    project: str
+    split_train: int = 7
+    split_val: int = 2
+    split_test: int = 1
+    seed: int = 42
+    include_negatives: bool = True
+    output_dir: str
+
+
+class ExportDatasetBBoxResponse(BaseModel):
+    ok: bool
+    output_dir: str | None = None
+    export_id: str | None = None
+    counts: dict | None = None
+    error: str | None = None
+
+
+class ExportDatasetSegRequest(BaseModel):
+    project_name: str
+    project: str
+    split_train: int = 7
+    split_val: int = 2
+    split_test: int = 1
+    seed: int = 42
+    output_dir: str
+
+
+class ExportDatasetSegResponse(BaseModel):
+    ok: bool
+    output_dir: str | None = None
+    export_id: str | None = None
+    counts: dict | None = None
+    error: str | None = None
+
+
+class DatasetImportResponse(BaseModel):
+    project_name: str
+    count: int
+
+
+class DatasetInfo(BaseModel):
+    project_name: str
+    images: List[str]
+    total_images: int = 0
+    annotated_images: int = 0
+    bbox_count: int = 0
+    seg_count: int = 0
+    updated_at: str | None = None
+
+
+class DatasetSelectRequest(BaseModel):
+    project_name: str
+    filename: str
+
+
+class ProjectCreateRequest(BaseModel):
+    project_name: str

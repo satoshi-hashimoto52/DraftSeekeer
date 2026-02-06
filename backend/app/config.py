@@ -8,6 +8,7 @@ DATA_DIR = BASE_DIR / "data"
 TEMPLATES_ROOT = DATA_DIR / "templates_root"
 IMAGES_DIR = DATA_DIR / "images"
 RUNS_DIR = DATA_DIR / "runs"
+DATASETS_DIR = DATA_DIR / "datasets"
 
 DEFAULT_SCALE_MIN = 0.5
 DEFAULT_SCALE_MAX = 1.5

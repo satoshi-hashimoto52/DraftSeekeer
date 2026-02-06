@@ -62,8 +62,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   const imgRef = useRef<HTMLImageElement | null>(null);
   const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
   const scaleRef = useRef<number>(1);
   const [scale, setScale] = useState<number>(1);
+  const pendingScaleRef = useRef<number | null>(null);
+  const panZoomRafRef = useRef<number | null>(null);
   const dragRef = useRef<{ active: boolean; vertexIndex: number | null }>({
     active: false,
     vertexIndex: null,
@@ -86,6 +89,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     origin: { x: number; y: number } | null;
   }>({ active: false, start: null, origin: null });
   const spacePressedRef = useRef<boolean>(false);
+  const draggingRef = useRef<boolean>(false);
   const moveDragRef = useRef<{
     active: boolean;
     origin: { x: number; y: number; w: number; h: number } | null;
@@ -155,6 +159,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       ctx.setTransform(scale, 0, 0, scale, panOffset.x, panOffset.y);
       ctx.drawImage(img, 0, 0);
 
+      const isDragging = draggingRef.current;
       const baseLine = Math.max(0.35, Math.min(canvas.width, canvas.height) * 0.0007);
       const drawLabel = (x: number, y: number, text: string, color: string, alpha = 1) => {
         ctx.save();
@@ -294,9 +299,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         candidates.forEach((c) => {
           const isSelected = c.id === selectedCandidateId;
           const color = colorMap[c.class_name] || "#ff2b2b";
-          const isManual = c.source === "manual";
           const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 0.8;
-          const fillAlpha = isSelected ? 0.18 : 0.08;
           drawBox(
             c.bbox.x,
             c.bbox.y,
@@ -304,11 +307,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             c.bbox.h,
             color,
             lineWidth,
-            isManual ? true : false,
+            !isSelected,
             isSelected ? 0.95 : 0.6,
-            fillAlpha
+            0
           );
-        if (c.segPolygon) {
+        if (!isDragging && c.segPolygon) {
           drawPolygon(
             c.segPolygon,
             color,
@@ -317,7 +320,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           );
         }
         const labelText = c.class_name || (isManual ? "manual" : "");
-        if (labelText) {
+        if (!isDragging && labelText) {
           drawLabel(c.bbox.x, c.bbox.y, labelText, color, isSelected ? 0.95 : 0.6);
         }
         if (isSelected) {
@@ -338,7 +341,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const color = colorMap[a.class_name] || "#ff2b2b";
           const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 1.2;
           drawBox(a.bbox.x, a.bbox.y, a.bbox.w, a.bbox.h, color, lineWidth, false, 1, 0.1);
-        if (a.segPolygon) {
+        if (!isDragging && a.segPolygon) {
           drawPolygon(
             a.segPolygon,
             color,
@@ -350,15 +353,15 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const size = Math.max(4, Math.round(baseLine * 2.2));
           drawCornerMarkers(a.bbox, color, size);
         }
-        if (isHighlighted) {
+        if (!isDragging && isHighlighted) {
           drawLabelSized(a.bbox.x, a.bbox.y, a.class_name, color, 1, 1.6);
-        } else {
+        } else if (!isDragging) {
           drawLabel(a.bbox.x, a.bbox.y, a.class_name, color, 1);
         }
       });
       }
 
-      if (editMode && editablePolygon && editablePolygon.length > 0) {
+      if (!isDragging && editMode && editablePolygon && editablePolygon.length > 0) {
         const color = "#1a73e8";
         drawPolygon(editablePolygon, color, baseLine * 2.4, 1);
         if (showVertices) {
@@ -404,6 +407,21 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     manualPreview,
     scale,
   ]);
+
+  const schedulePanZoomUpdate = () => {
+    if (panZoomRafRef.current !== null) return;
+    panZoomRafRef.current = window.requestAnimationFrame(() => {
+      panZoomRafRef.current = null;
+      if (pendingPanRef.current) {
+        setPanOffset(pendingPanRef.current);
+        pendingPanRef.current = null;
+      }
+      if (pendingScaleRef.current !== null) {
+        setScale(pendingScaleRef.current);
+        pendingScaleRef.current = null;
+      }
+    });
+  };
 
   const getImageCoords = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -497,6 +515,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         start: { x: event.clientX, y: event.clientY },
         origin: { ...panRef.current },
       };
+      draggingRef.current = true;
       event.preventDefault();
       return;
     }
@@ -513,6 +532,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               handle,
               origin: { ...(selectedAnn?.bbox || selected!.bbox) },
             };
+            draggingRef.current = true;
             return;
           }
         }
@@ -525,6 +545,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               start: coords,
             };
             suppressNextClickRef.current = true;
+            draggingRef.current = true;
             return;
           }
         }
@@ -536,6 +557,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     const index = findVertexIndex(coords.x, coords.y);
     if (index === null) return;
     dragRef.current = { active: true, vertexIndex: index };
+    draggingRef.current = true;
     onSelectVertex(index);
     onVertexDragStart();
   };
@@ -578,7 +600,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         y: Math.round(panDragRef.current.origin.y + dy),
       };
       panRef.current = next;
-      setPanOffset(next);
+      pendingPanRef.current = next;
+      schedulePanZoomUpdate();
       return;
     }
     if (moveDragRef.current.active && moveDragRef.current.origin && moveDragRef.current.start) {
@@ -628,6 +651,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       if (!coords || !manualDragRef.current.start) return;
       manualDragRef.current.current = coords;
       setManualPreview({ start: manualDragRef.current.start, current: coords });
+      draggingRef.current = true;
       return;
     }
     if (!dragRef.current.active || dragRef.current.vertexIndex === null) return;
@@ -642,15 +666,19 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   const handleMouseUp = () => {
     if (panDragRef.current.active) {
       panDragRef.current = { active: false, start: null, origin: null };
+      suppressNextClickRef.current = true;
+      draggingRef.current = false;
       return;
     }
     if (moveDragRef.current.active) {
       moveDragRef.current = { active: false, origin: null, start: null };
+      draggingRef.current = false;
       return;
     }
     if (resizeDragRef.current.active) {
       resizeDragRef.current = { active: false, handle: null, origin: null };
       suppressNextClickRef.current = true;
+      draggingRef.current = false;
       return;
     }
     if (manualDragRef.current.active && manualDragRef.current.start && manualDragRef.current.current) {
@@ -667,10 +695,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         suppressNextClickRef.current = true;
       }
       onManualCreateStateChange(false);
+      draggingRef.current = false;
       return;
     }
     if (dragRef.current.active) {
       dragRef.current = { active: false, vertexIndex: null };
+      draggingRef.current = false;
     }
   };
 
@@ -682,6 +712,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     if (shouldIgnoreCanvasClick && shouldIgnoreCanvasClick()) {
       return;
     }
+    if (panDragRef.current.active || spacePressedRef.current) return;
     if (manualDragRef.current.active) return;
     if (editMode) return;
     const coords = getImageCoords(event);
@@ -718,13 +749,14 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const delta = event.deltaY > 0 ? -0.1 : 0.1;
       const nextScale = Math.min(5, Math.max(0.2, scaleRef.current + delta));
       scaleRef.current = nextScale;
-      setScale(nextScale);
+      pendingScaleRef.current = nextScale;
       const nextPan = {
         x: Math.round(cursorX - imgX * nextScale),
         y: Math.round(cursorY - imgY * nextScale),
       };
       panRef.current = nextPan;
-      setPanOffset(nextPan);
+      pendingPanRef.current = nextPan;
+      schedulePanZoomUpdate();
     };
     canvas.addEventListener("wheel", handleWheel, { passive: false });
     return () => {

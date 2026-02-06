@@ -117,7 +117,7 @@ export async function exportYolo(params: {
   return (await res.json()) as ExportYoloResponse;
 }
 
-const API_BASE = "http://127.0.0.1:8000";
+export const API_BASE = "http://127.0.0.1:8000";
 
 export async function uploadImage(file: File): Promise<UploadResponse> {
   const form = new FormData();
@@ -150,6 +150,21 @@ export type ProjectTemplates = {
   classes: { class_name: string; count: number }[];
 };
 
+export type DatasetImportResponse = {
+  project_name: string;
+  count: number;
+};
+
+export type DatasetInfo = {
+  project_name: string;
+  images: string[];
+  total_images: number;
+  annotated_images: number;
+  bbox_count: number;
+  seg_count: number;
+  updated_at?: string | null;
+};
+
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {
   const res = await fetch(`${API_BASE}/templates`);
   if (!res.ok) {
@@ -174,6 +189,12 @@ export async function detectPoint(params: {
   template_off?: boolean;
   confirmed_boxes?: { x: number; y: number; w: number; h: number }[];
   exclude_same_class_only?: boolean;
+  refine_contour?: boolean;
+  confirmed_annotations?: { class_name: string; bbox: { x: number; y: number; w: number; h: number } }[];
+  exclude_enabled?: boolean;
+  exclude_mode?: "same_class" | "any_class";
+  exclude_center?: boolean;
+  exclude_iou_threshold?: number;
 }): Promise<DetectPointResponse> {
   const res = await fetch(`${API_BASE}/detect/point`, {
     method: "POST",
@@ -187,4 +208,185 @@ export async function detectPoint(params: {
   }
 
   return (await res.json()) as DetectPointResponse;
+}
+
+export async function exportYoloWithDir(params: {
+  project: string;
+  image_id: string;
+  annotations: Annotation[];
+  output_dir: string;
+  project_name?: string | null;
+  image_key?: string | null;
+}): Promise<ExportYoloResponse> {
+  const payload = {
+    project: params.project,
+    image_id: params.image_id,
+    annotations: params.annotations,
+    output_dir: params.output_dir,
+    project_name: params.project_name || undefined,
+    image_key: params.image_key || undefined,
+  };
+  const res = await fetch(`${API_BASE}/export/yolo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Export failed");
+  }
+  return (await res.json()) as ExportYoloResponse;
+}
+
+export async function importDataset(params: {
+  project_name: string;
+  files: File[];
+}): Promise<DatasetImportResponse> {
+  const form = new FormData();
+  form.append("project_name", params.project_name);
+  params.files.forEach((file) => {
+    form.append("files", file);
+  });
+  const res = await fetch(`${API_BASE}/dataset/import`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Dataset import failed");
+  }
+  return (await res.json()) as DatasetImportResponse;
+}
+
+export async function fetchDataset(projectName: string): Promise<DatasetInfo> {
+  const res = await fetch(`${API_BASE}/dataset/${projectName}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Dataset fetch failed");
+  }
+  return (await res.json()) as DatasetInfo;
+}
+
+export async function selectDatasetImage(params: {
+  project_name: string;
+  filename: string;
+}): Promise<UploadResponse> {
+  const res = await fetch(`${API_BASE}/dataset/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Dataset select failed");
+  }
+  return (await res.json()) as UploadResponse;
+}
+
+export async function saveAnnotations(params: {
+  project_name: string;
+  image_key: string;
+  annotations: Annotation[];
+}): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/annotations/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Save annotations failed");
+  }
+  return (await res.json()) as { ok: boolean };
+}
+
+export async function loadAnnotations(params: {
+  project_name: string;
+  image_key: string;
+}): Promise<{ ok: boolean; annotations: Annotation[] }> {
+  const url = new URL(`${API_BASE}/annotations/load`);
+  url.searchParams.set("project_name", params.project_name);
+  url.searchParams.set("image_key", params.image_key);
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Load annotations failed");
+  }
+  return (await res.json()) as { ok: boolean; annotations: Annotation[] };
+}
+
+export async function exportDatasetBBox(params: {
+  project_name: string;
+  project: string;
+  split_train: number;
+  split_val: number;
+  split_test: number;
+  seed: number;
+  include_negatives: boolean;
+  output_dir: string;
+}): Promise<{ ok: boolean; output_dir?: string; export_id?: string; counts?: { train: number; val: number; test: number }; error?: string }> {
+  const res = await fetch(`${API_BASE}/export/dataset/bbox`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Dataset export failed");
+  }
+  return (await res.json()) as { ok: boolean; output_dir?: string; export_id?: string; counts?: { train: number; val: number; test: number }; error?: string };
+}
+
+export async function exportDatasetSeg(params: {
+  project_name: string;
+  project: string;
+  split_train: number;
+  split_val: number;
+  split_test: number;
+  seed: number;
+  output_dir: string;
+}): Promise<{ ok: boolean; output_dir?: string; export_id?: string; counts?: { train: number; val: number; test: number }; error?: string }> {
+  const res = await fetch(`${API_BASE}/export/dataset/seg`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Dataset export failed");
+  }
+  return (await res.json()) as { ok: boolean; output_dir?: string; export_id?: string; counts?: { train: number; val: number; test: number }; error?: string };
+}
+
+export async function listDatasetProjects(): Promise<DatasetInfo[]> {
+  const res = await fetch(`${API_BASE}/dataset/projects`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Project list failed");
+  }
+  return (await res.json()) as DatasetInfo[];
+}
+
+export async function createDatasetProject(project_name: string): Promise<DatasetInfo> {
+  const res = await fetch(`${API_BASE}/dataset/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_name }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Project create failed");
+  }
+  return (await res.json()) as DatasetInfo;
+}
+
+export async function deleteDatasetProject(project_name: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/dataset/projects/${encodeURIComponent(project_name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Project delete failed");
+  }
+  return (await res.json()) as { ok: boolean };
 }
