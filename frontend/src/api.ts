@@ -168,6 +168,7 @@ export type DatasetInfo = {
 
 export type DatasetImageEntry = {
   original_filename: string;
+  filename?: string;
   internal_id: string;
   import_order: number;
 };

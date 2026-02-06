@@ -115,6 +115,8 @@ export default function App() {
     }
   });
   const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
+  const [lastImportPath, setLastImportPath] = useState<string | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const dismissHints = () => {
     setShowHints(false);
@@ -334,6 +336,14 @@ export default function App() {
       const ext = file.name.split(".").pop()?.toLowerCase();
       return ext === "jpg" || ext === "jpeg" || ext === "png";
     });
+    const rawFiles = Array.from(event.target.files || []);
+    if (rawFiles.length > 0) {
+      const first = rawFiles[0];
+      const rel = (first as File & { webkitRelativePath?: string }).webkitRelativePath || "";
+      if (rel.includes("/")) {
+        setLastImportPath(rel.split("/")[0]);
+      }
+    }
     if (files.length === 0) return;
     setError(null);
     setNotice(null);
@@ -943,79 +953,103 @@ export default function App() {
               style={{ height: 36, width: "auto", display: "block" }}
             />
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {datasetId && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleBackToHome}
+              disabled={!datasetId}
+              style={{
+                height: 30,
+                padding: "0 10px",
+                borderRadius: 8,
+                border: "1px solid #e3e3e3",
+                background: "#fff",
+                fontSize: 12,
+                cursor: datasetId ? "pointer" : "not-allowed",
+                opacity: datasetId ? 1 : 0.5,
+              }}
+            >
+              Project Homeへ戻る
+            </button>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "4px 6px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 8,
+                background: "#f7f7f7",
+                opacity: 0.9,
+              }}
+            >
+              <span style={{ fontSize: 11 }}>プロジェクト</span>
+              <select
+                value={project}
+                onChange={(e) => setProject(e.target.value)}
+                style={{ minWidth: 120, height: 22, fontSize: 11 }}
+              >
+                {projects.length === 0 && <option value="">(none)</option>}
+                {projects.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                height: 30,
+                padding: "4px 6px",
+                border: "1px solid #e3e3e3",
+                borderRadius: 8,
+                background: "#fafafa",
+              }}
+            >
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                {...({
+                  webkitdirectory: "true",
+                  directory: "true",
+                } as React.InputHTMLAttributes<HTMLInputElement>)}
+                onChange={handleFolderImport}
+                style={{ display: "none" }}
+                disabled={!datasetId}
+              />
               <button
                 type="button"
-                onClick={handleBackToHome}
+                onClick={() => folderInputRef.current?.click()}
+                disabled={!datasetId}
                 style={{
-                  height: 40,
-                  padding: "0 12px",
-                  borderRadius: 10,
+                  height: 22,
+                  padding: "0 8px",
+                  borderRadius: 6,
                   border: "1px solid #e3e3e3",
                   background: "#fff",
-                  fontSize: 12,
-                  cursor: "pointer",
+                  fontSize: 11,
+                  cursor: datasetId ? "pointer" : "not-allowed",
+                  opacity: datasetId ? 1 : 0.6,
                 }}
               >
-                Project Homeへ戻る
+                画像取り込み
               </button>
-            )}
-            {datasetId && (
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  height: 40,
-                  padding: "6px 8px",
-                  border: "1px solid #e3e3e3",
-                  borderRadius: 10,
-                  background: "#f7f7f7",
-                  opacity: 0.85,
-                }}
-              >
-                <span style={{ fontSize: 12, minWidth: 70 }}>プロジェクト</span>
-                <select
-                  value={project}
-                  onChange={(e) => setProject(e.target.value)}
-                  style={{ minWidth: 140, height: 28, fontSize: 12 }}
-                >
-                  {projects.length === 0 && <option value="">(none)</option>}
-                  {projects.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {datasetId && (
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  height: 40,
-                  padding: "6px 8px",
-                  border: "1px solid #e3e3e3",
-                  borderRadius: 10,
-                  background: "#fafafa",
-                }}
-              >
-                <input
-                  type="file"
-                  multiple
-                  {...({
-                    webkitdirectory: "true",
-                    directory: "true",
-                  } as React.InputHTMLAttributes<HTMLInputElement>)}
-                  onChange={handleFolderImport}
-                  style={{ fontSize: 12 }}
-                />
-                <span style={{ fontSize: 12, fontWeight: 600 }}>親フォルダ選択</span>
-              </label>
-            )}
+              <span style={{ fontSize: 11, color: "#666" }}>
+                {lastImportPath ? lastImportPath : "未取込"}
+              </span>
+            </label>
           </div>
         </div>
         {datasetImporting && (
