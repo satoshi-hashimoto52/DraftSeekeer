@@ -295,8 +295,20 @@ def import_dataset(
         raise HTTPException(status_code=400, detail="project not found")
     images_dir = _project_images_dir(project_name)
     images_dir.mkdir(parents=True, exist_ok=True)
+    annotations_dir = _project_annotations_dir(project_name)
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+
+    meta_path = _project_meta_path(project_name)
+    prev_images: List[str] = []
+    if meta_path.exists():
+        try:
+            prev_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            prev_images = [Path(p).name for p in prev_meta.get("images", []) if p]
+        except Exception:
+            prev_images = []
 
     saved_names: List[str] = []
+    incoming_order: List[str] = []
     for f in files:
         original = Path(f.filename or "").name
         if not original:
@@ -308,16 +320,33 @@ def import_dataset(
         if not data:
             continue
         dest_name = original
-        counter = 1
-        while (images_dir / dest_name).exists():
-            stem = Path(original).stem
-            dest_name = f"{stem}_{counter}{suffix}"
-            counter += 1
         with (images_dir / dest_name).open("wb") as out:
             out.write(data)
         saved_names.append(dest_name)
+        if dest_name not in incoming_order:
+            incoming_order.append(dest_name)
 
-    images = sorted([p.name for p in images_dir.iterdir() if p.is_file()])
+    incoming_set = set(incoming_order)
+    prev_filtered = [name for name in prev_images if name in incoming_set]
+    appended = [name for name in incoming_order if name not in prev_images]
+    images = prev_filtered + appended
+
+    # remove files/annotations not present in the new import set
+    for path in images_dir.iterdir():
+        if not path.is_file():
+            continue
+        if path.name not in incoming_set:
+            path.unlink(missing_ok=True)
+    for ann_path in annotations_dir.iterdir():
+        if not ann_path.is_file():
+            continue
+        if not ann_path.name.endswith(".json"):
+            continue
+        img_name = ann_path.name[: -len(".json")]
+        if img_name in incoming_set:
+            continue
+        ann_path.unlink(missing_ok=True)
+
     meta = {"project_name": project_name, "images": images}
     _project_meta_path(project_name).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return DatasetImportResponse(project_name=project_name, count=len(saved_names))
@@ -436,6 +465,8 @@ def export_dataset_bbox(payload: ExportDatasetBBoxRequest) -> ExportDatasetBBoxR
     output_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y%m%d")
     output_root = output_dir / f"dataset_{parent_name}_{date_str}"
+    if output_root.exists():
+        shutil.rmtree(output_root)
     for split in ["train", "val", "test"]:
         (output_root / split / "images").mkdir(parents=True, exist_ok=True)
         (output_root / split / "labels").mkdir(parents=True, exist_ok=True)
@@ -596,6 +627,8 @@ def export_dataset_seg(payload: ExportDatasetSegRequest) -> ExportDatasetSegResp
     output_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y%m%d")
     output_root = output_dir / f"dataset_{parent_name}_{date_str}_seg"
+    if output_root.exists():
+        shutil.rmtree(output_root)
     for split in ["train", "val", "test"]:
         (output_root / split / "images").mkdir(parents=True, exist_ok=True)
         (output_root / split / "labels").mkdir(parents=True, exist_ok=True)

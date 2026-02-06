@@ -56,6 +56,7 @@ export default function App() {
     }[]
   >([]);
   const [newProjectName, setNewProjectName] = useState<string>("");
+  const [newProjectFiles, setNewProjectFiles] = useState<FileList | null>(null);
   const [datasetSelectedName, setDatasetSelectedName] = useState<string | null>(null);
   const [imageStatusMap, setImageStatusMap] = useState<Record<string, number>>({});
   const isLoadingAnnotationsRef = useRef<boolean>(false);
@@ -71,10 +72,17 @@ export default function App() {
   const [excludeMode, setExcludeMode] = useState<"same_class" | "any_class">("same_class");
   const [excludeCenter, setExcludeCenter] = useState<boolean>(true);
   const [excludeIouThreshold, setExcludeIouThreshold] = useState<number>(0.6);
-  const [uiPhase, setUiPhase] = useState<"annotate" | "export">("annotate");
+  const [showExportDrawer, setShowExportDrawer] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
+  const [showSplitSettings, setShowSplitSettings] = useState<boolean>(false);
+  const [exportResult, setExportResult] = useState<{ ok: boolean; message: string } | null>(
+    null
+  );
+  const [noticeVisible, setNoticeVisible] = useState<boolean>(true);
+  const [hoverAction, setHoverAction] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
   const [exportOutputDir, setExportOutputDir] = useState<string>("");
   const [exportDirHistory, setExportDirHistory] = useState<string[]>(() => {
     try {
@@ -215,6 +223,46 @@ export default function App() {
     };
   }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
 
+  const totalAnnotations = useMemo(
+    () => Object.values(imageStatusMap).reduce((acc, v) => acc + v, 0),
+    [imageStatusMap]
+  );
+  const totalImages = datasetInfo?.total_images ?? datasetInfo?.images?.length ?? 0;
+  const annotatedImages = datasetInfo?.annotated_images ?? 0;
+  const classesCount = classOptions.length;
+  const exportFolderName = useMemo(() => {
+    const base = datasetInfo?.project_name || datasetId || "dataset";
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, "0");
+    const day = `${d.getDate()}`.padStart(2, "0");
+    return `dataset_${base}_${y}${m}${day}`;
+  }, [datasetInfo, datasetId]);
+  const exportWarnings = useMemo(() => {
+    const warnings: { level: "yellow" | "orange"; text: string }[] = [];
+    if (includeNegatives && totalImages > annotatedImages) {
+      warnings.push({
+        level: "yellow",
+        text: "未アノテ画像（ネガティブ）を含みます",
+      });
+    }
+    if (splitSummary.val === 0 || splitSummary.test === 0) {
+      warnings.push({
+        level: "orange",
+        text: "Val または Test が 0 です（分割比率/枚数を確認してください）",
+      });
+    }
+    return warnings;
+  }, [includeNegatives, totalImages, annotatedImages, splitSummary.val, splitSummary.test]);
+  const exportErrors = useMemo(() => {
+    const errors: string[] = [];
+    if (classesCount === 0 || totalAnnotations === 0) {
+      errors.push("クラスが 0 件のためエクスポートできません");
+    }
+    return errors;
+  }, [classesCount, totalAnnotations]);
+  const canExport = exportErrors.length === 0;
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!selectedCandidate || segEditMode) return;
@@ -325,26 +373,7 @@ export default function App() {
 
   const handleSelectDatasetImage = async (filename: string) => {
     if (!datasetId) return;
-    setError(null);
-    setBusy(true);
-    try {
-      const res = await selectDatasetImage({ project_name: datasetId, filename });
-      setImageId(res.image_id);
-      setImageUrl(`${API_BASE}/dataset/${datasetId}/image/${encodeURIComponent(filename)}`);
-      setImageSize({ w: res.width, h: res.height });
-      setCandidates([]);
-      setSelectedCandidateId(null);
-      setSelectedAnnotationId(null);
-      setDatasetSelectedName(filename);
-      isLoadingAnnotationsRef.current = true;
-      const loaded = await loadAnnotations({ project_name: datasetId, image_key: filename });
-      setAnnotations(loaded.annotations || []);
-      isLoadingAnnotationsRef.current = false;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Dataset select failed");
-    } finally {
-      setBusy(false);
-    }
+    await loadDatasetImage(datasetId, filename);
   };
 
   const handleOpenProject = async (projectName: string) => {
@@ -363,11 +392,27 @@ export default function App() {
       setSelectedCandidateId(null);
       setAnnotations([]);
       setSelectedAnnotationId(null);
+      const storedColors = loadColorMapForProject(projectName);
+      if (storedColors) {
+        setColorMap(storedColors);
+      } else {
+        const nextColors = buildColorMapFromClasses(classOptions);
+        setColorMap(nextColors);
+        saveColorMapForProject(projectName, nextColors);
+      }
+      if (info.images.length > 0) {
+        await loadDatasetImage(projectName, info.images[0]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project open failed");
     } finally {
       setBusy(false);
     }
+  };
+
+  const closeExportDrawer = () => {
+    setShowExportDrawer(false);
+    setExportResult(null);
   };
 
   const handleBackToHome = () => {
@@ -396,7 +441,11 @@ export default function App() {
     setNotice(null);
     try {
       await createDatasetProject(name);
+      if (newProjectFiles && newProjectFiles.length > 0) {
+        await importDataset({ project_name: name, files: newProjectFiles });
+      }
       setNewProjectName("");
+      setNewProjectFiles(null);
       await refreshProjectList();
       await handleOpenProject(name);
     } catch (err) {
@@ -448,10 +497,13 @@ export default function App() {
         output_dir: exportOutputDir.trim(),
       });
       if (!res.ok) {
-        setError(res.error || "Dataset export failed");
+        const message = res.error || "Dataset export failed";
+        setError(message);
+        setExportResult({ ok: false, message });
         return;
       }
-      setNotice(`Dataset export: ${res.output_dir || ""}`);
+      setNotice(null);
+      setExportResult({ ok: true, message: `Exported: ${res.output_dir || ""}` });
       addExportDirHistory(exportOutputDir.trim());
       if (exportFormat === "zip" && res.export_id) {
         const url = `${API_BASE}/dataset/export/download?project_name=${encodeURIComponent(
@@ -460,7 +512,9 @@ export default function App() {
         window.location.href = url;
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Dataset export failed");
+      const message = err instanceof Error ? err.message : "Dataset export failed";
+      setError(message);
+      setExportResult({ ok: false, message });
     } finally {
       setBusy(false);
     }
@@ -486,10 +540,13 @@ export default function App() {
         output_dir: exportOutputDir.trim(),
       });
       if (!res.ok) {
-        setError(res.error || "Dataset export failed");
+        const message = res.error || "Dataset export failed";
+        setError(message);
+        setExportResult({ ok: false, message });
         return;
       }
-      setNotice(`Seg dataset export: ${res.output_dir || ""}`);
+      setNotice(null);
+      setExportResult({ ok: true, message: `Exported: ${res.output_dir || ""}` });
       addExportDirHistory(exportOutputDir.trim());
       if (exportFormat === "zip" && res.export_id) {
         const url = `${API_BASE}/dataset/export/download?project_name=${encodeURIComponent(
@@ -498,7 +555,9 @@ export default function App() {
         window.location.href = url;
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Dataset export failed");
+      const message = err instanceof Error ? err.message : "Dataset export failed";
+      setError(message);
+      setExportResult({ ok: false, message });
     } finally {
       setBusy(false);
     }
@@ -703,6 +762,57 @@ export default function App() {
     return "#000000";
   };
 
+  const loadColorMapForProject = (projectName: string) => {
+    try {
+      const raw = localStorage.getItem(`draftseeker.colorMap.${projectName}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      if (!parsed || typeof parsed !== "object") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveColorMapForProject = (projectName: string, next: Record<string, string>) => {
+    try {
+      localStorage.setItem(`draftseeker.colorMap.${projectName}`, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  const buildColorMapFromClasses = (classes: string[]) => {
+    const next: Record<string, string> = {};
+    classes.forEach((name) => {
+      if (!next[name]) next[name] = pickUniqueColor(next);
+    });
+    return next;
+  };
+
+  const loadDatasetImage = async (projectName: string, filename: string) => {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await selectDatasetImage({ project_name: projectName, filename });
+      setImageId(res.image_id);
+      setImageUrl(`${API_BASE}/dataset/${projectName}/image/${encodeURIComponent(filename)}`);
+      setImageSize({ w: res.width, h: res.height });
+      setCandidates([]);
+      setSelectedCandidateId(null);
+      setSelectedAnnotationId(null);
+      setDatasetSelectedName(filename);
+      isLoadingAnnotationsRef.current = true;
+      const loaded = await loadAnnotations({ project_name: projectName, image_key: filename });
+      setAnnotations(loaded.annotations || []);
+      isLoadingAnnotationsRef.current = false;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dataset select failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
 
   const handleSelectAnnotation = (annotation: Annotation) => {
     setSelectedAnnotationId(annotation.id);
@@ -777,12 +887,38 @@ export default function App() {
   }, [annotations, datasetId, datasetSelectedName]);
 
   useEffect(() => {
+    if (!notice) return;
+    setNoticeVisible(true);
+    const timer = window.setTimeout(() => {
+      setNoticeVisible(false);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!datasetId) return;
+    if (Object.keys(colorMap).length === 0) return;
+    saveColorMapForProject(datasetId, colorMap);
+  }, [colorMap, datasetId]);
+
+  useEffect(() => {
     return () => {
       if (interactionTimeoutRef.current) {
         window.clearTimeout(interactionTimeoutRef.current);
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!showExportDrawer) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeExportDrawer();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showExportDrawer]);
 
   return (
     <div
@@ -809,10 +945,10 @@ export default function App() {
             <img
               src="/lgo_DraftSeeker.png"
               alt="DraftSeeker"
-              style={{ height: 30, width: "auto", display: "block" }}
+              style={{ height: 36, width: "auto", display: "block" }}
             />
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {datasetId && (
               <button
                 type="button"
@@ -840,13 +976,45 @@ export default function App() {
                   padding: "6px 8px",
                   border: "1px solid #e3e3e3",
                   borderRadius: 10,
+                  background: "#f7f7f7",
+                  opacity: 0.85,
+                }}
+              >
+                <span style={{ fontSize: 12, minWidth: 70 }}>プロジェクト</span>
+                <select
+                  value={project}
+                  onChange={(e) => setProject(e.target.value)}
+                  style={{ minWidth: 140, height: 28, fontSize: 12 }}
+                >
+                  {projects.length === 0 && <option value="">(none)</option>}
+                  {projects.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {datasetId && (
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  height: 40,
+                  padding: "6px 8px",
+                  border: "1px solid #e3e3e3",
+                  borderRadius: 10,
                   background: "#fafafa",
                 }}
               >
                 <input
                   type="file"
                   multiple
-                  {...({ webkitdirectory: "true", directory: "true" } as React.InputHTMLAttributes<HTMLInputElement>)}
+                  {...({
+                    webkitdirectory: "true",
+                    directory: "true",
+                  } as React.InputHTMLAttributes<HTMLInputElement>)}
                   onChange={handleFolderImport}
                   style={{ fontSize: 12 }}
                 />
@@ -891,19 +1059,16 @@ export default function App() {
                 background: "#fff",
               }}
             >
-              <span style={{ fontSize: 13, minWidth: 70 }}>プロジェクト</span>
-              <select
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                style={{ minWidth: 180, height: 36, fontSize: 14 }}
-              >
-                {projects.length === 0 && <option value="">(none)</option>}
-                {projects.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
+              <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
+              <input
+                type="number"
+                min={10}
+                value={roiSize}
+                step={10}
+                onChange={(e) => setRoiSize(Number(e.target.value))}
+                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                style={{ width: 110, height: 36, fontSize: 14 }}
+              />
             </label>
             <label
               style={{
@@ -917,14 +1082,25 @@ export default function App() {
                 background: "#fff",
               }}
             >
-              <span style={{ fontSize: 13, minWidth: 70 }}>ROIサイズ</span>
+              <span style={{ fontSize: 13, minWidth: 52 }}>スケール</span>
               <input
                 type="number"
-                min={10}
-                value={roiSize}
-                step={10}
-                onChange={(e) => setRoiSize(Number(e.target.value))}
-                style={{ width: 120, height: 36, fontSize: 14 }}
+                step={0.1}
+                min={0.1}
+                value={scaleMin}
+                onChange={(e) => setScaleMin(Number(e.target.value))}
+                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                style={{ width: 80, height: 36, fontSize: 14 }}
+              />
+              <span style={{ fontSize: 12, color: "#888" }}>〜</span>
+              <input
+                type="number"
+                step={0.1}
+                min={0.1}
+                value={scaleMax}
+                onChange={(e) => setScaleMax(Number(e.target.value))}
+                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                style={{ width: 80, height: 36, fontSize: 14 }}
               />
             </label>
             <label
@@ -946,7 +1122,8 @@ export default function App() {
                 max={3}
                 value={topk}
                 onChange={(e) => setTopk(Number(e.target.value))}
-                style={{ width: 120, height: 36, fontSize: 14 }}
+                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                style={{ width: 64, height: 36, fontSize: 14 }}
               />
             </label>
             <label
@@ -958,51 +1135,8 @@ export default function App() {
                 padding: "6px 8px",
                 border: "1px solid #e3e3e3",
                 borderRadius: 10,
-                background: "#fff",
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 70 }}>最小スケール</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMin}
-                onChange={(e) => setScaleMin(Number(e.target.value))}
-                style={{ width: 120, height: 36, fontSize: 14 }}
-              />
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#fff",
-              }}
-            >
-              <span style={{ fontSize: 13, minWidth: 70 }}>最大スケール</span>
-              <input
-                type="number"
-                step={0.1}
-                min={0.1}
-                value={scaleMax}
-                onChange={(e) => setScaleMax(Number(e.target.value))}
-                style={{ width: 120, height: 36, fontSize: 14 }}
-              />
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                height: 48,
-                padding: "6px 8px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                background: "#fff",
+                background: "#f7f7f7",
+                opacity: 0.7,
               }}
             >
               <span style={{ fontSize: 13, minWidth: 80 }}>スケール分割数</span>
@@ -1011,11 +1145,328 @@ export default function App() {
                 min={1}
                 value={scaleSteps}
                 onChange={(e) => setScaleSteps(Number(e.target.value))}
-                style={{ width: 120, height: 36, fontSize: 14 }}
+                onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                style={{ width: 64, height: 36, fontSize: 14 }}
               />
             </label>
           </div>
         </div>
+      )}
+      {showExportDrawer && (
+        <>
+          <div
+            onClick={closeExportDrawer}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.25)",
+              zIndex: 40,
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              height: "100vh",
+              width: 420,
+              background: "#fff",
+              zIndex: 50,
+              boxShadow: "-8px 0 24px rgba(0,0,0,0.18)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: "14px 16px",
+                borderBottom: "1px solid #eee",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>Export dataset</div>
+              <button
+                type="button"
+                onClick={closeExportDrawer}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: 18,
+                  cursor: "pointer",
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ padding: 16, overflowY: "auto" }}>
+              <div
+                style={{
+                  borderRadius: 8,
+                  padding: 12,
+                  background:
+                    "repeating-linear-gradient(135deg, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 6px, rgba(0,0,0,0.06) 6px, rgba(0,0,0,0.06) 12px)",
+                  color: "#333",
+                  fontSize: 12,
+                  pointerEvents: "none",
+                  marginBottom: 16,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Summary</div>
+                <div>Project: {project || "-"}</div>
+                <div>Dataset: {datasetInfo?.project_name || "-"}</div>
+                <div>Total images: {totalImages}</div>
+                <div>Annotated images: {annotatedImages}</div>
+                <div>Total annotations: {totalAnnotations}</div>
+                <div>Classes: {classesCount}</div>
+                <div>Negative include: {includeNegatives ? "ON" : "OFF"}</div>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSplitSettings((prev) => !prev)}
+                  style={{
+                    width: "100%",
+                    height: 32,
+                    borderRadius: 8,
+                    border: "1px solid #e3e3e3",
+                    background: "#fff",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    marginBottom: 8,
+                  }}
+                >
+                  Split settings
+                </button>
+                {showSplitSettings && (
+                  <div
+                    style={{
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 8,
+                      padding: 10,
+                      background: "#fff",
+                    }}
+                  >
+                    <div style={{ display: "grid", gridTemplateColumns: "64px 64px 64px", gap: 8 }}>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>Train</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={splitTrain}
+                          onChange={(e) => setSplitTrain(Number(e.target.value))}
+                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                        />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>Val</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={splitVal}
+                          onChange={(e) => setSplitVal(Number(e.target.value))}
+                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                        />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>Test</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={splitTest}
+                          onChange={(e) => setSplitTest(Number(e.target.value))}
+                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                      <span style={{ fontSize: 11, color: "#666" }}>Seed</span>
+                      <input
+                        type="number"
+                        value={splitSeed}
+                        onChange={(e) => setSplitSeed(Number(e.target.value))}
+                        style={{ height: 32, padding: "0 8px", width: 96 }}
+                      />
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={includeNegatives}
+                        onChange={(e) => setIncludeNegatives(e.target.checked)}
+                      />
+                      <span style={{ fontSize: 12 }}>未アノテ（ネガティブ）を含める</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Dataset type</div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="radio"
+                    name="datasetType"
+                    checked={datasetType === "bbox"}
+                    onChange={() => setDatasetType("bbox")}
+                  />
+                  <span style={{ fontSize: 12 }}>bbox (YOLO)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#999" }}>
+                  <input type="radio" name="datasetType" checked={datasetType === "seg"} disabled />
+                  <span style={{ fontSize: 12 }}>seg (disabled)</span>
+                </label>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Output directory</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="text"
+                    placeholder="/Users/you/exports"
+                    value={exportOutputDir}
+                    onChange={(e) => setExportOutputDir(e.target.value)}
+                    style={{ height: 32, padding: "0 8px", flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    disabled
+                    style={{
+                      height: 32,
+                      padding: "0 10px",
+                      borderRadius: 8,
+                      border: "1px solid #e0e0e0",
+                      background: "#f7f7f7",
+                      color: "#999",
+                      cursor: "not-allowed",
+                    }}
+                  >
+                    Browse...
+                  </button>
+                </div>
+                {exportDirHistory.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                    {exportDirHistory.map((dir) => (
+                      <button
+                        key={dir}
+                        type="button"
+                        onClick={() => setExportOutputDir(dir)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 999,
+                          border: "1px solid #e0e0e0",
+                          background: "#f7f7f7",
+                          fontSize: 11,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {dir}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Validation & Warnings</div>
+                {exportErrors.map((msg) => (
+                  <div
+                    key={msg}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      background: "#ffebee",
+                      color: "#b00020",
+                      fontSize: 12,
+                      marginBottom: 6,
+                    }}
+                  >
+                    {msg}
+                  </div>
+                ))}
+                {exportWarnings.map((w) => (
+                  <div
+                    key={w.text}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      background: w.level === "orange" ? "#fff3e0" : "#fffde7",
+                      color: w.level === "orange" ? "#ef6c00" : "#9e7b00",
+                      fontSize: 12,
+                      marginBottom: 6,
+                    }}
+                  >
+                    {w.text}
+                  </div>
+                ))}
+                {exportErrors.length === 0 && exportWarnings.length === 0 && (
+                  <div style={{ fontSize: 12, color: "#666" }}>問題は検出されていません。</div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  borderRadius: 8,
+                  padding: 12,
+                  background:
+                    "repeating-linear-gradient(135deg, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 6px, rgba(0,0,0,0.06) 6px, rgba(0,0,0,0.06) 12px)",
+                  color: "#333",
+                  fontSize: 12,
+                  pointerEvents: "none",
+                  marginBottom: 16,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Export summary</div>
+                <div>Train: {splitSummary.train} images</div>
+                <div>Val: {splitSummary.val} images</div>
+                <div>Test: {splitSummary.test} images</div>
+                <div style={{ marginTop: 6 }}>Output: {exportOutputDir || "-"}</div>
+                <div>Folder: {exportFolderName}</div>
+              </div>
+            </div>
+            <div
+              style={{
+                padding: 16,
+                borderTop: "1px solid #eee",
+                background: "#fff",
+                position: "sticky",
+                bottom: 0,
+              }}
+            >
+              <button
+                type="button"
+                onClick={datasetType === "seg" ? handleExportDatasetSeg : handleExportDatasetBBox}
+                disabled={!canExport || busy}
+                style={{
+                  width: "100%",
+                  height: 40,
+                  borderRadius: 10,
+                  border: "1px solid #1a73e8",
+                  background: !canExport || busy ? "#f2f2f2" : "#1a73e8",
+                  color: !canExport || busy ? "#888" : "#fff",
+                  fontWeight: 700,
+                  cursor: !canExport || busy ? "not-allowed" : "pointer",
+                }}
+              >
+                {busy ? "Exporting..." : "Export dataset"}
+              </button>
+              {exportResult && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 12,
+                    color: exportResult.ok ? "#2e7d32" : "#b00020",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {exportResult.ok ? `✅ ${exportResult.message}` : `❌ ${exportResult.message}`}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {showHints && (
@@ -1169,8 +1620,8 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               position: "relative",
-              opacity: uiPhase === "export" ? 0.45 : 1,
-              filter: uiPhase === "export" ? "grayscale(0.6)" : "none",
+              opacity: showExportDrawer ? 0.45 : 1,
+              filter: showExportDrawer ? "grayscale(0.6)" : "none",
               transition: "opacity 160ms ease, filter 160ms ease",
             }}
             onPointerDown={() => setIsCanvasInteracting(true)}
@@ -1243,98 +1694,27 @@ export default function App() {
                     prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
                   );
                 }}
-                onResizeSelectedAnnotation={(bbox) => {
-                  if (!selectedAnnotationId) return;
-                  setAnnotations((prev) =>
-                    prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
-                  );
-                }}
-              />
-            </div>
-            <div
-              style={{
-                position: "absolute",
-                right: 16,
-                bottom: 16,
-                display: "flex",
-                gap: 8,
-                zIndex: 5,
+              onResizeSelectedAnnotation={(bbox) => {
+                if (!selectedAnnotationId) return;
+                setAnnotations((prev) =>
+                  prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
+                );
               }}
-            >
-              <button
-                type="button"
-                onClick={handleConfirmCandidate}
-                disabled={!selectedCandidate || manualClassMissing}
-                style={{
-                  minWidth: 92,
-                  height: 36,
-                  borderRadius: 10,
-                  border: "1px solid #1a73e8",
-                  background: "#1a73e8",
-                  color: "#fff",
-                  fontWeight: 700,
-                  letterSpacing: 0.2,
-                  boxShadow: "0 6px 12px rgba(26,115,232,0.18)",
-                  cursor: "pointer",
-                  opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
-                }}
-              >
-                Decision
-              </button>
-              <button
-                type="button"
-                onClick={handleRejectCandidate}
-                disabled={!selectedCandidate}
-                style={{
-                  minWidth: 92,
-                  height: 36,
-                  borderRadius: 10,
-                  border: "1px solid #e0e0e0",
-                  background: "#fff",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                  opacity: !selectedCandidate ? 0.45 : 1,
-                }}
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={handleNextCandidate}
-                disabled={candidates.length === 0}
-                style={{
-                  minWidth: 92,
-                  height: 36,
-                  borderRadius: 10,
-                  border: "1px solid #e0e0e0",
-                  background: "#fff",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                  opacity: candidates.length === 0 ? 0.45 : 1,
-                }}
-              >
-                Next
-              </button>
-              <button
-                type="button"
-                onClick={handleSegCandidate}
-                disabled={!selectedCandidate}
-                style={{
-                  minWidth: 92,
-                  height: 36,
-                  borderRadius: 10,
-                  border: "1px solid #e0e0e0",
-                  background: "#fff",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 10px rgba(0,0,0,0.06)",
-                  opacity: !selectedCandidate ? 0.45 : 1,
-                }}
-              >
-                SAM
-              </button>
+              onSelectAnnotation={handleSelectAnnotation}
+            />
             </div>
             {notice && (
-              <div style={{ marginTop: 12, color: "#1b5e20", fontSize: 12 }}>{notice}</div>
+              <div
+                style={{
+                  marginTop: 12,
+                  color: "#1b5e20",
+                  fontSize: 12,
+                  opacity: noticeVisible ? 1 : 0,
+                  transition: "opacity 400ms ease",
+                }}
+              >
+                {notice}
+              </div>
             )}
             {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
           </div>
@@ -1455,28 +1835,168 @@ export default function App() {
                           display: "inline-flex",
                           alignItems: "center",
                           gap: 8,
-                        padding: "4px 6px",
-                        border: "1px solid #e3e3e3",
-                        borderRadius: 999,
-                        background: "#fff",
-                        fontSize: 11,
-                      }}
-                    >
-                      <input
-                        type="color"
-                        value={hexColor}
-                        onChange={(e) =>
-                          setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                        }
-                        style={{ width: 20, height: 20, padding: 0, border: "none" }}
-                      />
-                      <span>{name}</span>
-                    </label>
-                  );
-                })}
+                          padding: "4px 6px",
+                          border: "1px solid #e3e3e3",
+                          borderRadius: 999,
+                          background: "#fff",
+                          fontSize: 11,
+                        }}
+                      >
+                        <input
+                          type="color"
+                          value={hexColor}
+                          onChange={(e) =>
+                            setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                          }
+                          style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                        />
+                        <span>{name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div
+              style={{
+                marginBottom: 12,
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                padding: 10,
+                background: "#fff",
+              }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleConfirmCandidate}
+                    disabled={!selectedCandidate || manualClassMissing}
+                    onMouseEnter={() => setHoverAction("confirm")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("confirm")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #1a73e8",
+                      background: "#1a73e8",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "confirm"
+                          ? "0 6px 12px rgba(26,115,232,0.24)"
+                          : "0 4px 10px rgba(26,115,232,0.16)",
+                      transform: activeAction === "confirm" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    確定
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    選択中の候補をアノテーションとして登録
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleRejectCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("discard")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("discard")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #d32f2f",
+                      background: "#d32f2f",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "discard"
+                          ? "0 6px 12px rgba(211,47,47,0.25)"
+                          : "0 4px 10px rgba(211,47,47,0.16)",
+                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    破棄
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    この候補を以後の判定から除外
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleNextCandidate}
+                    disabled={candidates.length === 0}
+                    onMouseEnter={() => setHoverAction("next")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("next")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #90a4ae",
+                      background: "#eceff1",
+                      color: "#455a64",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: candidates.length === 0 ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "next"
+                          ? "0 6px 12px rgba(144,164,174,0.25)"
+                          : "0 4px 10px rgba(144,164,174,0.16)",
+                      transform: activeAction === "next" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    次
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    同クラスの次候補へ移動
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleSegCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("sam")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("sam")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #2e7d32",
+                      background: "#2e7d32",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "sam"
+                          ? "0 6px 12px rgba(46,125,50,0.25)"
+                          : "0 4px 10px rgba(46,125,50,0.16)",
+                      transform: activeAction === "sam" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    SAM
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    選択中BBoxからSegmentation生成
+                  </div>
+                </div>
               </div>
             </div>
-          )}
             <div style={{ marginBottom: 16 }} />
             {isManualSelected && (
               <div
@@ -1691,254 +2211,34 @@ export default function App() {
           )}
 
             <div style={{ marginBottom: 18 }}>
-              <div style={{ marginBottom: 12 }}>
-                {uiPhase === "annotate" ? (
-                  <button
-                    type="button"
-                    onClick={() => setUiPhase("export")}
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #e3e3e3",
-                      background: "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Export
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setUiPhase("annotate")}
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #e3e3e3",
-                      background: "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    アノテへ戻る
-                  </button>
-                )}
-              </div>
-              {uiPhase === "export" && (
-              <>
-              <div
+              <button
+                type="button"
+                onClick={() => {
+                  if (!exportOutputDir.trim()) {
+                    setExportOutputDir("~/Downloads");
+                  }
+                  setExportResult(null);
+                  setShowExportDrawer(true);
+                }}
                 style={{
-                  border: "1px solid #e3e3e3",
+                  width: "100%",
+                  height: 36,
                   borderRadius: 8,
-                  padding: 10,
+                  border: "1px solid #e3e3e3",
                   background: "#fff",
-                  marginBottom: 12,
+                  fontSize: 12,
+                  cursor: "pointer",
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Split</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 11, color: "#666" }}>Train</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={splitTrain}
-                      onChange={(e) => setSplitTrain(Number(e.target.value))}
-                      style={{ height: 32, padding: "0 8px" }}
-                    />
-                  </label>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 11, color: "#666" }}>Val</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={splitVal}
-                      onChange={(e) => setSplitVal(Number(e.target.value))}
-                      style={{ height: 32, padding: "0 8px" }}
-                    />
-                  </label>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 11, color: "#666" }}>Test</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={splitTest}
-                      onChange={(e) => setSplitTest(Number(e.target.value))}
-                      style={{ height: 32, padding: "0 8px" }}
-                    />
-                  </label>
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-                  <span style={{ fontSize: 11, color: "#666" }}>Seed</span>
-                  <input
-                    type="number"
-                    value={splitSeed}
-                    onChange={(e) => setSplitSeed(Number(e.target.value))}
-                    style={{ height: 32, padding: "0 8px", width: 120 }}
-                  />
-                </div>
-                <div style={{ marginTop: 8, fontSize: 12, color: "#444" }}>
-                  {splitSummary.total} images → Train {splitSummary.train} / Val {splitSummary.val} /
-                  Test {splitSummary.test}
-                </div>
-              </div>
-              <div
-                style={{
-                  border: "1px solid #e3e3e3",
-                  borderRadius: 8,
-                  padding: 10,
-                  background: "#fff",
-                  marginBottom: 12,
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Export確認</div>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, color: "#666" }}>保存先ディレクトリ（絶対パス）</span>
-                  <input
-                    type="text"
-                    placeholder="/Users/you/exports"
-                    value={exportOutputDir}
-                    onChange={(e) => setExportOutputDir(e.target.value)}
-                    style={{ height: 32, padding: "0 8px" }}
-                  />
-                </label>
-                {exportDirHistory.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-                    {exportDirHistory.map((dir) => (
-                      <button
-                        key={dir}
-                        type="button"
-                        onClick={() => setExportOutputDir(dir)}
-                        style={{
-                          padding: "4px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #e0e0e0",
-                          background: "#f7f7f7",
-                          fontSize: 11,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {dir}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div style={{ fontSize: 12, color: "#444", marginBottom: 6 }}>
-                  Split: {splitTrain}:{splitVal}:{splitTest} / Seed: {splitSeed}
-                </div>
-                <div style={{ fontSize: 12, color: "#444", marginBottom: 10 }}>
-                  Count: Train {splitSummary.train} / Val {splitSummary.val} / Test{" "}
-                  {splitSummary.test}
-                </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-                  <input
-                    type="checkbox"
-                    checked={includeNegatives}
-                    onChange={(e) => setIncludeNegatives(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12 }}>未アノテ（ネガティブ）を含める</span>
-                </label>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => setDatasetType("bbox")}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: datasetType === "bbox" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
-                      background: datasetType === "bbox" ? "#e8f0fe" : "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    bbox dataset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDatasetType("seg")}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: datasetType === "seg" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
-                      background: datasetType === "seg" ? "#e8f0fe" : "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    seg dataset
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    onClick={() => setExportFormat("folder")}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: exportFormat === "folder" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
-                      background: exportFormat === "folder" ? "#e8f0fe" : "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    フォルダ生成
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExportFormat("zip")}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: exportFormat === "zip" ? "1px solid #1a73e8" : "1px solid #e0e0e0",
-                      background: exportFormat === "zip" ? "#e8f0fe" : "#fff",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    zipダウンロード
-                  </button>
-                </div>
-                <div style={{ marginTop: 10 }}>
-                  <button
-                    type="button"
-                    onClick={datasetType === "seg" ? handleExportDatasetSeg : handleExportDatasetBBox}
-                    disabled={!datasetId}
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #1a73e8",
-                      background:
-                        !datasetId
-                          ? "#f2f2f2"
-                          : "#1a73e8",
-                      color:
-                        !datasetId
-                          ? "#888"
-                          : "#fff",
-                      fontWeight: 600,
-                      cursor:
-                        !datasetId
-                          ? "not-allowed"
-                          : "pointer",
-                    }}
-                  >
-                    {datasetType === "seg" ? "Export seg dataset" : "Export bbox dataset"}
-                  </button>
-                </div>
-              </div>
-              {false && null}
-              </>
-              )}
+                Export dataset
+              </button>
             </div>
           </div>
         </div>
       ) : (
         <div style={{ padding: 24 }}>
           <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Project Home</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
             <input
               type="text"
               placeholder="project_name"

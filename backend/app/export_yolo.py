@@ -51,13 +51,13 @@ def make_yolo_lines(
         if use_poly:
             coords = normalize_polygon(poly, image_w, image_h)
             if len(coords) >= 6:
-                parts = [str(class_id)] + [f"{v:.6f}" for v in coords]
+                parts = [str(class_id)] + [repr(v) for v in coords]
                 lines.append(" ".join(parts))
                 continue
         bbox = ann.get("bbox")
         if not bbox:
             continue
         cx, cy, w, h = normalize_bbox(bbox, image_w, image_h)
-        parts = [str(class_id), f"{cx:.6f}", f"{cy:.6f}", f"{w:.6f}", f"{h:.6f}"]
+        parts = [str(class_id), repr(cx), repr(cy), repr(w), repr(h)]
         lines.append(" ".join(parts))
     return lines

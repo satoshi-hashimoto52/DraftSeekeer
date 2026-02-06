@@ -24,6 +24,7 @@ type Props = {
   onManualCreateStateChange: (active: boolean) => void;
   onResizeSelectedBBox: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onResizeSelectedAnnotation: (bbox: { x: number; y: number; w: number; h: number }) => void;
+  onSelectAnnotation: (annotation: Annotation) => void;
   shouldIgnoreCanvasClick?: () => boolean;
 };
 
@@ -54,6 +55,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onManualCreateStateChange,
   onResizeSelectedBBox,
   onResizeSelectedAnnotation,
+  onSelectAnnotation,
   shouldIgnoreCanvasClick,
 }: Props,
   ref
@@ -94,7 +96,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     active: boolean;
     origin: { x: number; y: number; w: number; h: number } | null;
     start: { x: number; y: number } | null;
-  }>({ active: false, origin: null, start: null });
+    target: "candidate" | "annotation" | null;
+  }>({ active: false, origin: null, start: null, target: null });
   const [manualPreview, setManualPreview] = useState<{
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -156,6 +159,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "#d0d0d0";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(scale, 0, 0, scale, panOffset.x, panOffset.y);
       ctx.drawImage(img, 0, 0);
 
@@ -340,7 +346,18 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const isHighlighted = a.id === highlightAnnotationId;
           const color = colorMap[a.class_name] || "#ff2b2b";
           const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 1.2;
-          drawBox(a.bbox.x, a.bbox.y, a.bbox.w, a.bbox.h, color, lineWidth, false, 1, 0.1);
+          const dashed = isSelected && editMode;
+          drawBox(
+            a.bbox.x,
+            a.bbox.y,
+            a.bbox.w,
+            a.bbox.h,
+            color,
+            lineWidth,
+            dashed,
+            1,
+            0.1
+          );
         if (!isDragging && a.segPolygon) {
           drawPolygon(
             a.segPolygon,
@@ -349,7 +366,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             1
           );
         }
-        if (isSelected) {
+        if (isSelected && !editMode) {
           const size = Math.max(4, Math.round(baseLine * 2.2));
           drawCornerMarkers(a.bbox, color, size);
         }
@@ -465,14 +482,19 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     return !!selected && selected.source === "manual" && !selected.class_name;
   };
 
-  const findResizeHandle = (x: number, y: number) => {
-    const selected = getSelectedCandidate();
-    const selectedAnn = getSelectedAnnotation();
-    if (!selected && !selectedAnn) return null;
+  const isPointInsideBBox = (
+    bbox: { x: number; y: number; w: number; h: number },
+    x: number,
+    y: number
+  ) => x >= bbox.x && x <= bbox.x + bbox.w && y >= bbox.y && y <= bbox.y + bbox.h;
+
+  const findResizeHandleForBBox = (
+    bbox: { x: number; y: number; w: number; h: number },
+    x: number,
+    y: number
+  ) => {
     const canvas = canvasRef.current;
     const size = canvas ? Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.01)) : 12;
-    const bbox = selectedAnn?.bbox || selected?.bbox;
-    if (!bbox) return null;
     const handles = [
       { key: "tl" as const, x: bbox.x, y: bbox.y },
       { key: "tr" as const, x: bbox.x + bbox.w, y: bbox.y },
@@ -485,6 +507,14 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       if (dx * dx + dy * dy <= size * size) return h.key;
     }
     return null;
+  };
+
+  const findResizeHandle = (x: number, y: number) => {
+    const selected = getSelectedCandidate();
+    const selectedAnn = getSelectedAnnotation();
+    const bbox = selectedAnn?.bbox || selected?.bbox;
+    if (!bbox) return null;
+    return findResizeHandleForBBox(bbox, x, y);
   };
 
   const findMoveEdge = (x: number, y: number) => {
@@ -536,6 +566,26 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             return;
           }
         }
+        if (annotations.length > 0) {
+          const hitAnn = annotations
+            .map((a) => ({
+              ann: a,
+              handle: findResizeHandleForBBox(a.bbox, coords.x, coords.y),
+              area: a.bbox.w * a.bbox.h,
+            }))
+            .filter((h) => h.handle)
+            .sort((a, b) => a.area - b.area)[0];
+          if (hitAnn) {
+            onSelectAnnotation(hitAnn.ann);
+            resizeDragRef.current = {
+              active: true,
+              handle: hitAnn.handle!,
+              origin: { ...hitAnn.ann.bbox },
+            };
+            draggingRef.current = true;
+            return;
+          }
+        }
         if (findMoveEdge(coords.x, coords.y)) {
           const selected = getSelectedCandidate();
           if (selected) {
@@ -543,11 +593,28 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               active: true,
               origin: { ...selected.bbox },
               start: coords,
+              target: "candidate",
             };
             suppressNextClickRef.current = true;
             draggingRef.current = true;
             return;
           }
+        }
+        const selectedAnn = getSelectedAnnotation();
+        if (
+          selectedAnn &&
+          isPointInsideBBox(selectedAnn.bbox, coords.x, coords.y) &&
+          !findResizeHandleForBBox(selectedAnn.bbox, coords.x, coords.y)
+        ) {
+          moveDragRef.current = {
+            active: true,
+            origin: { ...selectedAnn.bbox },
+            start: coords,
+            target: "annotation",
+          };
+          suppressNextClickRef.current = true;
+          draggingRef.current = true;
+          return;
         }
       }
     }
@@ -615,7 +682,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         w: moveDragRef.current.origin.w,
         h: moveDragRef.current.origin.h,
       };
-      onResizeSelectedBBox(next);
+      if (moveDragRef.current.target === "annotation") {
+        onResizeSelectedAnnotation(next);
+      } else {
+        onResizeSelectedBBox(next);
+      }
       return;
     }
     if (resizeDragRef.current.active && resizeDragRef.current.origin) {
@@ -671,7 +742,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       return;
     }
     if (moveDragRef.current.active) {
-      moveDragRef.current = { active: false, origin: null, start: null };
+      moveDragRef.current = { active: false, origin: null, start: null, target: null };
+      suppressNextClickRef.current = true;
       draggingRef.current = false;
       return;
     }
@@ -717,6 +789,21 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     if (editMode) return;
     const coords = getImageCoords(event);
     if (!coords) return;
+    if (annotations.length > 0) {
+      const hit = annotations
+        .filter(
+          (a) =>
+            coords.x >= a.bbox.x &&
+            coords.x <= a.bbox.x + a.bbox.w &&
+            coords.y >= a.bbox.y &&
+            coords.y <= a.bbox.y + a.bbox.h
+        )
+        .sort((a, b) => a.bbox.w * a.bbox.h - b.bbox.w * b.bbox.h)[0];
+      if (hit) {
+        onSelectAnnotation(hit);
+        return;
+      }
+    }
     onClickPoint(coords.x, coords.y);
   };
 

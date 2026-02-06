@@ -1,32 +1,107 @@
-# 概要
+# Overview
 
-CAD 図面画像のアノテーション作成を高速化するための支援ツールです。  
-YOLO 学習に必要な bbox / seg を、テンプレ照合と SAM を組み合わせて効率的に生成します。
+本書はコードから仕様を抽出して記載しています。
+動作確認・実運用テストは別途実施してください。
 
-## なぜ必要か（YOLO 学習前段の課題）
+## システム構成
 
-図面画像では手動アノテのコストが高く、以下がボトルネックになります。
+```
+[Frontend (React)]  <--HTTP-->  [Backend (FastAPI)]
+        |                                |
+        |                                +-- data/templates_root
+        |                                +-- data/datasets
+        |                                +-- data/images
+        |                                +-- models (SAM)
+```
 
-- 類似図形が多く、目視での拾い上げが遅い
-- 図面ごとに縮尺が異なり、単一テンプレでは検出が不安定
-- 注記や寸法線が密集し、正確なセグメンテーションが難しい
+## テンプレート構造
 
-## 図面画像特有の問題
+- ルート: `data/templates_root`
+- 形式: `templates_root/<project>/<class>/*.png|jpg`
+- class_id は **クラス名昇順**で固定
 
-- 細い線の重なりで輪郭が破綻しやすい
-- 同一クラスでも見た目が微妙に異なる（縮尺・省略表記）
-- 注記文字や寸法線は学習対象外だが画面内に多数存在
+## 検出モード
 
-## なぜ「テンプレ × SAM × フォールバック」か
+### /detect/point
+- クリック点の ROI でテンプレ照合
+- 流れ:
+  1. ROI 切り出し
+  2. template matching (multi-scale)
+  3. bbox フィルタ（サイズ/面積/score）
+  4. クラス別 NMS
+  5. クラス代表候補（score最大）
+  6. TopK 抽出
+  7. 確定済み bbox を除外（center / IoU）
+- Template OFF の場合: クリック点を含む輪郭候補を返す
 
-- テンプレ照合: クリック点中心の近傍で高精度・高速に候補を出せる
-- SAM: 必要な候補だけ精密に seg を作れる
-- フォールバック: SAMが使えない環境でも最低限の輪郭を返せる
+### /detect/full
+- 画像全体を 1024x1024 タイルで走査
+- 各タイル中央 ROI でテンプレ照合
+- 以降は /detect/point と同様に NMS / TopK / 除外
 
-この組み合わせにより「高速・安定・再現性」のバランスを取っています。
+## テンプレマッチの bbox
 
-## SAM をオンデマンド実行にする理由
+- テンプレは読み込み時に content bbox を計算
+- 余白を除いた template crop で matchTemplate を実行
+- bbox は crop サイズ基準で返す
 
-- 常時実行はコストが高く、UI体験が悪化
-- MPS/CPU環境で安定性に差が出るため、必要時のみ呼ぶ
-- テンプレ候補の精度が高い場合は SAM なしで十分なケースが多い
+## BBox リファイン
+
+- /detect/point に `refine_contour` がある場合のみ実行
+- ROI 周辺を二値化し輪郭から bbox を再計算
+- 失敗時は元 bbox を返す
+
+## 確定 bbox の重複除外
+
+- `exclude_confirmed_candidates` を最終候補の直前に適用
+- center-in (bbox中心が確定 bbox 内) を優先
+- 補助的に IoU 閾値を使用
+- `exclude_mode`: same_class / any_class
+
+## SAM セグ生成
+
+- /segment/candidate
+  - ROI を expand して SAM 推論
+  - click があれば point prompt を追加
+  - mask → polygon（approxPolyDP）
+- 失敗時はフォールバック輪郭
+- device: MPS 優先 → CPU
+
+## アノテーションモデル
+
+- bbox が主体
+- seg は必要時のみ付与
+- Annotation 保存は `annotations/<image>.json`
+
+## 制約 / 設計意図
+
+- 回転テンプレは未対応
+- スケール: 0.5〜1.5（デフォルト）
+- 文字/寸法線はテンプレから除外前提
+- SAM はオンデマンドのみ
+
+## UI 状態遷移（テキスト）
+
+### アノテーション画面
+- 画像未選択
+  - サムネ未選択 / image_id なし
+- 画像選択中
+  - image_id / image_url が設定
+- 候補選択中
+  - candidates > 0
+  - selectedCandidateId が設定
+- 確定済み
+  - annotations > 0
+
+状態遷移例:
+- 画像未選択 -> 画像選択中: サムネクリック
+- 画像選択中 -> 候補選択中: 画像クリックで検出
+- 候補選択中 -> 確定済み: 確定操作
+
+### Export ドロワー
+- 未オープン
+- 設定中（drawer open）
+- 警告表示
+  - 未アノテ含む / split不正 / class 0
+- Export 実行完了
+  - 成功/失敗メッセージ表示
