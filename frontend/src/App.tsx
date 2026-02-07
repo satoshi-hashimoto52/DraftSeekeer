@@ -91,6 +91,11 @@ export default function App() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [annotationFilterClass, setAnnotationFilterClass] = useState<string>("all");
+  const [pendingManualBBox, setPendingManualBBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [pendingManualClass, setPendingManualClass] = useState<string>("");
+  const [annotationUndoStack, setAnnotationUndoStack] = useState<Annotation[][]>([]);
+  const [annotationRedoStack, setAnnotationRedoStack] = useState<Annotation[][]>([]);
+  const annotationEditActiveRef = useRef<boolean>(false);
   const [colorMap, setColorMap] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -185,6 +190,30 @@ export default function App() {
       setSelectedAnnotationId(null);
     }
   }, [annotationFilterClass, annotations, selectedAnnotationId]);
+
+  const cloneAnnotations = (items: Annotation[]) =>
+    items.map((a) => ({
+      ...a,
+      bbox: { ...a.bbox },
+      segPolygon: a.segPolygon ? a.segPolygon.map((p) => ({ ...p })) : undefined,
+      originalSegPolygon: a.originalSegPolygon
+        ? a.originalSegPolygon.map((p) => ({ ...p }))
+        : undefined,
+    }));
+
+  const pushAnnotationHistory = () => {
+    setAnnotationUndoStack((prev) => [...prev, cloneAnnotations(annotations)]);
+    setAnnotationRedoStack([]);
+  };
+
+  const clampBBoxToImage = (bbox: { x: number; y: number; w: number; h: number }) => {
+    if (!imageSize) return bbox;
+    const w = Math.max(4, Math.min(imageSize.w, bbox.w));
+    const h = Math.max(4, Math.min(imageSize.h, bbox.h));
+    const x = Math.min(imageSize.w - w, Math.max(0, bbox.x));
+    const y = Math.min(imageSize.h - h, Math.max(0, bbox.y));
+    return { x, y, w, h };
+  };
 
   const splitSummary = useMemo(() => {
     const images = (datasetInfo?.images || [])
@@ -639,6 +668,7 @@ export default function App() {
       setError("手動候補はクラスを選択してください");
       return;
     }
+    pushAnnotationHistory();
     const createdAt = new Date().toISOString();
     const source =
       selectedCandidate.source === "manual"
@@ -770,6 +800,64 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [selectedCandidate, manualClassMissing]);
 
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+      const isMeta = event.metaKey || event.ctrlKey;
+      if (isMeta && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          setAnnotationRedoStack((redoPrev) => {
+            if (redoPrev.length === 0) return redoPrev;
+            const next = redoPrev[redoPrev.length - 1];
+            setAnnotationUndoStack((undoPrev) => [...undoPrev, cloneAnnotations(annotations)]);
+            setAnnotations(next);
+            return redoPrev.slice(0, -1);
+          });
+        } else {
+          setAnnotationUndoStack((undoPrev) => {
+            if (undoPrev.length === 0) return undoPrev;
+            const next = undoPrev[undoPrev.length - 1];
+            setAnnotationRedoStack((redoPrev) => [...redoPrev, cloneAnnotations(annotations)]);
+            setAnnotations(next);
+            return undoPrev.slice(0, -1);
+          });
+        }
+        return;
+      }
+      if (isMeta && (event.key.toLowerCase() === "y")) {
+        event.preventDefault();
+        setAnnotationRedoStack((redoPrev) => {
+          if (redoPrev.length === 0) return redoPrev;
+          const next = redoPrev[redoPrev.length - 1];
+          setAnnotationUndoStack((undoPrev) => [...undoPrev, cloneAnnotations(annotations)]);
+          setAnnotations(next);
+          return redoPrev.slice(0, -1);
+        });
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedAnnotationId && !selectedCandidateId) {
+        event.preventDefault();
+        pushAnnotationHistory();
+        setAnnotations((prev) => prev.filter((a) => a.id !== selectedAnnotationId));
+        setSelectedAnnotationId(null);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSelectedAnnotationId(null);
+        if (pendingManualBBox) {
+          setPendingManualBBox(null);
+          setPendingManualClass("");
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [annotations, selectedAnnotationId, selectedCandidateId, pendingManualBBox]);
+
   const pickUniqueColor = (existing: Record<string, string>) => {
     const used = new Set(Object.values(existing));
     for (let i = 0; i < 20; i += 1) {
@@ -808,6 +896,63 @@ export default function App() {
     return next;
   };
 
+  const loadAdvancedSettingsForProject = (projectName: string) => {
+    try {
+      const raw = localStorage.getItem(`draftseeker.advanced.${projectName}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as {
+        roiSize?: number;
+        topk?: number;
+        scaleMin?: number;
+        scaleMax?: number;
+        scaleSteps?: number;
+        excludeEnabled?: boolean;
+        excludeMode?: "same_class" | "any_class";
+        excludeCenter?: boolean;
+        excludeIouThreshold?: number;
+        refineContour?: boolean;
+      };
+      if (!parsed || typeof parsed !== "object") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveAdvancedSettingsForProject = (projectName: string) => {
+    try {
+      const payload = {
+        roiSize,
+        topk,
+        scaleMin,
+        scaleMax,
+        scaleSteps,
+        excludeEnabled,
+        excludeMode,
+        excludeCenter,
+        excludeIouThreshold,
+        refineContour,
+      };
+      localStorage.setItem(`draftseeker.advanced.${projectName}`, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  };
+
+  const normalizeLoadedAnnotations = (items: Annotation[]) => {
+    const now = Date.now();
+    return items.map((ann, idx) => ({
+      id: ann.id || `${now}-${Math.random()}-${idx}`,
+      class_name: ann.class_name,
+      bbox: ann.bbox,
+      source: ann.source || "template",
+      created_at: ann.created_at || new Date().toISOString(),
+      segPolygon: ann.segPolygon,
+      originalSegPolygon: ann.originalSegPolygon,
+      segMethod: ann.segMethod,
+    }));
+  };
+
   const loadDatasetImage = async (projectName: string, filename: string) => {
     setError(null);
     setBusy(true);
@@ -822,7 +967,7 @@ export default function App() {
       setDatasetSelectedName(filename);
       isLoadingAnnotationsRef.current = true;
       const loaded = await loadAnnotations({ project_name: projectName, image_key: filename });
-      setAnnotations(loaded.annotations || []);
+      setAnnotations(normalizeLoadedAnnotations(loaded.annotations || []));
       isLoadingAnnotationsRef.current = false;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Dataset select failed");
@@ -922,6 +1067,55 @@ export default function App() {
     if (Object.keys(colorMap).length === 0) return;
     saveColorMapForProject(datasetId, colorMap);
   }, [colorMap, datasetId]);
+
+  useEffect(() => {
+    if (!datasetId) return;
+    const saved = loadAdvancedSettingsForProject(datasetId);
+    if (!saved) {
+      setRoiSize(DEFAULT_ROI_SIZE);
+      setTopk(DEFAULT_TOPK);
+      setScaleMin(DEFAULT_SCALE_MIN);
+      setScaleMax(DEFAULT_SCALE_MAX);
+      setScaleSteps(DEFAULT_SCALE_STEPS);
+      setExcludeEnabled(true);
+      setExcludeMode("same_class");
+      setExcludeCenter(true);
+      setExcludeIouThreshold(0.6);
+      setRefineContour(false);
+      return;
+    }
+    if (typeof saved.roiSize === "number") setRoiSize(saved.roiSize);
+    if (typeof saved.topk === "number") setTopk(saved.topk);
+    if (typeof saved.scaleMin === "number") setScaleMin(saved.scaleMin);
+    if (typeof saved.scaleMax === "number") setScaleMax(saved.scaleMax);
+    if (typeof saved.scaleSteps === "number") setScaleSteps(saved.scaleSteps);
+    if (typeof saved.excludeEnabled === "boolean") setExcludeEnabled(saved.excludeEnabled);
+    if (saved.excludeMode === "same_class" || saved.excludeMode === "any_class") {
+      setExcludeMode(saved.excludeMode);
+    }
+    if (typeof saved.excludeCenter === "boolean") setExcludeCenter(saved.excludeCenter);
+    if (typeof saved.excludeIouThreshold === "number") {
+      setExcludeIouThreshold(saved.excludeIouThreshold);
+    }
+    if (typeof saved.refineContour === "boolean") setRefineContour(saved.refineContour);
+  }, [datasetId]);
+
+  useEffect(() => {
+    if (!datasetId) return;
+    saveAdvancedSettingsForProject(datasetId);
+  }, [
+    datasetId,
+    roiSize,
+    topk,
+    scaleMin,
+    scaleMax,
+    scaleSteps,
+    excludeEnabled,
+    excludeMode,
+    excludeCenter,
+    excludeIouThreshold,
+    refineContour,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1642,18 +1836,10 @@ export default function App() {
                 }}
                 onClickPoint={handleClickPoint}
                 onCreateManualBBox={(bbox) => {
-                  const id = `${Date.now()}-${Math.random()}`;
-                  const manualCandidate: Candidate = {
-                    id,
-                    class_name: "",
-                    score: 1.0,
-                    bbox,
-                    template: "manual",
-                    scale: 1.0,
-                    source: "manual",
-                  };
-                  setCandidates((prev) => [...prev, manualCandidate]);
-                  setSelectedCandidateId(id);
+                  setPendingManualBBox(bbox);
+                  setPendingManualClass("");
+                  setSelectedCandidateId(null);
+                  setSelectedAnnotationId(null);
                 }}
                 onManualCreateStateChange={setIsCreatingManualBBox}
                 onResizeSelectedBBox={(bbox) => {
@@ -1662,14 +1848,26 @@ export default function App() {
                     prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
                   );
                 }}
-              onResizeSelectedAnnotation={(bbox) => {
-                if (!selectedAnnotationId) return;
-                setAnnotations((prev) =>
-                  prev.map((a) => (a.id === selectedAnnotationId ? { ...a, bbox } : a))
-                );
-              }}
-              onSelectAnnotation={handleSelectAnnotation}
-            />
+                onResizeSelectedAnnotation={(bbox) => {
+                  if (!selectedAnnotationId) return;
+                  setAnnotations((prev) =>
+                    prev.map((a) =>
+                      a.id === selectedAnnotationId ? { ...a, bbox: clampBBoxToImage(bbox) } : a
+                    )
+                  );
+                }}
+                onAnnotationEditStart={() => {
+                  if (annotationEditActiveRef.current) return;
+                  annotationEditActiveRef.current = true;
+                  pushAnnotationHistory();
+                }}
+                onAnnotationEditEnd={() => {
+                  annotationEditActiveRef.current = false;
+                }}
+                onSelectAnnotation={handleSelectAnnotation}
+                pendingManualBBox={pendingManualBBox}
+                shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
+              />
             </div>
             {notice && (
               <div
@@ -1849,7 +2047,7 @@ export default function App() {
               </div>
             )}
           </div>
-            {isManualSelected && (
+            {pendingManualBBox && (
               <div
                 style={{
                   marginBottom: 18,
@@ -1858,24 +2056,35 @@ export default function App() {
                   flex: "0 0 auto",
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>手動候補: クラス指定</div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>手動BBox: クラス指定</div>
                 <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 12, minWidth: 60 }}>クラス選択</span>
                   <select
-                    value={selectedCandidate?.class_name || ""}
+                    value={pendingManualClass}
                     onChange={(e) => {
                       const nextClass = e.target.value;
-                      setCandidates((prev) =>
-                        prev.map((c) =>
-                          c.id === selectedCandidate?.id ? { ...c, class_name: nextClass } : c
-                        )
-                      );
+                      setPendingManualClass(nextClass);
+                      if (!nextClass || !pendingManualBBox) return;
+                      pushAnnotationHistory();
+                      const createdAt = new Date().toISOString();
+                      setAnnotations((prev) => [
+                        ...prev,
+                        {
+                          id: `${Date.now()}-${Math.random()}`,
+                          class_name: nextClass,
+                          bbox: clampBBoxToImage(pendingManualBBox),
+                          source: "manual",
+                          created_at: createdAt,
+                        },
+                      ]);
                       if (nextClass) {
                         setColorMap((prev) => {
                           if (prev[nextClass]) return prev;
                           return { ...prev, [nextClass]: pickUniqueColor(prev) };
                         });
                       }
+                      setPendingManualBBox(null);
+                      setPendingManualClass("");
                     }}
                     style={{ minWidth: 200, height: 36 }}
                   >
@@ -1886,10 +2095,28 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingManualBBox(null);
+                      setPendingManualClass("");
+                    }}
+                    style={{
+                      height: 30,
+                      padding: "0 10px",
+                      borderRadius: 6,
+                      border: "1px solid #e3e3e3",
+                      background: "#fff",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    キャンセル
+                  </button>
                 </label>
-                {manualClassMissing && (
+                {!pendingManualClass && (
                   <div style={{ marginTop: 6, fontSize: 12, color: "#b00020" }}>
-                    手動候補はクラス指定が必要です
+                    手動BBoxはクラス指定が必要です
                   </div>
                 )}
               </div>
@@ -1930,43 +2157,11 @@ export default function App() {
                       transition: "all 120ms ease",
                     }}
                   >
-                    確定
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>確定</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Enter)</span>
+                    </span>
                   </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    選択中をアノテとして確定
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={handleRejectCandidate}
-                    disabled={!selectedCandidate}
-                    onMouseEnter={() => setHoverAction("discard")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("discard")}
-                    onMouseUp={() => setActiveAction(null)}
-                    style={{
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #d32f2f",
-                      background: "#d32f2f",
-                      color: "#fff",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: !selectedCandidate ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "discard"
-                          ? "0 6px 12px rgba(211,47,47,0.25)"
-                          : "0 4px 10px rgba(211,47,47,0.16)",
-                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    破棄
-                  </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    この候補を除外
-                  </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <button
@@ -1994,11 +2189,43 @@ export default function App() {
                       transition: "all 120ms ease",
                     }}
                   >
-                    次
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>次</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(N)</span>
+                    </span>
                   </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    次の候補へ
-                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleRejectCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("discard")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("discard")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #d32f2f",
+                      background: "#d32f2f",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "discard"
+                          ? "0 6px 12px rgba(211,47,47,0.25)"
+                          : "0 4px 10px rgba(211,47,47,0.16)",
+                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>破棄</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Del)</span>
+                    </span>
+                  </button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <button
@@ -2026,11 +2253,11 @@ export default function App() {
                       transition: "all 120ms ease",
                     }}
                   >
-                    SAM
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>SAM</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(S)</span>
+                    </span>
                   </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    選択中からSeg生成
-                  </div>
                 </div>
               </div>
             </div>
