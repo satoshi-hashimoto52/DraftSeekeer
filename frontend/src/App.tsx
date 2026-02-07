@@ -1849,182 +1849,6 @@ export default function App() {
               </div>
             )}
           </div>
-            {Object.keys(colorMap).length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {Object.entries(colorMap).map(([name, color]) => {
-                    const hexColor = normalizeToHex(color);
-                    return (
-                      <label
-                        key={name}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "4px 6px",
-                          border: "1px solid #e3e3e3",
-                          borderRadius: 999,
-                          background: "#fff",
-                          fontSize: 11,
-                        }}
-                      >
-                        <input
-                          type="color"
-                          value={hexColor}
-                          onChange={(e) =>
-                            setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                          }
-                          style={{ width: 20, height: 20, padding: 0, border: "none" }}
-                        />
-                        <span>{name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <div
-              style={{
-                marginBottom: 12,
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                padding: 10,
-                background: "#fff",
-              }}
-            >
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={handleConfirmCandidate}
-                    disabled={!selectedCandidate || manualClassMissing}
-                    onMouseEnter={() => setHoverAction("confirm")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("confirm")}
-                    onMouseUp={() => setActiveAction(null)}
-                    style={{
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #1a73e8",
-                      background: "#1a73e8",
-                      color: "#fff",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "confirm"
-                          ? "0 6px 12px rgba(26,115,232,0.24)"
-                          : "0 4px 10px rgba(26,115,232,0.16)",
-                      transform: activeAction === "confirm" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    確定
-                  </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    選択中の候補をアノテーションとして登録
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={handleRejectCandidate}
-                    disabled={!selectedCandidate}
-                    onMouseEnter={() => setHoverAction("discard")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("discard")}
-                    onMouseUp={() => setActiveAction(null)}
-                    style={{
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #d32f2f",
-                      background: "#d32f2f",
-                      color: "#fff",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: !selectedCandidate ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "discard"
-                          ? "0 6px 12px rgba(211,47,47,0.25)"
-                          : "0 4px 10px rgba(211,47,47,0.16)",
-                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    破棄
-                  </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    この候補を以後の判定から除外
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={handleNextCandidate}
-                    disabled={candidates.length === 0}
-                    onMouseEnter={() => setHoverAction("next")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("next")}
-                    onMouseUp={() => setActiveAction(null)}
-                    style={{
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #90a4ae",
-                      background: "#eceff1",
-                      color: "#455a64",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: candidates.length === 0 ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "next"
-                          ? "0 6px 12px rgba(144,164,174,0.25)"
-                          : "0 4px 10px rgba(144,164,174,0.16)",
-                      transform: activeAction === "next" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    次
-                  </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    同クラスの次候補へ移動
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={handleSegCandidate}
-                    disabled={!selectedCandidate}
-                    onMouseEnter={() => setHoverAction("sam")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("sam")}
-                    onMouseUp={() => setActiveAction(null)}
-                    style={{
-                      height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #2e7d32",
-                      background: "#2e7d32",
-                      color: "#fff",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      opacity: !selectedCandidate ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "sam"
-                          ? "0 6px 12px rgba(46,125,50,0.25)"
-                          : "0 4px 10px rgba(46,125,50,0.16)",
-                      transform: activeAction === "sam" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
-                    }}
-                  >
-                    SAM
-                  </button>
-                  <div style={{ fontSize: 10, color: "#666" }}>
-                    選択中BBoxからSegmentation生成
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div style={{ marginBottom: 16 }} />
             {isManualSelected && (
               <div
                 style={{
@@ -2068,6 +1892,182 @@ export default function App() {
                     手動候補はクラス指定が必要です
                   </div>
                 )}
+              </div>
+            )}
+            <div
+              style={{
+                marginBottom: 12,
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                padding: 10,
+                background: "#fff",
+              }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleConfirmCandidate}
+                    disabled={!selectedCandidate || manualClassMissing}
+                    onMouseEnter={() => setHoverAction("confirm")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("confirm")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #1a73e8",
+                      background: "#1a73e8",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "confirm"
+                          ? "0 6px 12px rgba(26,115,232,0.24)"
+                          : "0 4px 10px rgba(26,115,232,0.16)",
+                      transform: activeAction === "confirm" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    確定
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    選択中をアノテとして確定
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleRejectCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("discard")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("discard")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #d32f2f",
+                      background: "#d32f2f",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "discard"
+                          ? "0 6px 12px rgba(211,47,47,0.25)"
+                          : "0 4px 10px rgba(211,47,47,0.16)",
+                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    破棄
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    この候補を除外
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleNextCandidate}
+                    disabled={candidates.length === 0}
+                    onMouseEnter={() => setHoverAction("next")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("next")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #90a4ae",
+                      background: "#eceff1",
+                      color: "#455a64",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: candidates.length === 0 ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "next"
+                          ? "0 6px 12px rgba(144,164,174,0.25)"
+                          : "0 4px 10px rgba(144,164,174,0.16)",
+                      transform: activeAction === "next" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    次
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    次の候補へ
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={handleSegCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("sam")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("sam")}
+                    onMouseUp={() => setActiveAction(null)}
+                    style={{
+                      height: 36,
+                      borderRadius: 8,
+                      border: "1px solid #2e7d32",
+                      background: "#2e7d32",
+                      color: "#fff",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      boxShadow:
+                        hoverAction === "sam"
+                          ? "0 6px 12px rgba(46,125,50,0.25)"
+                          : "0 4px 10px rgba(46,125,50,0.16)",
+                      transform: activeAction === "sam" ? "translateY(1px)" : "none",
+                      transition: "all 120ms ease",
+                    }}
+                  >
+                    SAM
+                  </button>
+                  <div style={{ fontSize: 10, color: "#666" }}>
+                    選択中からSeg生成
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ marginBottom: 16 }} />
+            {Object.keys(colorMap).length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {Object.entries(colorMap).map(([name, color]) => {
+                    const hexColor = normalizeToHex(color);
+                    return (
+                      <label
+                        key={name}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "4px 6px",
+                          border: "1px solid #e3e3e3",
+                          borderRadius: 999,
+                          background: "#fff",
+                          fontSize: 11,
+                        }}
+                      >
+                        <input
+                          type="color"
+                          value={hexColor}
+                          onChange={(e) =>
+                            setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                          }
+                          style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                        />
+                        <span>{name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -2125,7 +2125,7 @@ export default function App() {
                   >
                     <div>
                       <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                        <span>{a.class_name}</span>
+                        <span style={{ color: colorMap[a.class_name] || "#333" }}>{a.class_name}</span>
                         <span
                           style={{
                             fontSize: 10,

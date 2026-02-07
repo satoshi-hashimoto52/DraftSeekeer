@@ -660,8 +660,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (panDragRef.current.active && panDragRef.current.start && panDragRef.current.origin) {
-      const dx = event.clientX - panDragRef.current.start.x;
-      const dy = event.clientY - panDragRef.current.start.y;
+      const dx = (event.clientX - panDragRef.current.start.x) * 1.5;
+      const dy = (event.clientY - panDragRef.current.start.y) * 1.5;
       const next = {
         x: Math.round(panDragRef.current.origin.x + dx),
         y: Math.round(panDragRef.current.origin.y + dy),
@@ -833,7 +833,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const cursorY = (event.clientY - rect.top) * scaleY;
       const imgX = (cursorX - panRef.current.x) / scaleRef.current;
       const imgY = (cursorY - panRef.current.y) / scaleRef.current;
-      const delta = event.deltaY > 0 ? -0.1 : 0.1;
+      const delta = event.deltaY > 0 ? -0.2 : 0.2;
       const nextScale = Math.min(5, Math.max(0.2, scaleRef.current + delta));
       scaleRef.current = nextScale;
       pendingScaleRef.current = nextScale;
