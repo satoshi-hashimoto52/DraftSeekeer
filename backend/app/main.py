@@ -235,6 +235,30 @@ def _parse_internal_id(value: object, fallback: int) -> int:
     return fallback
 
 
+def _parse_optional_int(value: object) -> Optional[int]:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _safe_image_size(images_dir: Path, filename: str) -> tuple[Optional[int], Optional[int]]:
+    if not filename:
+        return None, None
+    path = images_dir / filename
+    if not path.exists() or not path.is_file():
+        return None, None
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+        return int(width), int(height)
+    except Exception:
+        return None, None
+
+
 def _load_meta_entries(project_name: str) -> List[Dict[str, object]]:
     meta_path = _project_meta_path(project_name)
     if not meta_path.exists():
@@ -284,40 +308,54 @@ def _entries_to_filenames(entries: List[Dict[str, object]]) -> List[str]:
     return [str(e.get("original_filename")) for e in ordered if e.get("original_filename")]
 
 
-def _entries_to_api(entries: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def _entries_to_api(
+    entries: List[Dict[str, object]],
+    images_dir: Optional[Path] = None,
+) -> List[Dict[str, object]]:
     ordered = sorted(entries, key=lambda e: int(e.get("import_order") or 0))
-    return [
-        {
-            "original_filename": str(e.get("original_filename")),
-            "filename": str(e.get("original_filename")),
-            "internal_id": str(e.get("internal_id")),
-            "import_order": int(e.get("import_order") or 0),
-        }
-        for e in ordered
-        if e.get("original_filename")
-    ]
+    results: List[Dict[str, object]] = []
+    for e in ordered:
+        name = str(e.get("original_filename") or "")
+        if not name:
+            continue
+        width = _parse_optional_int(e.get("width"))
+        height = _parse_optional_int(e.get("height"))
+        if (width is None or height is None) and images_dir is not None:
+            width, height = _safe_image_size(images_dir, name)
+        results.append(
+            {
+                "original_filename": name,
+                "filename": name,
+                "internal_id": str(e.get("internal_id")),
+                "import_order": int(e.get("import_order") or 0),
+                "width": width,
+                "height": height,
+            }
+        )
+    return results
 
 
 def _project_stats(project_name: str) -> Dict[str, object]:
     images_dir = _project_images_dir(project_name)
     annotations_dir = _project_annotations_dir(project_name)
     meta_entries = _load_meta_entries(project_name)
-    images = _entries_to_api(meta_entries)
+    images = _entries_to_api(meta_entries, images_dir)
     if not images:
-        images = (
-            [
-                {
-                    "original_filename": p.name,
-                    "internal_id": f"{idx:03d}",
-                    "import_order": idx,
-                }
-                for idx, p in enumerate(
-                    sorted([p for p in images_dir.iterdir() if p.is_file()]), start=1
+        if images_dir.exists():
+            images = []
+            for idx, p in enumerate(sorted([p for p in images_dir.iterdir() if p.is_file()]), start=1):
+                width, height = _safe_image_size(images_dir, p.name)
+                images.append(
+                    {
+                        "original_filename": p.name,
+                        "internal_id": f"{idx:03d}",
+                        "import_order": idx,
+                        "width": width,
+                        "height": height,
+                    }
                 )
-            ]
-            if images_dir.exists()
-            else []
-        )
+        else:
+            images = []
     total_images = len(images)
     annotated_images = 0
     bbox_count = 0

@@ -1746,6 +1746,10 @@ export default function App() {
                   const count = imageStatusMap[name] || 0;
                   const isDone = count > 0;
                   const isActive = datasetSelectedName === name;
+                  const width = typeof entry.width === "number" ? entry.width : null;
+                  const height = typeof entry.height === "number" ? entry.height : null;
+                  const sizeLabel =
+                    width !== null && height !== null ? `${width}×${height}` : "-";
                   return (
                     <div
                       key={`${name || entry.internal_id || "image"}-${idx}`}
@@ -1785,21 +1789,22 @@ export default function App() {
                       </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                           <div style={{ fontSize: 11, fontWeight: 600 }}>
-                          {indexLabel}{" "}
-                          <span
-                            style={{
-                              fontSize: 10,
-                              marginLeft: 6,
-                              padding: "2px 6px",
-                              borderRadius: 10,
-                              background: isDone ? "#e8f5e9" : "#f1f1f1",
-                              color: isDone ? "#2e7d32" : "#666",
-                            }}
-                          >
-                            {isDone ? `済 ${count}` : "未"}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 10, color: "#666" }}>{name}</div>
+                            ID: {indexLabel}{" "}
+                            <span
+                              style={{
+                                fontSize: 10,
+                                marginLeft: 6,
+                                padding: "2px 6px",
+                                borderRadius: 10,
+                                background: isDone ? "#e8f5e9" : "#f1f1f1",
+                                color: isDone ? "#2e7d32" : "#666",
+                              }}
+                            >
+                              {isDone ? `済 ${count}` : "未"}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#666" }}>File: {name}</div>
+                          <div style={{ fontSize: 10, color: "#888" }}>Size: {sizeLabel}</div>
                       </div>
                     </div>
                   );

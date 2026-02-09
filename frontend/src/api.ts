@@ -186,6 +186,8 @@ export type DatasetImageEntry = {
   filename?: string;
   internal_id: string;
   import_order: number;
+  width?: number | null;
+  height?: number | null;
 };
 
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {

@@ -255,3 +255,5 @@ class DatasetImageEntry(BaseModel):
     filename: Optional[str] = None
     internal_id: str
     import_order: int
+    width: Optional[int] = None
+    height: Optional[int] = None
