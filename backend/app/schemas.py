@@ -257,3 +257,35 @@ class DatasetImageEntry(BaseModel):
     import_order: int
     width: Optional[int] = None
     height: Optional[int] = None
+
+
+class AutoAnnotateRequest(BaseModel):
+    image_id: str
+    project: str
+    threshold: float = 0.8
+    method: str = Field("combined", pattern="^(combined|scaled_templates)$")
+    # deprecated (backward compatibility)
+    mode: Optional[str] = None
+    class_filter: Optional[List[str]] = None
+    # advanced settings (optional)
+    scale_min: Optional[float] = None
+    scale_max: Optional[float] = None
+    scale_steps: Optional[int] = None
+    stride: Optional[int] = None
+    roi_size: Optional[int] = None
+    project_name: Optional[str] = None
+    image_key: Optional[str] = None
+
+
+class AutoAnnotationItem(BaseModel):
+    class_name: str
+    bbox: BBox
+    score: float
+
+
+class AutoAnnotateResponse(BaseModel):
+    added_count: int
+    rejected_count: int
+    threshold: float
+    created_annotations: Optional[List[AutoAnnotationItem]] = None
+    preview_image_url: Optional[str] = None

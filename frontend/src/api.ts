@@ -51,6 +51,7 @@ export type Annotation = {
   bbox: { x: number; y: number; w: number; h: number };
   source: "template" | "manual" | "sam";
   created_at: string;
+  score?: number;
   segPolygon?: { x: number; y: number }[];
   originalSegPolygon?: { x: number; y: number }[];
   segMethod?: "sam" | "fallback";
@@ -189,6 +190,50 @@ export type DatasetImageEntry = {
   width?: number | null;
   height?: number | null;
 };
+
+export type AutoAnnotateRequest = {
+  image_id: string;
+  project: string;
+  threshold: number;
+  method?: "combined" | "scaled_templates";
+  roi_size?: number;
+  class_filter?: string[];
+  scale_min?: number;
+  scale_max?: number;
+  scale_steps?: number;
+  stride?: number;
+  project_name?: string;
+  image_key?: string;
+};
+
+export type AutoAnnotateResponse = {
+  added_count: number;
+  rejected_count: number;
+  threshold: number;
+  created_annotations?: {
+    class_name: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    score: number;
+  }[];
+  preview_image_url?: string | null;
+};
+
+export async function autoAnnotate(
+  params: AutoAnnotateRequest
+): Promise<AutoAnnotateResponse> {
+  const res = await fetch(`${API_BASE}/annotate/auto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Auto annotate failed");
+  }
+
+  return (await res.json()) as AutoAnnotateResponse;
+}
 
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {
   const res = await fetch(`${API_BASE}/templates`);

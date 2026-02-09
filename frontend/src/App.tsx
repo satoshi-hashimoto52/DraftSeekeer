@@ -23,6 +23,7 @@ import {
   listDatasetProjects,
   createDatasetProject,
   deleteDatasetProject,
+  autoAnnotate,
 } from "./api";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
 import { normalizeToHex } from "./utils/color";
@@ -125,6 +126,22 @@ export default function App() {
   });
   const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
   const [lastImportPath, setLastImportPath] = useState<string | null>(null);
+  const [autoThreshold, setAutoThreshold] = useState<number>(0.7);
+  const [autoClassFilter, setAutoClassFilter] = useState<string[]>([]);
+  const [autoMethod, setAutoMethod] = useState<"combined" | "scaled_templates">("combined");
+  const [autoPanelOpen, setAutoPanelOpen] = useState<boolean>(true);
+  const [autoAdvancedOpen, setAutoAdvancedOpen] = useState<boolean>(false);
+  const [autoStride, setAutoStride] = useState<number | null>(null);
+  const [autoRunning, setAutoRunning] = useState<boolean>(false);
+  const [autoResult, setAutoResult] = useState<{
+    added: number;
+    rejected: number;
+    threshold: number;
+  } | null>(null);
+  const [autoProgress, setAutoProgress] = useState<number>(0);
+  const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
+  const autoProgressTimerRef = useRef<number | null>(null);
+  const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [coordDebug, setCoordDebug] = useState<{
     screen: { x: number; y: number };
@@ -190,6 +207,24 @@ export default function App() {
     if (annotationFilterClass === "all") return annotations;
     return annotations.filter((a) => a.class_name === annotationFilterClass);
   }, [annotations, annotationFilterClass]);
+
+  const sortedAnnotations = useMemo(() => {
+    return [...filteredAnnotations].sort((a, b) => {
+      const ay = a.bbox.y;
+      const by = b.bbox.y;
+      if (ay !== by) return ay - by;
+      return a.bbox.x - b.bbox.x;
+    });
+  }, [filteredAnnotations]);
+
+  useEffect(() => {
+    if (checkedAnnotationIds.length === 0) return;
+    const currentIds = new Set(annotations.map((a) => a.id));
+    const next = checkedAnnotationIds.filter((id) => currentIds.has(id));
+    if (next.length !== checkedAnnotationIds.length) {
+      setCheckedAnnotationIds(next);
+    }
+  }, [annotations, checkedAnnotationIds]);
 
   useEffect(() => {
     if (annotationFilterClass === "all") return;
@@ -698,23 +733,30 @@ export default function App() {
         : selectedCandidate.segPolygon
           ? "sam"
           : "template";
+    const score =
+      typeof selectedCandidate.score === "number"
+        ? selectedCandidate.score
+        : selectedCandidate.source === "manual"
+          ? 1.0
+          : undefined;
     const segPolygon = selectedCandidate.segPolygon
       ? selectedCandidate.segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
       : undefined;
     const segMethod = selectedCandidate.segMethod;
     setAnnotations((prev) => [
       ...prev,
-      {
-        id: `${Date.now()}-${Math.random()}`,
-        class_name: selectedCandidate.class_name,
-        bbox: selectedCandidate.bbox,
-        source,
-        created_at: createdAt,
-        segPolygon,
-        originalSegPolygon: segPolygon
-          ? segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
-          : undefined,
-        segMethod,
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          class_name: selectedCandidate.class_name,
+          bbox: selectedCandidate.bbox,
+          source,
+          created_at: createdAt,
+          score,
+          segPolygon,
+          originalSegPolygon: segPolygon
+            ? segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
+            : undefined,
+          segMethod,
       },
     ]);
     setNotice(`${selectedCandidate.class_name} を確定しました`);
@@ -969,6 +1011,7 @@ export default function App() {
       bbox: ann.bbox,
       source: ann.source || "template",
       created_at: ann.created_at || new Date().toISOString(),
+      score: ann.score,
       segPolygon: ann.segPolygon,
       originalSegPolygon: ann.originalSegPolygon,
       segMethod: ann.segMethod,
@@ -996,6 +1039,87 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleAutoAnnotate = async () => {
+    if (!imageId || !datasetId || !datasetSelectedName || !project) {
+      setError("画像またはプロジェクトが選択されていません");
+      return;
+    }
+    setError(null);
+    setAutoRunning(true);
+    setAutoResult(null);
+    setLastAutoAddedIds([]);
+    setAutoProgress(0);
+    if (autoProgressTimerRef.current) {
+      window.clearInterval(autoProgressTimerRef.current);
+    }
+    autoProgressTimerRef.current = window.setInterval(() => {
+      setAutoProgress((prev) => {
+        if (prev >= 90) return 90;
+        return prev + 5;
+      });
+    }, 400);
+    try {
+      const clipped = Math.max(0, Math.min(1, autoThreshold));
+      const strideValue = autoStride && autoStride > 0 ? autoStride : undefined;
+      const res = await autoAnnotate({
+        image_id: imageId,
+        project,
+        threshold: clipped,
+        method: autoMethod,
+        roi_size: roiSize,
+        class_filter: autoClassFilter.length > 0 ? autoClassFilter : undefined,
+        scale_min: scaleMin,
+        scale_max: scaleMax,
+        scale_steps: scaleSteps,
+        stride: strideValue,
+        project_name: datasetId,
+        image_key: datasetSelectedName,
+      });
+      setAutoResult({
+        added: res.added_count,
+        rejected: res.rejected_count,
+        threshold: res.threshold,
+      });
+      if (res.created_annotations && res.created_annotations.length > 0) {
+        const createdAt = new Date().toISOString();
+        const appended = res.created_annotations.map((item, idx) => ({
+          id: `${Date.now()}-${Math.random()}-${idx}`,
+          class_name: item.class_name,
+          bbox: item.bbox,
+          source: "template",
+          created_at: createdAt,
+          score: item.score,
+        }));
+        setLastAutoAddedIds(appended.map((item) => item.id));
+        setAnnotations((prev) => [...prev, ...appended]);
+      } else {
+        const loaded = await loadAnnotations({
+          project_name: datasetId,
+          image_key: datasetSelectedName,
+        });
+        setAnnotations(normalizeLoadedAnnotations(loaded.annotations || []));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auto annotate failed");
+    } finally {
+      setAutoRunning(false);
+      setAutoProgress(100);
+      if (autoProgressTimerRef.current) {
+        window.clearInterval(autoProgressTimerRef.current);
+        autoProgressTimerRef.current = null;
+      }
+    }
+  };
+
+  const handleUndoAutoAnnotate = () => {
+    if (lastAutoAddedIds.length === 0) return;
+    pushAnnotationHistory();
+    setAnnotations((prev) => prev.filter((ann) => !lastAutoAddedIds.includes(ann.id)));
+    setCheckedAnnotationIds((prev) => prev.filter((id) => !lastAutoAddedIds.includes(id)));
+    setLastAutoAddedIds([]);
+    setNotice("直前の全自動追加分を取り消しました");
   };
 
 
@@ -1065,10 +1189,14 @@ export default function App() {
   useEffect(() => {
     if (!datasetId || !datasetSelectedName) return;
     if (isLoadingAnnotationsRef.current) return;
+    const sanitized = annotations.map((ann) => {
+      const { score, ...rest } = ann;
+      return rest;
+    });
     const payload = {
       project_name: datasetId,
       image_key: datasetSelectedName,
-      annotations,
+      annotations: sanitized,
     };
     saveAnnotations(payload).catch(() => {
       // ignore save errors for now
@@ -1991,18 +2119,6 @@ export default function App() {
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>検出パラメータ</div>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, minWidth: 90 }}>ROIサイズ</span>
-                  <input
-                    type="number"
-                    min={10}
-                    value={roiSize}
-                    step={10}
-                    onChange={(e) => setRoiSize(Number(e.target.value))}
-                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                    style={{ width: 100, height: 28 }}
-                  />
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{ fontSize: 12, minWidth: 90 }}>スケール</span>
                   <input
                     type="number"
@@ -2300,6 +2416,28 @@ export default function App() {
                 background: "#fff",
               }}
             >
+              <div
+                style={{
+                  marginBottom: 10,
+                  paddingBottom: 10,
+                  borderBottom: "1px dashed #e0e0e0",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 72 }}>ROIサイズ</span>
+                <input
+                  type="number"
+                  min={10}
+                  value={roiSize}
+                  step={10}
+                  onChange={(e) => setRoiSize(Number(e.target.value))}
+                  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                  style={{ width: 90, height: 28 }}
+                />
+                <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <button
@@ -2430,6 +2568,319 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              <div
+                style={{
+                  marginTop: 12,
+                  border: "1px solid #d9e2ec",
+                  borderRadius: 12,
+                  padding: 12,
+                  background: "#f7fbff",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setAutoPanelOpen((prev) => !prev)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    color: "#0b3954",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: 0,
+                  }}
+                >
+                  <span>全自動アノテーション</span>
+                  <span style={{ fontSize: 12, color: "#546e7a" }}>
+                    {autoPanelOpen ? "▼" : "▶"}
+                  </span>
+                </button>
+                {autoPanelOpen && (
+                  <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>
+                        全自動 閾値（高いほど慎重）
+                      </div>
+                      <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
+                        高いほど誤検出が減ります。低いほど拾いやすくなります。
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 6,
+                          display: "grid",
+                          gridTemplateColumns: "1fr 80px",
+                          gap: 8,
+                          alignItems: "center",
+                        }}
+                      >
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={autoThreshold}
+                          onChange={(e) => setAutoThreshold(Number(e.target.value))}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={autoThreshold}
+                          onChange={(e) => setAutoThreshold(Number(e.target.value))}
+                          style={{
+                            height: 30,
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            padding: "0 6px",
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>対象クラス</div>
+                      <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
+                        未チェックのクラスは対象外になります。
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {classOptions.length === 0 && (
+                          <span style={{ fontSize: 12, color: "#888" }}>クラス未設定</span>
+                        )}
+                        {asChildren(
+                          classOptions.map((name, idx) => {
+                            const checked = autoClassFilter.includes(name);
+                            return (
+                              <label
+                                key={`auto-class-${name}-${idx}`}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 4,
+                                  fontSize: 11,
+                                  padding: "2px 8px",
+                                  border: "1px solid #d9e2ec",
+                                  borderRadius: 999,
+                                  background: checked ? "#e3f2fd" : "#fff",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const next = e.target.checked
+                                      ? [...autoClassFilter, name]
+                                      : autoClassFilter.filter((c) => c !== name);
+                                    setAutoClassFilter(next);
+                                  }}
+                                />
+                                <span>{name}</span>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAutoAnnotate}
+                      disabled={autoRunning}
+                      style={{
+                        height: 38,
+                        borderRadius: 10,
+                        border: "1px solid #0b7285",
+                        background: autoRunning
+                          ? `linear-gradient(90deg, #0b7285 0%, #0b7285 ${autoProgress}%, #0f4c5c ${autoProgress}%, #0f4c5c 100%)`
+                          : "#0b7285",
+                        color: "#fff",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        opacity: autoRunning ? 0.7 : 1,
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        {autoRunning && (
+                          <svg width="14" height="14" viewBox="0 0 50 50" style={{ display: "block" }}>
+                            <circle
+                              cx="25"
+                              cy="25"
+                              r="20"
+                              fill="none"
+                              stroke="#fff"
+                              strokeWidth="5"
+                              strokeLinecap="round"
+                              strokeDasharray="90 60"
+                            >
+                              <animateTransform
+                                attributeName="transform"
+                                type="rotate"
+                                from="0 25 25"
+                                to="360 25 25"
+                                dur="1s"
+                                repeatCount="indefinite"
+                              />
+                            </circle>
+                          </svg>
+                        )}
+                        {autoRunning ? `実行中…${autoProgress}%` : "全自動アノテーション（追加）"}
+                      </span>
+                    </button>
+                    {autoResult && (
+                      <div style={{ fontSize: 12, color: "#0b3954" }}>
+                        <div>追加されたアノテーション数: {autoResult.added}</div>
+                        <div>除外された候補数: {autoResult.rejected}</div>
+                        <div>使用した閾値: {autoResult.threshold.toFixed(2)}</div>
+                        <button
+                          type="button"
+                          onClick={handleUndoAutoAnnotate}
+                          disabled={lastAutoAddedIds.length === 0}
+                          style={{
+                            marginTop: 6,
+                            height: 28,
+                            padding: "0 10px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#fff",
+                            fontSize: 11,
+                            cursor: "pointer",
+                            opacity: lastAutoAddedIds.length === 0 ? 0.5 : 1,
+                          }}
+                        >
+                          直前の追加分を取り消す
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setAutoAdvancedOpen((prev) => !prev)}
+                      style={{
+                        height: 28,
+                        borderRadius: 6,
+                        border: "1px dashed #b0bec5",
+                        background: "#fff",
+                        fontSize: 11,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く"}
+                    </button>
+                    {autoAdvancedOpen && (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          {[
+                            {
+                              key: "combined",
+                              label: "合成スコア（edge + contour + placement + shape）",
+                              help: "精度優先。複数の指標を合成して判定します。",
+                              accent: "#1976d2",
+                              bg: "#e3f2fd",
+                            },
+                            {
+                              key: "scaled_templates",
+                              label: "scaled_templates",
+                              help: "速度優先。matchTemplate のスコアのみで判定します。",
+                              accent: "#546e7a",
+                              bg: "#eceff1",
+                            },
+                          ].map((item) => {
+                            const selected = autoMethod === item.key;
+                            return (
+                              <label
+                                key={`auto-method-${item.key}`}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  padding: "6px 8px",
+                                  borderRadius: 8,
+                                  border: selected ? `1px solid ${item.accent}` : "1px solid #e0e0e0",
+                                  background: selected ? item.bg : "#fff",
+                                  fontSize: 11,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <input
+                                  type="radio"
+                                  name="auto-method"
+                                  checked={selected}
+                                  onChange={() => setAutoMethod(item.key as "combined" | "scaled_templates")}
+                                />
+                                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                  <span style={{ fontWeight: 700, color: item.accent }}>{item.label}</span>
+                                  <span style={{ color: "#666" }}>{item.help}</span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>スケール</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0.1}
+                            value={scaleMin}
+                            onChange={(e) => setScaleMin(Number(e.target.value))}
+                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                            style={{ width: 70, height: 28 }}
+                          />
+                          <span style={{ fontSize: 12, color: "#888" }}>〜</span>
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0.1}
+                            value={scaleMax}
+                            onChange={(e) => setScaleMax(Number(e.target.value))}
+                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                            style={{ width: 70, height: 28 }}
+                          />
+                          <span style={{ fontSize: 12, color: "#888" }}>分割</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={scaleSteps}
+                            onChange={(e) => setScaleSteps(Number(e.target.value))}
+                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                            style={{ width: 60, height: 28 }}
+                          />
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>stride</div>
+                        <input
+                          type="number"
+                          min={1}
+                          value={autoStride ?? ""}
+                          onChange={(e) =>
+                            setAutoStride(e.target.value === "" ? null : Number(e.target.value))
+                          }
+                          onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                          style={{ width: 120, height: 28 }}
+                          placeholder="空欄で自動"
+                        />
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input
+                            type="number"
+                            min={10}
+                            value={roiSize}
+                            step={10}
+                            onChange={(e) => setRoiSize(Number(e.target.value))}
+                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                            style={{ width: 90, height: 28 }}
+                          />
+                          <span style={{ fontSize: 11, color: "#607d8b" }}>
+                            手動/自動で共通
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ marginBottom: 16 }} />
             {Object.keys(colorMap).length > 0 && (
@@ -2472,7 +2923,7 @@ export default function App() {
 
             <div style={{ marginBottom: 12, paddingTop: 4, flex: "1 1 auto", minHeight: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                確定アノテーション（表示 {filteredAnnotations.length}件）
+                確定アノテーション（表示 {sortedAnnotations.length}件）
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                 <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
@@ -2492,12 +2943,60 @@ export default function App() {
                     ))
                   )}
                 </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (checkedAnnotationIds.length === sortedAnnotations.length) {
+                      setCheckedAnnotationIds([]);
+                    } else {
+                      setCheckedAnnotationIds(sortedAnnotations.map((a) => a.id));
+                    }
+                  }}
+                  style={{
+                    height: 24,
+                    fontSize: 11,
+                    padding: "0 8px",
+                    borderRadius: 6,
+                    border: "1px solid #e3e3e3",
+                    background: "#fafafa",
+                    cursor: "pointer",
+                  }}
+                >
+                  {checkedAnnotationIds.length === sortedAnnotations.length
+                    ? "解除"
+                    : "全てチェック"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (checkedAnnotationIds.length === 0) return;
+                    setAnnotations((prev) =>
+                      prev.filter((a) => !checkedAnnotationIds.includes(a.id))
+                    );
+                    if (selectedAnnotationId && checkedAnnotationIds.includes(selectedAnnotationId)) {
+                      setSelectedAnnotationId(null);
+                    }
+                    setCheckedAnnotationIds([]);
+                  }}
+                  style={{
+                    height: 24,
+                    fontSize: 11,
+                    padding: "0 8px",
+                    borderRadius: 6,
+                    border: "1px solid #ef9a9a",
+                    background: "#ffebee",
+                    color: "#b00020",
+                    cursor: "pointer",
+                  }}
+                >
+                  選択削除
+                </button>
               </div>
               <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                {filteredAnnotations.length === 0
+                {sortedAnnotations.length === 0
                   ? "内訳: なし"
                   : Object.entries(
-                      filteredAnnotations.reduce<Record<string, number>>((acc, a) => {
+                      sortedAnnotations.reduce<Record<string, number>>((acc, a) => {
                         acc[a.class_name] = (acc[a.class_name] || 0) + 1;
                         return acc;
                       }, {})
@@ -2506,10 +3005,10 @@ export default function App() {
                       .join(" / ")}
               </div>
               <div style={{ overflowY: "auto", maxHeight: "36vh", paddingRight: 6 }}>
-                {filteredAnnotations.length === 0 && (
+                {sortedAnnotations.length === 0 && (
                   <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
                 )}
-                {asChildren(filteredAnnotations.map((a, idx) => (
+                {asChildren(sortedAnnotations.map((a, idx) => (
                   <div
                     key={`${a.id || "ann"}-${idx}`}
                     style={{
@@ -2526,7 +3025,19 @@ export default function App() {
                     }}
                     onClick={() => handleSelectAnnotation(a)}
                   >
-                    <div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={checkedAnnotationIds.includes(a.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...checkedAnnotationIds, a.id]
+                            : checkedAnnotationIds.filter((id) => id !== a.id);
+                          setCheckedAnnotationIds(next);
+                        }}
+                      />
+                      <div>
                       <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
                         <span style={{ color: colorMap[a.class_name] || "#333" }}>{a.class_name}</span>
                         <span
@@ -2569,6 +3080,10 @@ export default function App() {
                       </div>
                       <div style={{ fontSize: 12, color: "#666" }}>
                         bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
+                      </div>
+                      <div style={{ fontSize: 12, color: "#666" }}>
+                        確信度: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
+                      </div>
                       </div>
                     </div>
                     <button

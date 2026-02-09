@@ -17,6 +17,7 @@ import io
 import base64
 import shutil
 from datetime import datetime
+import tempfile
 import random
 
 from .config import (
@@ -47,6 +48,9 @@ from .schemas import (
     DetectPointRequest,
     DetectPointResponse,
     DetectResult,
+    AutoAnnotateRequest,
+    AutoAnnotateResponse,
+    AutoAnnotationItem,
     DatasetImportResponse,
     DatasetInfo,
     DatasetSelectRequest,
@@ -73,6 +77,7 @@ from .sam_device import get_sam_device
 from .polygon import mask_to_polygon, polygon_to_bbox
 from .export_yolo import make_yolo_lines
 from .export_yolo import normalize_bbox
+from .detection_core import annotate_all, annotate_all_manual
 
 
 app = FastAPI(title="Annotator MVP")
@@ -1450,6 +1455,199 @@ def export_yolo(payload: ExportYoloRequest) -> ExportYoloResponse:
     preview_lines = lines[:5]
     preview = "\n".join(preview_lines)
     return ExportYoloResponse(ok=True, saved_path=str(output_path), text_preview=preview)
+
+
+@app.post("/annotate/auto", response_model=AutoAnnotateResponse)
+def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
+    if payload.threshold < 0.0 or payload.threshold > 1.0:
+        raise HTTPException(status_code=400, detail="threshold must be between 0.0 and 1.0")
+    if payload.scale_min is not None and payload.scale_min <= 0:
+        raise HTTPException(status_code=400, detail="scale_min must be > 0")
+    if payload.scale_max is not None and payload.scale_max <= 0:
+        raise HTTPException(status_code=400, detail="scale_max must be > 0")
+    if payload.scale_steps is not None and payload.scale_steps <= 0:
+        raise HTTPException(status_code=400, detail="scale_steps must be > 0")
+    if payload.stride is not None and payload.stride <= 0:
+        raise HTTPException(status_code=400, detail="stride must be > 0")
+    if payload.roi_size is not None and payload.roi_size <= 0:
+        raise HTTPException(status_code=400, detail="roi_size must be > 0")
+    try:
+        _read_image_bgr(payload.image_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail="invalid image_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="failed to read image")
+
+    project_templates = templates_cache.get(payload.project)
+    if project_templates is None:
+        raise HTTPException(status_code=400, detail="invalid project")
+
+    if payload.class_filter:
+        filtered = {
+            k: v for k, v in project_templates.items() if k in set(payload.class_filter)
+        }
+        project_templates = filtered
+
+    image_path = None
+    tmp_path = None
+    if payload.image_id.startswith(MEMORY_IMAGE_PREFIX):
+        data = IN_MEMORY_IMAGES.get(payload.image_id)
+        if not data:
+            raise HTTPException(status_code=400, detail="invalid image_id")
+        suffix = Path(payload.image_id).suffix or ".png"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(data)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        image_path = tmp_path
+    else:
+        image_path = _resolve_any_image_path(payload.image_id)
+
+    try:
+        method = payload.method
+        if payload.mode in ("auto", "manual"):
+            method = "scaled_templates" if payload.mode == "manual" else "combined"
+        if method == "scaled_templates":
+            result = annotate_all_manual(
+                image_path=image_path,
+                templates=project_templates,
+                threshold=payload.threshold,
+                output_format="coco",
+                roi_size=payload.roi_size or 200,
+                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
+                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
+                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
+                stride=payload.stride,
+            )
+        else:
+            result = annotate_all(
+                image_path=image_path,
+                templates=project_templates,
+                threshold=payload.threshold,
+                output_format="coco",
+                roi_size=payload.roi_size or 200,
+                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
+                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
+                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
+                stride=payload.stride,
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    confirmed = result.get("confirmed", [])
+
+    def _dedup_any_overlap(cands: list) -> list:
+        if not cands:
+            return cands
+        sorted_candidates = sorted(
+            cands, key=lambda c: c.get("final_score", 0.0), reverse=True
+        )
+        kept = []
+        for cand in sorted_candidates:
+            bx, by, bw, bh = cand["bbox"]
+            overlap = False
+            for kept_c in kept:
+                kx, ky, kw, kh = kept_c["bbox"]
+                if (bx < kx + kw and bx + bw > kx and by < ky + kh and by + bh > ky):
+                    overlap = True
+                    break
+            if not overlap:
+                kept.append(cand)
+        return kept
+
+    confirmed = _dedup_any_overlap(confirmed)
+
+    # Exclude any overlap with existing annotations for the same image
+    existing_ann = []
+    if payload.project_name and payload.image_key:
+        annotations_dir = _project_annotations_dir(payload.project_name)
+        safe_key = Path(payload.image_key).name
+        ann_path = annotations_dir / f"{safe_key}.json"
+        if ann_path.exists():
+            try:
+                existing = json.loads(ann_path.read_text(encoding="utf-8"))
+                if isinstance(existing, list):
+                    existing_ann = [{"bbox": a.get("bbox"), "class_name": a.get("class_name")} for a in existing if a.get("bbox")]
+            except Exception:
+                existing_ann = []
+
+    if existing_ann:
+        confirmed = exclude_confirmed_candidates(
+            [
+                {
+                    "bbox": {"x": c["bbox"][0], "y": c["bbox"][1], "w": c["bbox"][2], "h": c["bbox"][3]},
+                    "class_name": c["class_name"],
+                    "final_score": c.get("final_score", 0.0),
+                }
+                for c in confirmed
+            ],
+            existing_ann,
+            exclude_mode="any_class",
+            center_check=False,
+            iou_threshold=0.0,
+            any_overlap=True,
+        )
+        # convert back to original confirmed format (bbox tuple)
+        confirmed = [
+            {
+                "class_name": c["class_name"],
+                "bbox": (c["bbox"]["x"], c["bbox"]["y"], c["bbox"]["w"], c["bbox"]["h"]),
+                "final_score": c.get("final_score", 0.0),
+            }
+            for c in confirmed
+        ]
+        confirmed = _dedup_any_overlap(confirmed)
+
+    added_count = len(confirmed)
+    rejected_count = int(result.get("total_candidates", 0) - added_count)
+
+    # Save as annotations if project_name and image_key are provided
+    if payload.project_name and payload.image_key:
+        annotations_dir = _project_annotations_dir(payload.project_name)
+        annotations_dir.mkdir(parents=True, exist_ok=True)
+        safe_key = Path(payload.image_key).name
+        out_path = annotations_dir / f"{safe_key}.json"
+        data = []
+        if out_path.exists():
+            try:
+                existing = json.loads(out_path.read_text(encoding="utf-8"))
+                if isinstance(existing, list):
+                    data.extend(existing)
+            except Exception:
+                pass
+        for c in confirmed:
+            data.append(
+                {
+                    "class_name": c["class_name"],
+                    "bbox": {
+                        "x": c["bbox"][0],
+                        "y": c["bbox"][1],
+                        "w": c["bbox"][2],
+                        "h": c["bbox"][3],
+                    },
+                }
+            )
+        out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if tmp_path and tmp_path.exists():
+        tmp_path.unlink(missing_ok=True)
+
+    created = [
+        AutoAnnotationItem(
+            class_name=c["class_name"],
+            bbox={"x": c["bbox"][0], "y": c["bbox"][1], "w": c["bbox"][2], "h": c["bbox"][3]},
+            score=c["final_score"],
+        )
+        for c in confirmed
+    ]
+
+    return AutoAnnotateResponse(
+        added_count=added_count,
+        rejected_count=rejected_count,
+        threshold=payload.threshold,
+        created_annotations=created,
+        preview_image_url=None,
+    )
 
 
 @app.get("/export/yolo/download")
