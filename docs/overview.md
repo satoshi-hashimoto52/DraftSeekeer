@@ -1,111 +1,110 @@
 # Overview
 
-本書はコードから仕様を抽出して記載しています。
-動作確認・実運用テストは別途実施してください。
+## 要約
+- DraftSeeker は図面画像に対してテンプレートマッチで候補BBoxを提示し、手動/セグ編集で確定するアノテーションUIです。
+- Backend は FastAPI、Frontend は React + Canvas 描画で構成されます。
+- 主要フローは Dataset取込 → 画像選択 → クリック検出(/detect/point) → 候補確定 → 保存(/annotations/save) です。
+- テンプレは `data/templates/<project>/<class>/*.png|jpg` を走査し、tight bbox を計算してマッチに使用します。
+- Dataset は `data/datasets/<project>/images|annotations|meta.json` を中心に管理されます。
+- Seg は SAM をオンデマンドで使い、失敗時は輪郭フォールバックします。
+- Export は YOLO 単体、または bbox/seg の dataset 形式を出力できます。
+- CORS は現在 `*` 許可です（必要に応じて制限）。
+- 仕様はコード抽出ベースであり、未確認箇所は【要確認】で示しています。
+- 詳細は [API仕様](api.md) と [データ仕様](data_spec.md) を参照してください。
 
-## システム構成
+## 目次
+- [プロダクト概要](#プロダクト概要)
+- [ユースケース](#ユースケース)
+- [主要フロー](#主要フロー)
+- [コンポーネント構成](#コンポーネント構成)
+- [依存関係](#依存関係)
+- [データフロー](#データフロー)
+- [設計方針と制約](#設計方針と制約)
+- [関連ドキュメント](#関連ドキュメント)
 
+## プロダクト概要
+DraftSeeker は図面画像を対象に、クリック点周辺の ROI に対してテンプレートマッチングを行い、候補BBoxを提示するアノテーション支援ツールです。候補の確定・編集、SAM によるセグ補助、YOLO形式のエクスポートに対応します。
+
+## ユースケース
+- 建築・設備図面の記号や部材のBBoxアノテーション
+- 既存テンプレを使った半自動アノテーション
+- bbox/seg の学習用データセット生成
+
+## 主要フロー
+1. Dataset プロジェクト作成
+2. 画像フォルダをインポート
+3. 画像選択
+4. クリック検出 `/detect/point`
+5. 候補の確定・編集
+6. 保存 `/annotations/save`
+7. 必要に応じて `/segment/candidate` でセグ生成
+8. Export `/export/dataset/bbox|seg` または `/export/yolo`
+
+### 検出フロー（/detect/point）
+- クリック点中心の ROI を切り出し
+- ROI とテンプレで前処理を統一
+- multi-scale で `cv2.matchTemplate` を実行
+- tight bbox を基準に最終BBoxを生成
+- 確定済みアノテとの重複除外
+
+### 全体検出フロー（/detect/full）
+- 画像全体を 1024px タイルで走査
+- 各タイルの中心 ROI でテンプレマッチ
+- NMS で統合し TopK を返却
+
+### セグフロー（/segment/candidate）
+- SAM によるマスク推定
+- 失敗時は輪郭ベースのフォールバック
+
+## コンポーネント構成
 ```
 [Frontend (React)]  <--HTTP-->  [Backend (FastAPI)]
         |                                |
         |                                +-- data/templates
         |                                +-- data/datasets
         |                                +-- data/images
+        |                                +-- data/runs
         |                                +-- models (SAM)
 ```
 
-## テンプレート構造
+### Frontend 主要責務
+- UI 状態管理（候補/確定/Seg/Export）
+- Canvas 描画（候補/確定/デバッグ）
+- クリック座標の画像座標への変換
 
-- ルート: `data/templates`
-- 形式: `templates/<project>/<class>/*.png|jpg`
-- class_id は **クラス名昇順**で固定
+### Backend 主要責務
+- テンプレ読み込みとキャッシュ
+- クリック検出・全体検出
+- アノテーション保存/読み込み
+- Dataset Export
+- SAM 連携
 
-## 検出モード
+## 依存関係
+Backend:
+- FastAPI / Uvicorn / Pydantic
+- OpenCV / NumPy / Pillow
+- Torch / Segment Anything
 
-### /detect/point
-- クリック点の ROI でテンプレ照合
-- 流れ:
-  1. ROI 切り出し
-  2. template matching (multi-scale)
-  3. bbox フィルタ（サイズ/面積/score）
-  4. クラス別 NMS
-  5. クラス代表候補（score最大）
-  6. TopK 抽出
-  7. 確定済み bbox を除外（center / IoU）
-- Template OFF の場合: クリック点を含む輪郭候補を返す
+Frontend:
+- React / Vite / TypeScript
 
-### /detect/full
-- 画像全体を 1024x1024 タイルで走査
-- 各タイル中央 ROI でテンプレ照合
-- 以降は /detect/point と同様に NMS / TopK / 除外
+## データフロー
+- テンプレ: `data/templates/<project>/<class>/*` → 読み込み時に tight bbox を算出
+- Dataset: `data/datasets/<project>/images` と `meta.json` で管理
+- アノテ: `data/datasets/<project>/annotations/<image>.json`
+- 一時画像: `/dataset/select` で `image_id` に変換して API に渡す
 
-## テンプレマッチの bbox
-
-- テンプレは読み込み時に content bbox を計算
-- 余白を除いた template crop で matchTemplate を実行
-- bbox は crop サイズ基準で返す
-
-## BBox リファイン
-
-- /detect/point に `refine_contour` がある場合のみ実行
-- ROI 周辺を二値化し輪郭から bbox を再計算
-- 失敗時は元 bbox を返す
-
-## 確定 bbox の重複除外
-
-- `exclude_confirmed_candidates` を最終候補の直前に適用
-- center-in (bbox中心が確定 bbox 内) を優先
-- 補助的に IoU 閾値を使用
-- `exclude_mode`: same_class / any_class
-
-## SAM セグ生成
-
-- /segment/candidate
-  - ROI を expand して SAM 推論
-  - click があれば point prompt を追加
-  - mask → polygon（approxPolyDP）
-- 失敗時はフォールバック輪郭
-- device: MPS 優先 → CPU
-
-## アノテーションモデル
-
-- bbox が主体
-- seg は必要時のみ付与
-- Annotation 保存は `annotations/<image>.json`
-
-## Dataset 内部メタ
-
-- meta.json に `images` を保持\n- 画像エントリは `original_filename` / `internal_id` / `import_order` を保持\n- 並び順は `import_order` のみで決定
-
-## 制約 / 設計意図
-
+## 設計方針と制約
 - 回転テンプレは未対応
-- スケール: 0.5〜1.5（デフォルト）
-- 文字/寸法線はテンプレから除外前提
-- SAM はオンデマンドのみ
+- スケール範囲はデフォルト `0.5〜1.5`
+- テンプレ余白を含めず、線画領域に tight fit
+- SAM はオンデマンド使用
+- CORS は現在 `*` 許可（運用で制限推奨）
 
-## UI 状態遷移（テキスト）
-
-### アノテーション画面
-- 画像未選択
-  - サムネ未選択 / image_id なし
-- 画像選択中
-  - image_id / image_url が設定
-- 候補選択中
-  - candidates > 0
-  - selectedCandidateId が設定
-- 確定済み
-  - annotations > 0
-
-状態遷移例:
-- 画像未選択 -> 画像選択中: サムネクリック
-- 画像選択中 -> 候補選択中: 画像クリックで検出
-- 候補選択中 -> 確定済み: 確定操作
-
-### Export ドロワー
-- 未オープン
-- 設定中（drawer open）
-- 警告表示
-  - 未アノテ含む / split不正 / class 0
-- Export 実行完了
-  - 成功/失敗メッセージ表示
+## 関連ドキュメント
+- [API仕様](api.md)
+- [運用(runbook)](runbook.md)
+- [データ/テンプレ仕様](data_spec.md)
+- [セキュリティ/プライバシー](security_privacy.md)
+- [Backend設計](../backend/app/docs/main.md)
+- [Frontend設計](../frontend/docs/architecture/App.md)

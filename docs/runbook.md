@@ -1,98 +1,92 @@
 # Runbook
 
-本書はコードから仕様を抽出して記載しています。
-動作確認・実運用テストは別途実施してください。
+## 要約
+- Backend は FastAPI、Frontend は Vite/React で起動します。
+- Backend のカレントは `DraftSeeker/backend` が前提です。
+- Dataset/テンプレは `data/` 配下に保存されます。
+- 画像選択は `/dataset/select` を通じて `image_id` を生成します。
+- CORS は現在 `*` 許可です。
+- SAM は checkpoint と device 設定が必要です。
+- エラー時はまず backend ログを確認します。
+- 本書は Mac 想定です。
+- 未確認は【要確認】として明記します。
+- 詳細は [overview](overview.md) と [api](api.md) 参照。
+
+## 目次
+- [起動](#起動)
+- [設定](#設定)
+- [ログ/デバッグ](#ログデバッグ)
+- [検証手順](#検証手順)
+- [トラブルシュート](#トラブルシュート)
+- [よくある障害と切り分け](#よくある障害と切り分け)
 
 ## 起動
-
-Backend:
+### Backend
 ```bash
-cd /Users/hashimoto/vscode/_project/draft_seeker/backend
-/Users/hashimoto/vscode/_project/draft_seeker/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+cd /Users/hashimoto/vscode/_project/DraftSeeker/backend
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Frontend:
+【要確認】venv を使用する場合:
 ```bash
-cd /Users/hashimoto/vscode/_project/draft_seeker/frontend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Frontend
+```bash
+cd /Users/hashimoto/vscode/_project/DraftSeeker/frontend
+npm install
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-## 依存関係
+## 設定
+- `backend/app/config.py`
+  - `DATA_DIR` / `TEMPLATES_ROOT` / `DATASETS_DIR`
+  - `SAM_CHECKPOINT`, `SAM_MODEL_TYPE`
+- 環境変数:
+  - `SAM_CHECKPOINT` があればそちらを優先
+  - `SAM_MODEL_TYPE` でモデル指定
 
-Backend (`backend/requirements.txt`):
-- fastapi / uvicorn / pydantic
-- opencv-python / numpy / pillow
-- torch / torchvision / segment-anything
+## ログ/デバッグ
+- Backend の標準出力に例外が出ます。
+- `/detect/point` の debug 情報は UI に表示可能。
+- ROI preview がずれる場合は座標変換を疑う。
 
-SAM チェックポイント:
-- `backend/app/config.py` の `SAM_CHECKPOINT`
-- または環境変数 `SAM_CHECKPOINT`
+## 検証手順
+1. `/templates` でテンプレ一覧が返る
+2. `/dataset/projects` で dataset 一覧が返る
+3. `/dataset/select` で `image_id` が得られる
+4. `/detect/point` で候補が返る
+5. `/annotations/save` で保存できる
+6. `/annotations/load` で読み込める
 
-## データ保存
+## トラブルシュート
+### CORS
+- 症状: ブラウザで CORS エラー
+- 原因: `allow_origins` の制限
+- 対処: `backend/app/main.py` の CORS 設定を確認
 
-- `data/datasets/<project_name>/images/`: 取り込み画像
-- `data/datasets/<project_name>/annotations/`: アノテ JSON
-- `data/datasets/<project_name>/meta.json`: 画像順序
-- `data/images/`: アノテ選択時にコピーされた `image_id`
-- `data/runs/`: 旧出力用
+### テンプレが読まれない
+- 症状: `/templates` が空
+- 原因: `data/templates` パス不一致
+- 対処: `data/templates/<project>/<class>/*.png` を確認
 
-掃除:
-- プロジェクト削除は `data/datasets/<project_name>/` を削除
-- `data/images/` は作業用なので適宜削除可
+### SAM が動かない
+- 症状: `/segment/candidate` がエラー
+- 原因: checkpoint 不在 or torch / segment-anything 未導入
+- 対処: `SAM_CHECKPOINT` を設定して再起動
 
-## Dataset 取り込みルール
+### /detect/point が 500
+- 症状: Pydantic の `int_from_float` エラー
+- 原因: `x/y` や `bbox` が float のまま int 型に入る
+- 対処: `schemas.py` の型を確認（現行は float）
 
-- 同名ファイルは上書き
-- 取り込み対象に存在しない画像は削除
-- 既存順序を保ち、新規ファイルは末尾追加
-- `internal_id` は詰め直さない（meta.json の順序を維持）
-
-## Export
-
-- 出力先は **絶対パスのみ** 許可
-- 同名フォルダが存在する場合は上書き（削除して再作成）
-- bbox dataset の label は小数点6桁固定
-- YOLO 1画像出力は `repr()` で出力（桁数は制限なし）
-
-## よくあるエラーと対処
-
-### CORS エラー
-- 原因: 127.0.0.1 / localhost の不一致
-- 対処: `backend/app/main.py` の `allow_origins` に両方を入れる
-
-### export 保存先が想定外
-- 原因: `output_dir` が相対パスだと弾かれる
-- 対処: 絶対パスのみ許可されるため、UIで絶対パスを指定
-
-### M1/M2 で SAM が重い / 遅い
-- 原因: MPS が無効、または CPU fallback
-- 対処: `torch.backends.mps.is_available()` を確認
-- 代替: SAM をオンデマンドのみにする
-
-### UI が重くなる
-- 原因: 大画像 + 多候補描画
-- 対処:
-  - ROI を小さくする
-  - scale_steps を下げる
-  - TopK を小さくする
-  - Canvas の描画負荷を下げる（ドラッグ中簡略化）
-
-## パフォーマンス観点
-
-- ROI が大きいほどテンプレ照合コストが増える
-- scale_steps を上げるほど検出が重くなる
-- detect/full はタイル数に比例して重い
-
-## 変更点が起きやすい場所
-
-- `backend/app/main.py`: ルーティング / 検出フロー / export
-- `backend/app/matching.py`: テンプレ精度に影響
-- `frontend/src/App.tsx`: UI 状態 / 画面レイアウト
-- `frontend/src/components/ImageCanvas.tsx`: 描画・操作
-
-## TODO (改善候補)
-
-- 写真系の前処理パイプライン追加
-- OCR / 注記除外の自動化
-- /export/yolo/download のパス整合
-- Dataset import の差分表示
+## よくある障害と切り分け
+- UI の描画が重い
+  - ROI を小さく、`scale_steps` を下げる
+- Export が失敗
+  - `output_dir` が絶対パスか確認
+- 画像が切り替わらない
+  - `/dataset/select` の `project_name` と `filename` を確認
