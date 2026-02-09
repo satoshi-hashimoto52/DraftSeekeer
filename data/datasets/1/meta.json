@@ -1,0 +1,23 @@
+{
+  "project_name": "1",
+  "images": [
+    {
+      "original_filename": "32_1.jpeg",
+      "filename": "32_1.jpeg",
+      "internal_id": "001",
+      "import_order": 1
+    },
+    {
+      "original_filename": "27.png",
+      "filename": "27.png",
+      "internal_id": "002",
+      "import_order": 2
+    },
+    {
+      "original_filename": "32.png",
+      "filename": "32.png",
+      "internal_id": "003",
+      "import_order": 3
+    }
+  ]
+}

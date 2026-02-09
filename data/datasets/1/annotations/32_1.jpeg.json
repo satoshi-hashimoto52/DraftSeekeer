@@ -1,0 +1,457 @@
+[
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 295.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:30:49.494Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 432.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:30:51.917Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 588.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:30:53.789Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 454.0,
+      "y": 304.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:31:17.352Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 1558.0,
+      "y": 304.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:33:13.940Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1976.0,
+      "y": 243.0,
+      "w": 86.0,
+      "h": 46.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:36:44.675Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1892.0,
+      "y": 888.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:36:55.257Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1451.0,
+      "y": 893.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:36:59.995Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 563.0,
+      "y": 890.0,
+      "w": 78.2003058103976,
+      "h": 41.946911579326525
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:43:32.492Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 711.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:43:42.952Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 984.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T04:43:46.953Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1393.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:26:33.770Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1581.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:27:26.163Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 1181.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:28:59.156Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 1337.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:02.318Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 831.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:07.223Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 636.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:11.966Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 428.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:13.190Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 166.0,
+      "y": 888.0,
+      "w": 79.20030581039757,
+      "h": 41.27927246533409
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:23.758Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 354.0,
+      "y": 889.0,
+      "w": 81.22354740061166,
+      "h": 40.268503511615336
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:26.376Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 258.0,
+      "y": 891.0,
+      "w": 80.68287461773701,
+      "h": 44.268503511615336
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:29.863Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 455.0,
+      "y": 891.0,
+      "w": 86.0,
+      "h": 44.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:29:56.392Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 665.0,
+      "y": 893.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:31:01.856Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1159.0,
+      "y": 893.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:31:27.083Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1031.0,
+      "y": 891.0,
+      "w": 86.0,
+      "h": 44.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:31:30.666Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 854.0,
+      "y": 893.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:31:38.354Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 771.0,
+      "y": 888.0,
+      "w": 65.0,
+      "h": 32.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:31:45.665Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 233.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:33:32.532Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "door_w",
+    "bbox": {
+      "x": 1013.0,
+      "y": 947.0,
+      "w": 36.0,
+      "h": 295.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:33:37.758Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1315.0,
+      "y": 891.0,
+      "w": 80.0,
+      "h": 44.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:33:48.181Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1082.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:37:05.916Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1185.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:37:17.420Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1289.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:37:32.549Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 1490.0,
+      "y": 244.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:37:33.709Z",
+    "segMethod": null
+  },
+  {
+    "class_name": "roof_fan",
+    "bbox": {
+      "x": 893.0,
+      "y": 243.0,
+      "w": 80.0,
+      "h": 36.0
+    },
+    "segPolygon": null,
+    "source": "template",
+    "created_at": "2026-02-09T06:38:28.278Z",
+    "segMethod": null
+  }
+]
