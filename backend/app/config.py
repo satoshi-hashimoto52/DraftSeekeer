@@ -5,7 +5,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
-TEMPLATES_ROOT = DATA_DIR / "templates_root"
+TEMPLATES_ROOT = DATA_DIR / "templates"
 IMAGES_DIR = DATA_DIR / "images"
 RUNS_DIR = DATA_DIR / "runs"
 DATASETS_DIR = DATA_DIR / "datasets"

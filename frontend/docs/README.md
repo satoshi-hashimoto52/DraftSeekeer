@@ -33,7 +33,7 @@
 - `candidates` / `selectedCandidateId`
 - `annotations` / `selectedAnnotationId`
 - `datasetId` / `datasetInfo` / `datasetSelectedName`
-- `project`（templates_root のプロジェクト）
+- `project`（templates のプロジェクト）
 - `colorMap`（projectごとに localStorage 永続化）
 - `segEditMode` / `segUndoStack` / `segSimplifyEps`
 - `showExportDrawer` / `exportResult` / `splitTrain` など

@@ -8,7 +8,7 @@
 ```
 [Frontend (React)]  <--HTTP-->  [Backend (FastAPI)]
         |                                |
-        |                                +-- data/templates_root
+        |                                +-- data/templates
         |                                +-- data/datasets
         |                                +-- data/images
         |                                +-- models (SAM)
@@ -16,8 +16,8 @@
 
 ## テンプレート構造
 
-- ルート: `data/templates_root`
-- 形式: `templates_root/<project>/<class>/*.png|jpg`
+- ルート: `data/templates`
+- 形式: `templates/<project>/<class>/*.png|jpg`
 - class_id は **クラス名昇順**で固定
 
 ## 検出モード
