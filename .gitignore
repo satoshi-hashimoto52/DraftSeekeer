@@ -1,0 +1,30 @@
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# Python related
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+bin
+include
+lib
+venv/
+env/
+backend/.venv/
+models/*.pth
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Local data
+/data/templates/*
+!data/templates/.gitkeep
+/data/datasets/*
+!data/datasets/.gitkeep
