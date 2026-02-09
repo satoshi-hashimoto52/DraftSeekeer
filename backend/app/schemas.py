@@ -19,14 +19,14 @@ class UploadResponse(BaseModel):
     image_id: str
     width: int
     height: int
-    filename: str | None = None
+    filename: Optional[str] = None
 
 
 class DetectPointRequest(BaseModel):
     image_id: str
     project: str
-    x: int
-    y: int
+    x: float
+    y: float
     roi_size: int = Field(..., gt=0)
     scale_min: float = Field(0.5, gt=0)
     scale_max: float = Field(1.5, gt=0)
@@ -38,7 +38,7 @@ class DetectPointRequest(BaseModel):
     confirmed_boxes: List[BBox] = Field(default_factory=list)
     exclude_same_class_only: bool = False
     refine_contour: bool = False
-    confirmed_annotations: List["ConfirmedAnnotation"] | None = None
+    confirmed_annotations: Optional[List["ConfirmedAnnotation"]] = None
     exclude_enabled: bool = True
     exclude_mode: str = Field("same_class", pattern="^(same_class|any_class)$")
     exclude_center: bool = True
@@ -46,10 +46,10 @@ class DetectPointRequest(BaseModel):
 
 
 class BBox(BaseModel):
-    x: int
-    y: int
-    w: int
-    h: int
+    x: float
+    y: float
+    w: float
+    h: float
 
 
 class DetectResult(BaseModel):
@@ -63,6 +63,27 @@ class DetectResult(BaseModel):
 
 class DetectPointResponse(BaseModel):
     results: List[DetectResult]
+    debug: Optional["DetectPointDebug"] = None
+
+
+class DetectPointDebug(BaseModel):
+    clicked_image_xy: Optional["DebugPoint"] = None
+    roi_click_xy: Optional["DebugPoint"] = None
+    roi_bbox: Optional[dict] = None
+    roi_preview_base64: Optional[str] = None
+    roi_preview_marked_base64: Optional[str] = None
+    roi_edge_preview_base64: Optional[str] = None
+    template_edge_preview_base64: Optional[str] = None
+    match_score: Optional[float] = None
+    match_offset_in_roi: Optional["DebugPoint"] = None
+    match_mode: Optional[str] = None
+    outer_bbox: Optional[dict] = None
+    tight_bbox: Optional[dict] = None
+
+
+class DebugPoint(BaseModel):
+    x: float
+    y: float
 
 
 class DetectFullRequest(BaseModel):
@@ -76,7 +97,7 @@ class DetectFullRequest(BaseModel):
     topk: int = Field(20, gt=0)
     confirmed_boxes: List[BBox] = Field(default_factory=list)
     exclude_same_class_only: bool = False
-    confirmed_annotations: List["ConfirmedAnnotation"] | None = None
+    confirmed_annotations: Optional[List["ConfirmedAnnotation"]] = None
     exclude_enabled: bool = True
     exclude_mode: str = Field("same_class", pattern="^(same_class|any_class)$")
     exclude_center: bool = True
@@ -106,7 +127,7 @@ class Point(BaseModel):
 class SegmentCandidateRequest(BaseModel):
     image_id: str
     bbox: BBox
-    click: Point | None = None
+    click: Optional[Point] = None
     expand: float = Field(0.2, ge=0)
     simplify_eps: float = Field(2.0, ge=0)
 
@@ -119,16 +140,16 @@ class SegmentMeta(BaseModel):
 
 class SegmentCandidateResponse(BaseModel):
     ok: bool
-    polygon: List[Point] | None = None
-    bbox: BBox | None = None
-    meta: SegmentMeta | None = None
-    error: str | None = None
+    polygon: Optional[List[Point]] = None
+    bbox: Optional[BBox] = None
+    meta: Optional[SegmentMeta] = None
+    error: Optional[str] = None
 
 
 class ExportAnnotation(BaseModel):
     class_name: str
     bbox: BBox
-    segPolygon: List[Point] | None = None
+    segPolygon: Optional[List[Point]] = None
 
 
 class ExportYoloRequest(BaseModel):
@@ -136,24 +157,24 @@ class ExportYoloRequest(BaseModel):
     image_id: str
     annotations: List[ExportAnnotation]
     output_dir: str
-    project_name: str | None = None
-    image_key: str | None = None
+    project_name: Optional[str] = None
+    image_key: Optional[str] = None
 
 
 class ExportYoloResponse(BaseModel):
     ok: bool
-    saved_path: str | None = None
-    text_preview: str | None = None
-    error: str | None = None
+    saved_path: Optional[str] = None
+    text_preview: Optional[str] = None
+    error: Optional[str] = None
 
 
 class AnnotationPayload(BaseModel):
     class_name: str
     bbox: BBox
-    segPolygon: List[Point] | None = None
-    source: str | None = None
-    created_at: str | None = None
-    segMethod: str | None = None
+    segPolygon: Optional[List[Point]] = None
+    source: Optional[str] = None
+    created_at: Optional[str] = None
+    segMethod: Optional[str] = None
 
 
 class SaveAnnotationsRequest(BaseModel):
@@ -180,10 +201,10 @@ class ExportDatasetBBoxRequest(BaseModel):
 
 class ExportDatasetBBoxResponse(BaseModel):
     ok: bool
-    output_dir: str | None = None
-    export_id: str | None = None
-    counts: dict | None = None
-    error: str | None = None
+    output_dir: Optional[str] = None
+    export_id: Optional[str] = None
+    counts: Optional[dict] = None
+    error: Optional[str] = None
 
 
 class ExportDatasetSegRequest(BaseModel):
@@ -198,10 +219,10 @@ class ExportDatasetSegRequest(BaseModel):
 
 class ExportDatasetSegResponse(BaseModel):
     ok: bool
-    output_dir: str | None = None
-    export_id: str | None = None
-    counts: dict | None = None
-    error: str | None = None
+    output_dir: Optional[str] = None
+    export_id: Optional[str] = None
+    counts: Optional[dict] = None
+    error: Optional[str] = None
 
 
 class DatasetImportResponse(BaseModel):
@@ -216,13 +237,13 @@ class DatasetInfo(BaseModel):
     annotated_images: int = 0
     bbox_count: int = 0
     seg_count: int = 0
-    updated_at: str | None = None
+    updated_at: Optional[str] = None
 
 
 class DatasetSelectRequest(BaseModel):
-    project_name: str | None = None
-    dataset_id: str | None = None
-    filename: str | None = None
+    project_name: Optional[str] = None
+    dataset_id: Optional[str] = None
+    filename: Optional[str] = None
 
 
 class ProjectCreateRequest(BaseModel):
@@ -231,6 +252,6 @@ class ProjectCreateRequest(BaseModel):
 
 class DatasetImageEntry(BaseModel):
     original_filename: str
-    filename: str | None = None
+    filename: Optional[str] = None
     internal_id: str
     import_order: int

@@ -23,7 +23,7 @@ export default function CandidateList({
       )}
       {candidates.map((c, idx) => (
         <div
-          key={c.id}
+          key={`${c.id || "candidate"}-${idx}`}
           style={{
             padding: "8px 10px",
             marginBottom: 8,

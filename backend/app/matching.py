@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -10,26 +10,58 @@ from .nms import BoxLike, compute_iou
 from .templates import TemplateImage
 
 
+def preprocess_edge(gray: np.ndarray) -> np.ndarray:
+    if gray is None or gray.size == 0:
+        return gray
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 50, 150)
+    kernel = np.ones((3, 3), np.uint8)
+    return cv2.dilate(edges, kernel, iterations=1)
+
+
+def preprocess_binary_inv(gray: np.ndarray) -> np.ndarray:
+    if gray is None or gray.size == 0:
+        return gray
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, bin_img = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    return bin_img
+
+
 @dataclass(frozen=True)
 class MatchResult:
     class_name: str
     template_name: str
     score: float
     scale: float
-    bbox: Tuple[int, int, int, int]  # x, y, w, h in original image coords
+    bbox: Tuple[int, int, int, int]  # tight bbox (x, y, w, h) in original image coords
+    outer_bbox: Tuple[int, int, int, int]  # template outer bbox in original image coords
+    tight_bbox: Tuple[int, int, int, int]  # same as bbox; kept for debug symmetry
+    mode: str  # "edge" or "bin"
 
 
-def _clip_roi(x: int, y: int, roi_size: int, width: int, height: int) -> Tuple[int, int, int, int]:
-    half = roi_size // 2
-    x0 = max(0, x - half)
-    y0 = max(0, y - half)
-    x1 = min(width, x + half)
-    y1 = min(height, y + half)
+def _clip_roi(
+    x: float, y: float, roi_size: int, width: int, height: int
+) -> Tuple[int, int, int, int]:
+    half = roi_size / 2.0
+    x0 = int(round(x - half))
+    y0 = int(round(y - half))
+    x1 = int(round(x + half))
+    y1 = int(round(y + half))
+    x0 = max(0, x0)
+    y0 = max(0, y0)
+    x1 = min(width, x1)
+    y1 = min(height, y1)
     if x1 <= x0:
         x1 = min(width, x0 + 1)
     if y1 <= y0:
         y1 = min(height, y0 + 1)
     return x0, y0, x1, y1
+
+
+def clip_roi(
+    x: float, y: float, roi_size: int, width: int, height: int
+) -> Tuple[int, int, int, int]:
+    return _clip_roi(x, y, roi_size, width, height)
 
 
 def _iter_scaled_templates(
@@ -54,8 +86,8 @@ def _iter_scaled_templates(
 
 def match_templates(
     image_bgr: np.ndarray,
-    x: int,
-    y: int,
+    x: float,
+    y: float,
     roi_size: int,
     templates: Dict[str, List[TemplateImage]],
     scale_min: float,
@@ -68,31 +100,88 @@ def match_templates(
     height, width = image_gray.shape[:2]
     x0, y0, x1, y1 = _clip_roi(x, y, roi_size, width, height)
     roi = image_gray[y0:y1, x0:x1]
+    if roi.size == 0:
+        return []
+    roi_edge = preprocess_edge(roi)
+    roi_bin = preprocess_binary_inv(roi)
+    roi_proc = roi_edge
 
     results: List[MatchResult] = []
 
     for class_name, template_list in templates.items():
         for tpl in template_list:
             for scale, scaled in _iter_scaled_templates(
-                tpl.image_gray, scale_min, scale_max, scale_steps
+                tpl.image_proc_edge, scale_min, scale_max, scale_steps
             ):
                 th, tw = scaled.shape[:2]
-                if th > roi.shape[0] or tw > roi.shape[1]:
+                if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
                     continue
-                res = cv2.matchTemplate(roi, scaled, cv2.TM_CCOEFF_NORMED)
+                if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                    continue
+                res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
                 _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
-                bx = x0 + max_loc[0]
-                by = y0 + max_loc[1]
+                tight_x = x0 + max_loc[0]
+                tight_y = y0 + max_loc[1]
+                tx, ty, tw_tight, th_tight = tpl.tight_bbox
+                outer_x = int(round(tight_x - (tx * scale)))
+                outer_y = int(round(tight_y - (ty * scale)))
+                outer_w = int(round(tpl.outer_bbox[2] * scale))
+                outer_h = int(round(tpl.outer_bbox[3] * scale))
+                tight_w = max(1, int(round(tw_tight * scale)))
+                tight_h = max(1, int(round(th_tight * scale)))
                 results.append(
                     MatchResult(
                         class_name=class_name,
                         template_name=tpl.template_name,
                         score=float(max_val),
                         scale=scale,
-                        bbox=(bx, by, tw, th),
+                        bbox=(tight_x, tight_y, tight_w, tight_h),
+                        outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                        tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                        mode="edge",
                     )
                 )
 
+    results.sort(key=lambda r: r.score, reverse=True)
+    if results:
+        return results
+
+    # fallback to binary-inverted matching if edge matching yields nothing
+    roi_proc = roi_bin
+    results = []
+    for class_name, template_list in templates.items():
+        for tpl in template_list:
+            for scale, scaled in _iter_scaled_templates(
+                tpl.image_proc_bin, scale_min, scale_max, scale_steps
+            ):
+                th, tw = scaled.shape[:2]
+                if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
+                    continue
+                if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                    continue
+                res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
+                _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+                tight_x = x0 + max_loc[0]
+                tight_y = y0 + max_loc[1]
+                tx, ty, tw_tight, th_tight = tpl.tight_bbox
+                outer_x = int(round(tight_x - (tx * scale)))
+                outer_y = int(round(tight_y - (ty * scale)))
+                outer_w = int(round(tpl.outer_bbox[2] * scale))
+                outer_h = int(round(tpl.outer_bbox[3] * scale))
+                tight_w = max(1, int(round(tw_tight * scale)))
+                tight_h = max(1, int(round(th_tight * scale)))
+                results.append(
+                    MatchResult(
+                        class_name=class_name,
+                        template_name=tpl.template_name,
+                        score=float(max_val),
+                        scale=scale,
+                        bbox=(tight_x, tight_y, tight_w, tight_h),
+                        outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                        tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                        mode="bin",
+                    )
+                )
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 
@@ -100,7 +189,7 @@ def match_templates(
 def refine_match_bboxes(
     image_gray: np.ndarray,
     matches: List[MatchResult],
-    click_xy: Tuple[int, int] | None = None,
+    click_xy: Optional[Tuple[float, float]] = None,
     pad: int = 12,
 ) -> List[MatchResult]:
     if image_gray is None or not matches:
@@ -192,6 +281,9 @@ def refine_match_bboxes(
                 score=match.score,
                 scale=match.scale,
                 bbox=new_bbox,
+                outer_bbox=match.outer_bbox,
+                tight_bbox=new_bbox,
+                mode=match.mode,
             )
         )
     return refined
@@ -202,7 +294,7 @@ def apply_vertical_padding(
     image_height: int,
     default_top: int = 2,
     default_bottom: int = 3,
-    class_pad_map: Dict[str, Dict[str, int]] | None = None,
+    class_pad_map: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> List[MatchResult]:
     if not matches or image_height <= 0:
         return matches
@@ -224,6 +316,9 @@ def apply_vertical_padding(
                 score=match.score,
                 scale=match.scale,
                 bbox=(bx, new_y, bw, new_h),
+                outer_bbox=match.outer_bbox,
+                tight_bbox=match.tight_bbox,
+                mode=match.mode,
             )
         )
     return adjusted

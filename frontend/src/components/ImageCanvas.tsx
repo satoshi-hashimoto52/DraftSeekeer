@@ -26,6 +26,22 @@ type Props = {
   onResizeSelectedAnnotation: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onSelectAnnotation: (annotation: Annotation) => void;
   shouldIgnoreCanvasClick?: () => boolean;
+  onAnnotationEditStart?: () => void;
+  onAnnotationEditEnd?: () => void;
+  pendingManualBBox?: { x: number; y: number; w: number; h: number } | null;
+  onDebugCoords?: (info: {
+    screen: { x: number; y: number };
+    image: { x: number; y: number };
+    zoom: number;
+    pan: { x: number; y: number };
+    dpr: number;
+  }) => void;
+  debugOverlay?: {
+    clicked_image_xy?: { x: number; y: number };
+    roi_bbox?: { x1: number; y1: number; x2: number; y2: number };
+    outer_bbox?: { x: number; y: number; w: number; h: number };
+    tight_bbox?: { x: number; y: number; w: number; h: number };
+  } | null;
 };
 
 export type ImageCanvasHandle = {
@@ -57,6 +73,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onResizeSelectedAnnotation,
   onSelectAnnotation,
   shouldIgnoreCanvasClick,
+  onAnnotationEditStart,
+  onAnnotationEditEnd,
+  pendingManualBBox,
+  onDebugCoords,
+  debugOverlay,
 }: Props,
   ref
 ) {
@@ -73,6 +94,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     active: false,
     vertexIndex: null,
   });
+  const clickTrackRef = useRef<{ active: boolean; start: { x: number; y: number } | null; moved: boolean }>({
+    active: false,
+    start: null,
+    moved: false,
+  });
+  const spaceDoubleClickRef = useRef<number | null>(null);
   const manualDragRef = useRef<{
     active: boolean;
     start: { x: number; y: number } | null;
@@ -101,6 +128,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   const [manualPreview, setManualPreview] = useState<{
     start: { x: number; y: number };
     current: { x: number; y: number };
+  } | null>(null);
+  const [debugPoints, setDebugPoints] = useState<{
+    screen: { x: number; y: number };
+    image: { x: number; y: number };
   } | null>(null);
 
   useEffect(() => {
@@ -135,14 +166,29 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     setScale(1);
   }, [imageUrl]);
 
+  const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
+  const getCssScale = () => {
+    const canvas = canvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img) return { sx: 1, sy: 1 };
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return { sx: 1, sy: 1 };
+    return { sx: rect.width / img.width, sy: rect.height / img.height };
+  };
+
   useImperativeHandle(ref, () => ({
     panTo: (x: number, y: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const offsetX = Math.round(canvas.width / 2 - x * scaleRef.current);
-      const offsetY = Math.round(canvas.height / 2 - y * scaleRef.current);
-      panRef.current = { x: offsetX, y: offsetY };
-      setPanOffset({ x: offsetX, y: offsetY });
+      const img = imgRef.current;
+      if (!img) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const { sx, sy } = getCssScale();
+      const panX = rect.width / (2 * sx * scaleRef.current) - x;
+      const panY = rect.height / (2 * sy * scaleRef.current) - y;
+      panRef.current = { x: panX, y: panY };
+      setPanOffset({ x: panX, y: panY });
     },
   }));
 
@@ -154,15 +200,23 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       imgRef.current = img;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      canvas.width = img.width;
-      canvas.height = img.height;
+      const dpr = getDpr();
+      canvas.width = Math.max(1, Math.round(img.width * dpr));
+      canvas.height = Math.max(1, Math.round(img.height * dpr));
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = "#d0d0d0";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(scale, 0, 0, scale, panOffset.x, panOffset.y);
+      ctx.setTransform(
+        dpr * scale,
+        0,
+        0,
+        dpr * scale,
+        dpr * scale * panOffset.x,
+        dpr * scale * panOffset.y
+      );
       ctx.drawImage(img, 0, 0);
 
       const isDragging = draggingRef.current;
@@ -231,20 +285,20 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         alpha: number,
         fillAlpha = 0
       ) => {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.setLineDash(dashed ? [6, 4] : []);
-    if (fillAlpha > 0) {
-      ctx.globalAlpha = fillAlpha;
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, w, h);
-      ctx.globalAlpha = alpha;
-    }
-    ctx.strokeRect(x, y, w, h);
-    ctx.restore();
-  };
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.setLineDash(dashed ? [6, 4] : []);
+        if (fillAlpha > 0) {
+          ctx.globalAlpha = fillAlpha;
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, w, h);
+          ctx.globalAlpha = alpha;
+        }
+        ctx.strokeRect(x, y, w, h);
+        ctx.restore();
+      };
 
       const drawCornerMarkers = (
         bbox: { x: number; y: number; w: number; h: number },
@@ -325,6 +379,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             isSelected ? 0.95 : 0.6
           );
         }
+        const isManual = c.source === "manual";
         const labelText = c.class_name || (isManual ? "manual" : "");
         if (!isDragging && labelText) {
           drawLabel(c.bbox.x, c.bbox.y, labelText, color, isSelected ? 0.95 : 0.6);
@@ -404,6 +459,70 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.fillRect(left, top, w, h);
         ctx.restore();
       }
+
+      if (debugOverlay) {
+        const drawDebugPoint = (pt: { x: number; y: number }, color: string) => {
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(1, baseLine * 1.4);
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, Math.max(3, baseLine * 2.2), 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        };
+        if (debugOverlay.roi_bbox) {
+          const { x1, y1, x2, y2 } = debugOverlay.roi_bbox;
+          drawBox(x1, y1, x2 - x1, y2 - y1, "#00bfa5", baseLine * 1.6, true, 0.9, 0);
+        }
+        if (debugOverlay.outer_bbox) {
+          const b = debugOverlay.outer_bbox;
+          drawBox(b.x, b.y, b.w, b.h, "#ffb300", baseLine * 1.4, true, 0.9, 0);
+        }
+        if (debugOverlay.tight_bbox) {
+          const b = debugOverlay.tight_bbox;
+          drawBox(b.x, b.y, b.w, b.h, "#2962ff", baseLine * 1.8, false, 0.95, 0);
+        }
+        if (debugOverlay.clicked_image_xy) {
+          drawDebugPoint(debugOverlay.clicked_image_xy, "#d81b60");
+        }
+      }
+      if (debugPoints) {
+        const dpr = getDpr();
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.strokeStyle = "#ff1744";
+        ctx.lineWidth = Math.max(1, baseLine * 1.4);
+        const sx = debugPoints.screen.x * dpr;
+        const sy = debugPoints.screen.y * dpr;
+        ctx.beginPath();
+        ctx.moveTo(sx - 8 * dpr, sy);
+        ctx.lineTo(sx + 8 * dpr, sy);
+        ctx.moveTo(sx, sy - 8 * dpr);
+        ctx.lineTo(sx, sy + 8 * dpr);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        ctx.setTransform(
+          dpr * scale,
+          0,
+          0,
+          dpr * scale,
+          dpr * scale * panOffset.x,
+          dpr * scale * panOffset.y
+        );
+        ctx.strokeStyle = "#1e88e5";
+        ctx.lineWidth = Math.max(1, baseLine * 1.6);
+        const ix = debugPoints.image.x;
+        const iy = debugPoints.image.y;
+        ctx.beginPath();
+        ctx.moveTo(ix - 6, iy);
+        ctx.lineTo(ix + 6, iy);
+        ctx.moveTo(ix, iy - 6);
+        ctx.lineTo(ix, iy + 6);
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     };
     img.src = imageUrl;
@@ -423,6 +542,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     selectedVertexIndex,
     manualPreview,
     scale,
+    debugOverlay,
+    debugPoints,
   ]);
 
   const schedulePanZoomUpdate = () => {
@@ -440,17 +561,26 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     });
   };
 
-  const getImageCoords = (event: React.MouseEvent<HTMLCanvasElement>) => {
+  const getScreenCoords = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const rawX = (event.clientX - rect.left) * scaleX;
-    const rawY = (event.clientY - rect.top) * scaleY;
-    const x = Math.round((rawX - panRef.current.x) / scaleRef.current);
-    const y = Math.round((rawY - panRef.current.y) / scaleRef.current);
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
     return { x, y };
+  };
+
+  const screenToImage = (screen: { x: number; y: number }) => {
+    const { sx, sy } = getCssScale();
+    const imageX = screen.x / (sx * scaleRef.current) - panRef.current.x;
+    const imageY = screen.y / (sy * scaleRef.current) - panRef.current.y;
+    return { x: imageX, y: imageY };
+  };
+
+  const getImageCoords = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const screen = getScreenCoords(event);
+    if (!screen) return null;
+    return screenToImage(screen);
   };
 
   const findVertexIndex = (x: number, y: number) => {
@@ -537,6 +667,15 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (event.button === 0 && !event.shiftKey && !spacePressedRef.current) {
+      clickTrackRef.current = {
+        active: true,
+        start: { x: event.clientX, y: event.clientY },
+        moved: false,
+      };
+    } else {
+      clickTrackRef.current = { active: false, start: null, moved: false };
+    }
     if (event.button === 1 || spacePressedRef.current) {
       const coords = getImageCoords(event);
       if (!coords) return;
@@ -659,12 +798,20 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (clickTrackRef.current.active && clickTrackRef.current.start) {
+      const dx = event.clientX - clickTrackRef.current.start.x;
+      const dy = event.clientY - clickTrackRef.current.start.y;
+      if (dx * dx + dy * dy > 9) {
+        clickTrackRef.current.moved = true;
+      }
+    }
     if (panDragRef.current.active && panDragRef.current.start && panDragRef.current.origin) {
-      const dx = (event.clientX - panDragRef.current.start.x) * 1.5;
-      const dy = (event.clientY - panDragRef.current.start.y) * 1.5;
+      const { sx, sy } = getCssScale();
+      const dx = (event.clientX - panDragRef.current.start.x) / (sx * scaleRef.current);
+      const dy = (event.clientY - panDragRef.current.start.y) / (sy * scaleRef.current);
       const next = {
-        x: Math.round(panDragRef.current.origin.x + dx),
-        y: Math.round(panDragRef.current.origin.y + dy),
+        x: panDragRef.current.origin.x + dx,
+        y: panDragRef.current.origin.y + dy,
       };
       panRef.current = next;
       pendingPanRef.current = next;
@@ -721,7 +868,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const coords = getImageCoords(event);
       if (!coords || !manualDragRef.current.start) return;
       manualDragRef.current.current = coords;
-      setManualPreview({ start: manualDragRef.current.start, current: coords });
+      setManualPreview({
+        start: manualDragRef.current.start,
+        current: coords,
+      });
       draggingRef.current = true;
       return;
     }
@@ -734,23 +884,26 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     onUpdateEditablePolygon(next);
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (event?: React.MouseEvent<HTMLCanvasElement>) => {
     if (panDragRef.current.active) {
       panDragRef.current = { active: false, start: null, origin: null };
       suppressNextClickRef.current = true;
       draggingRef.current = false;
+      clickTrackRef.current = { active: false, start: null, moved: false };
       return;
     }
     if (moveDragRef.current.active) {
       moveDragRef.current = { active: false, origin: null, start: null, target: null };
       suppressNextClickRef.current = true;
       draggingRef.current = false;
+      clickTrackRef.current = { active: false, start: null, moved: false };
       return;
     }
     if (resizeDragRef.current.active) {
       resizeDragRef.current = { active: false, handle: null, origin: null };
       suppressNextClickRef.current = true;
       draggingRef.current = false;
+      clickTrackRef.current = { active: false, start: null, moved: false };
       return;
     }
     if (manualDragRef.current.active && manualDragRef.current.start && manualDragRef.current.current) {
@@ -763,32 +916,52 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       manualDragRef.current = { active: false, start: null, current: null };
       setManualPreview(null);
       if (w >= 2 && h >= 2) {
-        onCreateManualBBox({ x: left, y: top, w, h });
+        onCreateManualBBox({
+          x: Math.round(left),
+          y: Math.round(top),
+          w: Math.round(w),
+          h: Math.round(h),
+        });
         suppressNextClickRef.current = true;
       }
       onManualCreateStateChange(false);
       draggingRef.current = false;
+      clickTrackRef.current = { active: false, start: null, moved: false };
       return;
     }
     if (dragRef.current.active) {
       dragRef.current = { active: false, vertexIndex: null };
       draggingRef.current = false;
     }
-  };
-
-  const handleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!clickTrackRef.current.active) return;
+    if (!event) {
+      clickTrackRef.current = { active: false, start: null, moved: false };
+      return;
+    }
+    const moved = clickTrackRef.current.moved;
+    clickTrackRef.current = { active: false, start: null, moved: false };
+    if (moved) return;
     if (suppressNextClickRef.current) {
       suppressNextClickRef.current = false;
       return;
     }
-    if (shouldIgnoreCanvasClick && shouldIgnoreCanvasClick()) {
+    if (shouldIgnoreCanvasClick && shouldIgnoreCanvasClick()) return;
+    if (panDragRef.current.active || spacePressedRef.current) {
       return;
     }
-    if (panDragRef.current.active || spacePressedRef.current) return;
     if (manualDragRef.current.active) return;
     if (editMode) return;
-    const coords = getImageCoords(event);
-    if (!coords) return;
+    const screen = getScreenCoords(event);
+    if (!screen) return;
+    const coords = screenToImage(screen);
+    setDebugPoints({ screen, image: coords });
+    onDebugCoords?.({
+      screen,
+      image: coords,
+      zoom: scaleRef.current,
+      pan: { ...panRef.current },
+      dpr: getDpr(),
+    });
     if (annotations.length > 0) {
       const hit = annotations
         .filter(
@@ -805,6 +978,15 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       }
     }
     onClickPoint(coords.x, coords.y);
+  };
+
+  const handleDoubleClick = () => {
+    if (!spacePressedRef.current) return;
+    panRef.current = { x: 0, y: 0 };
+    setPanOffset({ x: 0, y: 0 });
+    scaleRef.current = 1;
+    setScale(1);
+    spaceDoubleClickRef.current = null;
   };
 
   const handleMouseDownCapture = (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -827,19 +1009,18 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       }
       event.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const cursorX = (event.clientX - rect.left) * scaleX;
-      const cursorY = (event.clientY - rect.top) * scaleY;
-      const imgX = (cursorX - panRef.current.x) / scaleRef.current;
-      const imgY = (cursorY - panRef.current.y) / scaleRef.current;
+      const cursorX = event.clientX - rect.left;
+      const cursorY = event.clientY - rect.top;
+      const { sx, sy } = getCssScale();
+      const imgX = cursorX / (sx * scaleRef.current) - panRef.current.x;
+      const imgY = cursorY / (sy * scaleRef.current) - panRef.current.y;
       const delta = event.deltaY > 0 ? -0.2 : 0.2;
       const nextScale = Math.min(5, Math.max(0.2, scaleRef.current + delta));
       scaleRef.current = nextScale;
       pendingScaleRef.current = nextScale;
       const nextPan = {
-        x: Math.round(cursorX - imgX * nextScale),
-        y: Math.round(cursorY - imgY * nextScale),
+        x: cursorX / (sx * nextScale) - imgX,
+        y: cursorY / (sy * nextScale) - imgY,
       };
       panRef.current = nextPan;
       pendingPanRef.current = nextPan;
@@ -855,11 +1036,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     <div style={{ width: "100%" }}>
       <canvas
         ref={canvasRef}
-        onClick={imageUrl ? handleClick : undefined}
         onMouseDown={imageUrl ? handleMouseDown : undefined}
         onMouseDownCapture={imageUrl ? handleMouseDownCapture : undefined}
         onMouseMove={imageUrl ? handleMouseMove : undefined}
         onMouseUp={imageUrl ? handleMouseUp : undefined}
+        onDoubleClick={imageUrl ? handleDoubleClick : undefined}
         onMouseLeave={(event) => {
           if (imageUrl) handleMouseUp();
           setCursorStyle(imageUrl ? "crosshair" : "default");

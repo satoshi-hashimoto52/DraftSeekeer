@@ -5,6 +5,7 @@ import {
   Candidate,
   DatasetInfo,
   DatasetImageEntry,
+  DetectPointResponse,
   ProjectTemplates,
   detectPoint,
   fetchProjects,
@@ -59,6 +60,7 @@ export default function App() {
   const [excludeIouThreshold, setExcludeIouThreshold] = useState<number>(0.6);
   const [showExportDrawer, setShowExportDrawer] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [showDebug, setShowDebug] = useState<boolean>(false);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
   const [showSplitSettings, setShowSplitSettings] = useState<boolean>(false);
@@ -104,6 +106,7 @@ export default function App() {
   const [showAnnotations, setShowAnnotations] = useState<boolean>(true);
   const canvasRef = useRef<ImageCanvasHandle | null>(null);
   const [lastClick, setLastClick] = useState<{ x: number; y: number } | null>(null);
+  const [detectDebug, setDetectDebug] = useState<DetectPointResponse["debug"] | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
   const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null);
@@ -123,6 +126,14 @@ export default function App() {
   const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
   const [lastImportPath, setLastImportPath] = useState<string | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const [coordDebug, setCoordDebug] = useState<{
+    screen: { x: number; y: number };
+    image: { x: number; y: number };
+    zoom: number;
+    pan: { x: number; y: number };
+    dpr: number;
+  } | null>(null);
+  const asChildren = (nodes: React.ReactNode[]) => React.Children.toArray(nodes);
 
   const dismissHints = () => {
     setShowHints(false);
@@ -608,6 +619,9 @@ export default function App() {
     }
   };
 
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, value));
+
   const handleClickPoint = async (x: number, y: number) => {
     if (isCreatingManualBBox) return;
     if (manualClassMissing) return;
@@ -615,13 +629,19 @@ export default function App() {
     setError(null);
     setNotice(null);
     setBusy(true);
-    setLastClick({ x, y });
+    let sendX = x;
+    let sendY = y;
+    if (imageSize) {
+      sendX = clamp(x, 0, imageSize.w - 1);
+      sendY = clamp(y, 0, imageSize.h - 1);
+    }
+    setLastClick({ x: sendX, y: sendY });
     try {
       const res = await detectPoint({
         image_id: imageId,
         project,
-        x,
-        y,
+        x: sendX,
+        y: sendY,
         roi_size: roiSize,
         scale_min: scaleMin,
         scale_max: scaleMax,
@@ -643,6 +663,7 @@ export default function App() {
         exclude_center: excludeCenter,
         exclude_iou_threshold: excludeIouThreshold,
       });
+      setDetectDebug(res.debug || null);
       const nextCandidates = toCandidates(res);
       setCandidates(nextCandidates);
       setSelectedCandidateId(nextCandidates.length > 0 ? nextCandidates[0].id : null);
@@ -657,6 +678,7 @@ export default function App() {
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Detect failed");
+      setDetectDebug(null);
     } finally {
       setBusy(false);
     }
@@ -1229,12 +1251,18 @@ export default function App() {
                 onChange={(e) => setProject(e.target.value)}
                 style={{ minWidth: 120, height: 22, fontSize: 11 }}
               >
-                {projects.length === 0 && <option value="">(none)</option>}
-                {projects.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
+                {projects.length === 0 && (
+                  <option key="project-none" value="">
+                    (none)
                   </option>
-                ))}
+                )}
+                {asChildren(
+                  projects.map((p, idx) => (
+                    <option key={`${p}-${idx}`} value={p}>
+                      {p}
+                    </option>
+                  ))
+                )}
               </select>
             </label>
             <label
@@ -1504,59 +1532,65 @@ export default function App() {
                 </div>
                 {exportDirHistory.length > 0 && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {exportDirHistory.map((dir) => (
-                      <button
-                        key={dir}
-                        type="button"
-                        onClick={() => setExportOutputDir(dir)}
-                        style={{
-                          padding: "4px 8px",
-                          borderRadius: 999,
-                          border: "1px solid #e0e0e0",
-                          background: "#f7f7f7",
-                          fontSize: 11,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {dir}
-                      </button>
-                    ))}
+                    {asChildren(
+                      exportDirHistory.map((dir, idx) => (
+                        <button
+                          key={`${dir}-${idx}`}
+                          type="button"
+                          onClick={() => setExportOutputDir(dir)}
+                          style={{
+                            padding: "4px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #e0e0e0",
+                            background: "#f7f7f7",
+                            fontSize: 11,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {dir}
+                        </button>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
 
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Validation & Warnings</div>
-                {exportErrors.map((msg) => (
-                  <div
-                    key={msg}
-                    style={{
-                      padding: "6px 8px",
-                      borderRadius: 6,
-                      background: "#ffebee",
-                      color: "#b00020",
-                      fontSize: 12,
-                      marginBottom: 6,
-                    }}
-                  >
-                    {msg}
-                  </div>
-                ))}
-                {exportWarnings.map((w) => (
-                  <div
-                    key={w.text}
-                    style={{
-                      padding: "6px 8px",
-                      borderRadius: 6,
-                      background: w.level === "orange" ? "#fff3e0" : "#fffde7",
-                      color: w.level === "orange" ? "#ef6c00" : "#9e7b00",
-                      fontSize: 12,
-                      marginBottom: 6,
-                    }}
-                  >
-                    {w.text}
-                  </div>
-                ))}
+                {asChildren(
+                  exportErrors.map((msg, idx) => (
+                    <div
+                      key={`${msg}-${idx}`}
+                      style={{
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        background: "#ffebee",
+                        color: "#b00020",
+                        fontSize: 12,
+                        marginBottom: 6,
+                      }}
+                    >
+                      {msg}
+                    </div>
+                  ))
+                )}
+                {asChildren(
+                  exportWarnings.map((w, idx) => (
+                    <div
+                      key={`${w.text}-${idx}`}
+                      style={{
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        background: w.level === "orange" ? "#fff3e0" : "#fffde7",
+                        color: w.level === "orange" ? "#ef6c00" : "#9e7b00",
+                        fontSize: 12,
+                        marginBottom: 6,
+                      }}
+                    >
+                      {w.text}
+                    </div>
+                  ))
+                )}
                 {exportErrors.length === 0 && exportWarnings.length === 0 && (
                   <div style={{ fontSize: 12, color: "#666" }}>問題は検出されていません。</div>
                 )}
@@ -1703,7 +1737,7 @@ export default function App() {
             )}
             {datasetInfo && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {datasetInfo.images.map((entry: DatasetImageEntry, idx: number) => {
+                {asChildren(datasetInfo.images.map((entry: DatasetImageEntry, idx: number) => {
                   const name = entry.original_filename || entry.filename || "";
                   const indexLabel = entry.internal_id || "000";
                   if (!name) {
@@ -1714,7 +1748,7 @@ export default function App() {
                   const isActive = datasetSelectedName === name;
                   return (
                     <div
-                      key={name || `${entry.internal_id}-${idx}`}
+                      key={`${name || entry.internal_id || "image"}-${idx}`}
                       onClick={() => handleSelectDatasetImage(name)}
                       style={{
                         display: "grid",
@@ -1769,7 +1803,7 @@ export default function App() {
                       </div>
                     </div>
                   );
-                })}
+                }))}
               </div>
             )}
           </div>
@@ -1867,6 +1901,8 @@ export default function App() {
                 onSelectAnnotation={handleSelectAnnotation}
                 pendingManualBBox={pendingManualBBox}
                 shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
+                onDebugCoords={setCoordDebug}
+                debugOverlay={showDebug ? detectDebug || null : null}
               />
             </div>
             {notice && (
@@ -1914,12 +1950,12 @@ export default function App() {
               />
               <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
             </label>
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <button
                 type="button"
                 onClick={() => setShowAdvanced((prev) => !prev)}
                 style={{
-                  width: "100%",
+                  flex: 1,
                   height: 32,
                   borderRadius: 8,
                   border: "1px solid #e3e3e3",
@@ -1929,6 +1965,21 @@ export default function App() {
                 }}
               >
                 Advanced settings
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDebug((prev) => !prev)}
+                style={{
+                  width: 80,
+                  height: 32,
+                  borderRadius: 8,
+                  border: "1px solid #e3e3e3",
+                  background: showDebug ? "#f1f8ff" : "#fff",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Debug
               </button>
             </div>
             {showAdvanced && (
@@ -2046,6 +2097,116 @@ export default function App() {
                 </label>
               </div>
             )}
+            {showDebug && detectDebug && (
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
+                {detectDebug.clicked_image_xy && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                    click: {detectDebug.clicked_image_xy.x.toFixed(2)} ,{" "}
+                    {detectDebug.clicked_image_xy.y.toFixed(2)}
+                  </div>
+                )}
+                {detectDebug.roi_bbox && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                    roi: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) → (
+                    {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
+                  </div>
+                )}
+                {detectDebug.outer_bbox && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                    outer: {detectDebug.outer_bbox.x}, {detectDebug.outer_bbox.y},{" "}
+                    {detectDebug.outer_bbox.w}×{detectDebug.outer_bbox.h}
+                  </div>
+                )}
+                {detectDebug.tight_bbox && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                    tight: {detectDebug.tight_bbox.x}, {detectDebug.tight_bbox.y},{" "}
+                    {detectDebug.tight_bbox.w}×{detectDebug.tight_bbox.h}
+                  </div>
+                )}
+                {detectDebug.roi_click_xy && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                    roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
+                  </div>
+                )}
+                {detectDebug.match_score !== undefined && detectDebug.match_offset_in_roi && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                    match score: {detectDebug.match_score.toFixed(4)} / offset:{" "}
+                    {detectDebug.match_offset_in_roi.x.toFixed(1)}, {detectDebug.match_offset_in_roi.y.toFixed(1)}
+                  </div>
+                )}
+                {detectDebug.match_mode && (
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                    match mode: {detectDebug.match_mode}
+                  </div>
+                )}
+                {(detectDebug.roi_preview_marked_base64 || detectDebug.roi_preview_base64) && (
+                  <img
+                    src={`data:image/png;base64,${
+                      detectDebug.roi_preview_marked_base64 ||
+                      detectDebug.roi_preview_base64 ||
+                      ""
+                    }`}
+                    alt="roi preview"
+                    style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
+                  />
+                )}
+                {detectDebug.roi_match_preview_base64 && (
+                  <img
+                    src={`data:image/png;base64,${detectDebug.roi_match_preview_base64}`}
+                    alt="roi match"
+                    style={{
+                      width: "100%",
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 4,
+                      marginTop: 6,
+                    }}
+                  />
+                )}
+                {detectDebug.roi_edge_preview_base64 && (
+                  <img
+                    src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
+                    alt="roi edges"
+                    style={{
+                      width: "100%",
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 4,
+                      marginTop: 6,
+                    }}
+                  />
+                )}
+                {detectDebug.template_edge_preview_base64 && (
+                  <img
+                    src={`data:image/png;base64,${detectDebug.template_edge_preview_base64}`}
+                    alt="template edges"
+                    style={{
+                      width: "100%",
+                      border: "1px solid #e3e3e3",
+                      borderRadius: 4,
+                      marginTop: 6,
+                    }}
+                  />
+                )}
+              </div>
+            )}
+            {showDebug && coordDebug && (
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                  screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
+                </div>
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                  image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
+                </div>
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                  zoom: {coordDebug.zoom.toFixed(3)}
+                </div>
+                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                  pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
+                </div>
+                <div style={{ fontSize: 11, color: "#666" }}>dpr: {coordDebug.dpr.toFixed(2)}</div>
+              </div>
+            )}
           </div>
             {pendingManualBBox && (
               <div
@@ -2088,12 +2249,16 @@ export default function App() {
                     }}
                     style={{ minWidth: 200, height: 36 }}
                   >
-                    <option value="">クラスを選択</option>
-                    {classOptions.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
+                    <option key="class-none" value="">
+                      クラスを選択
+                    </option>
+                    {asChildren(
+                      classOptions.map((name, idx) => (
+                        <option key={`${name}-${idx}`} value={name}>
+                          {name}
+                        </option>
+                      ))
+                    )}
                   </select>
                   <button
                     type="button"
@@ -2266,34 +2431,36 @@ export default function App() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {Object.entries(colorMap).map(([name, color]) => {
-                    const hexColor = normalizeToHex(color);
-                    return (
-                      <label
-                        key={name}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "4px 6px",
-                          border: "1px solid #e3e3e3",
-                          borderRadius: 999,
-                          background: "#fff",
-                          fontSize: 11,
-                        }}
-                      >
-                        <input
-                          type="color"
-                          value={hexColor}
-                          onChange={(e) =>
-                            setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                          }
-                          style={{ width: 20, height: 20, padding: 0, border: "none" }}
-                        />
-                        <span>{name}</span>
-                      </label>
-                    );
-                  })}
+                  {asChildren(
+                    Object.entries(colorMap).map(([name, color], idx) => {
+                      const hexColor = normalizeToHex(color);
+                      return (
+                        <label
+                          key={`${name}-${idx}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "4px 6px",
+                            border: "1px solid #e3e3e3",
+                            borderRadius: 999,
+                            background: "#fff",
+                            fontSize: 11,
+                          }}
+                        >
+                          <input
+                            type="color"
+                            value={hexColor}
+                            onChange={(e) =>
+                              setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                            }
+                            style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                          />
+                          <span>{name}</span>
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
@@ -2309,12 +2476,16 @@ export default function App() {
                   onChange={(e) => setAnnotationFilterClass(e.target.value)}
                   style={{ height: 24, fontSize: 11 }}
                 >
-                  <option value="all">すべて表示</option>
-                  {classOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
+                  <option key="class-all" value="all">
+                    すべて表示
+                  </option>
+                  {asChildren(
+                    classOptions.map((name, idx) => (
+                      <option key={`${name}-${idx}`} value={name}>
+                        {name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
@@ -2333,9 +2504,9 @@ export default function App() {
                 {filteredAnnotations.length === 0 && (
                   <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
                 )}
-                {filteredAnnotations.map((a) => (
+                {asChildren(filteredAnnotations.map((a, idx) => (
                   <div
-                    key={a.id}
+                    key={`${a.id || "ann"}-${idx}`}
                     style={{
                       padding: "6px 8px",
                       marginBottom: 6,
@@ -2415,7 +2586,7 @@ export default function App() {
                       🗑
                     </button>
                   </div>
-                ))}
+                )))}
               </div>
             </div>
 
@@ -2511,9 +2682,9 @@ export default function App() {
             </button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
-            {projectList.map((p) => (
+            {asChildren(projectList.map((p, idx) => (
               <div
-                key={p.project_name}
+                key={`${p.project_name || "project"}-${idx}`}
                 style={{
                   border: "1px solid #e3e3e3",
                   borderRadius: 10,
@@ -2564,7 +2735,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-            ))}
+            )))}
             {projectList.length === 0 && (
               <div style={{ color: "#666" }}>プロジェクトがありません。</div>
             )}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Mapping, Tuple, Union
+from typing import Iterable, List, Mapping, Optional, Tuple, Union
 
 from .nms import compute_iou
 
@@ -61,6 +61,7 @@ def exclude_confirmed_candidates(
     exclude_mode: str = "same_class",
     center_check: bool = True,
     iou_threshold: float = 0.6,
+    any_overlap: bool = False,
 ) -> List[object]:
     if not candidates or not confirmed:
         return candidates
@@ -80,14 +81,14 @@ def exclude_confirmed_candidates(
             return _as_box_tuple(obj["bbox"])
         return _as_box_tuple(obj)  # fallback
 
-    def _as_class(obj: object) -> str | None:
+    def _as_class(obj: object) -> Optional[str]:
         if hasattr(obj, "class_name"):
             return getattr(obj, "class_name")
         if isinstance(obj, Mapping):
             return obj.get("class_name")
         return None
 
-    confirmed_pairs: List[Tuple[BBox, str | None]] = []
+    confirmed_pairs: List[Tuple[BBox, Optional[str]]] = []
     for item in confirmed:
         if not item:
             continue
@@ -103,6 +104,11 @@ def exclude_confirmed_candidates(
         for bbox, cls in confirmed_pairs:
             if exclude_mode == "same_class" and cls and cname and cls != cname:
                 continue
+            if any_overlap:
+                ax, ay, aw, ah = cbbox
+                bx, by, bw, bh = bbox
+                if (ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by):
+                    return True
             if center_check and _center_in(cbbox, bbox):
                 return True
             if use_iou and iou_threshold > 0 and compute_iou(cbbox, bbox) >= iou_threshold:

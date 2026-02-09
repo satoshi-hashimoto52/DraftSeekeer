@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 import io
+import base64
 import shutil
 from datetime import datetime
 import random
@@ -33,7 +34,9 @@ from .matching import (
     MatchResult,
     apply_vertical_padding,
     filter_overlapping_matches,
+    clip_roi,
     match_templates,
+    preprocess_edge,
     refine_match_bboxes,
 )
 from .nms import nms
@@ -80,11 +83,8 @@ IN_MEMORY_IMAGES: Dict[str, bytes] = {}
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -929,8 +929,42 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
     except ValueError:
         raise HTTPException(status_code=400, detail="failed to read image")
 
+    height, width = image.shape[:2]
+    rx0, ry0, rx1, ry1 = clip_roi(payload.x, payload.y, payload.roi_size, width, height)
+    roi = image[ry0:ry1, rx0:rx1]
+    roi_preview_base64 = None
+    roi_preview_marked_base64 = None
+    roi_edge_preview_base64 = None
+    roi_match_preview_base64 = None
+    if roi.size > 0:
+        ok, buffer = cv2.imencode(".png", roi)
+        if ok:
+            roi_preview_base64 = base64.b64encode(buffer.tobytes()).decode("ascii")
+        roi_marked = roi.copy()
+        cx = int(round(payload.x - rx0))
+        cy = int(round(payload.y - ry0))
+        if 0 <= cx < roi_marked.shape[1] and 0 <= cy < roi_marked.shape[0]:
+            cv2.drawMarker(
+                roi_marked,
+                (cx, cy),
+                (0, 0, 255),
+                markerType=cv2.MARKER_CROSS,
+                markerSize=12,
+                thickness=2,
+            )
+        ok2, buffer2 = cv2.imencode(".png", roi_marked)
+        if ok2:
+            roi_preview_marked_base64 = base64.b64encode(buffer2.tobytes()).decode("ascii")
+        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        roi_edges = preprocess_edge(roi_gray)
+        ok3, buffer3 = cv2.imencode(".png", roi_edges)
+        if ok3:
+            roi_edge_preview_base64 = base64.b64encode(buffer3.tobytes()).decode("ascii")
+
     if payload.template_off:
-        candidates = find_roi_contours(image, payload.x, payload.y, payload.roi_size)
+        candidates = find_roi_contours(
+            image, int(round(payload.x)), int(round(payload.y)), payload.roi_size
+        )
         candidates = candidates[: payload.topk]
         results: List[DetectResult] = [
             DetectResult(
@@ -948,7 +982,17 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             )
             for candidate in candidates
         ]
-        return DetectPointResponse(results=results)
+        return DetectPointResponse(
+            results=results,
+            debug={
+                "clicked_image_xy": {"x": payload.x, "y": payload.y},
+                "roi_click_xy": {"x": payload.x - rx0, "y": payload.y - ry0},
+                "roi_bbox": {"x1": rx0, "y1": ry0, "x2": rx1, "y2": ry1},
+                "roi_preview_base64": roi_preview_base64,
+                "roi_preview_marked_base64": roi_preview_marked_base64,
+                "roi_edge_preview_base64": roi_edge_preview_base64,
+            },
+        )
 
     project_templates = templates_cache.get(payload.project)
     if project_templates is None:
@@ -962,72 +1006,113 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         templates=project_templates,
         scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
         scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
-        scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
+        scale_steps=5,
     )
-    image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    if payload.refine_contour:
-        matches = refine_match_bboxes(
-            image_gray,
-            matches,
-            click_xy=(payload.x, payload.y),
-            pad=12,
-        )
-    matches = apply_vertical_padding(
-        matches,
-        image_gray.shape[0],
-        default_top=BBOX_PAD_DEFAULT_TOP,
-        default_bottom=BBOX_PAD_DEFAULT_BOTTOM,
-        class_pad_map=BBOX_PAD_MAP,
-    )
+    confirmed = []
+    if payload.confirmed_annotations:
+        confirmed = [ann.model_dump() for ann in payload.confirmed_annotations]
+    elif payload.confirmed_boxes:
+        confirmed = [{"bbox": b.model_dump() if hasattr(b, "model_dump") else b} for b in payload.confirmed_boxes]
 
-    filtered_matches = filter_bboxes(matches, payload.roi_size, payload.score_threshold)
-
-    grouped: Dict[str, List[int]] = {}
-    for idx, match in enumerate(filtered_matches):
-        grouped.setdefault(match.class_name, []).append(idx)
-
-    kept_matches: List = []
-    for indices in grouped.values():
-        class_boxes = [filtered_matches[i].bbox for i in indices]
-        class_scores = [filtered_matches[i].score for i in indices]
-        kept_indices = nms(class_boxes, class_scores, payload.iou_threshold)
-        kept_matches.extend(filtered_matches[indices[i]] for i in kept_indices)
-
-    best_per_class: Dict[str, MatchResult] = {}
-    for match in kept_matches:
-        current = best_per_class.get(match.class_name)
-        if current is None or match.score > current.score:
-            best_per_class[match.class_name] = match
-
-    representative = list(best_per_class.values())
-    if payload.exclude_enabled:
-        confirmed = []
-        if payload.confirmed_annotations:
-            confirmed = [ann.model_dump() for ann in payload.confirmed_annotations]
-        elif payload.confirmed_boxes:
-            confirmed = [{"bbox": b.model_dump() if hasattr(b, "model_dump") else b} for b in payload.confirmed_boxes]
-        representative = exclude_confirmed_candidates(
-            representative,
-            confirmed,
-            exclude_mode=payload.exclude_mode,
-            center_check=payload.exclude_center,
-            iou_threshold=payload.exclude_iou_threshold,
-        )
-    representative.sort(key=lambda r: r.score, reverse=True)
-    representative = representative[: payload.topk]
+    matches_sorted = sorted(matches, key=lambda r: r.score, reverse=True)
+    representative: List[MatchResult] = []
+    seen_classes = set()
+    for match in matches_sorted:
+        if match.class_name in seen_classes:
+            continue
+        if confirmed:
+            if (
+                exclude_confirmed_candidates(
+                    [match],
+                    confirmed,
+                    exclude_mode=payload.exclude_mode,
+                    center_check=False,
+                    iou_threshold=payload.exclude_iou_threshold,
+                    any_overlap=True,
+                )
+                == []
+            ):
+                continue
+        representative.append(match)
+        seen_classes.add(match.class_name)
+        if len(representative) >= 3:
+            break
 
     results: List[DetectResult] = [
         DetectResult(
             class_name=match.class_name,
             score=match.score,
-            bbox={"x": match.bbox[0], "y": match.bbox[1], "w": match.bbox[2], "h": match.bbox[3]},
+            bbox={
+                "x": match.bbox[0],
+                "y": match.bbox[1],
+                "w": match.bbox[2],
+                "h": match.bbox[3],
+            },
             template_name=match.template_name,
             scale=match.scale,
         )
         for match in representative
     ]
 
-    return DetectPointResponse(results=results)
+    debug = {
+        "clicked_image_xy": {"x": payload.x, "y": payload.y},
+        "roi_click_xy": {"x": payload.x - rx0, "y": payload.y - ry0},
+        "roi_bbox": {"x1": rx0, "y1": ry0, "x2": rx1, "y2": ry1},
+        "roi_preview_base64": roi_preview_base64,
+        "roi_preview_marked_base64": roi_preview_marked_base64,
+        "roi_edge_preview_base64": roi_edge_preview_base64,
+    }
+    if representative:
+        best_match = representative[0]
+        match_offset_x = best_match.bbox[0] - rx0
+        match_offset_y = best_match.bbox[1] - ry0
+        debug["match_score"] = best_match.score
+        debug["match_offset_in_roi"] = {"x": match_offset_x, "y": match_offset_y}
+        debug["match_mode"] = best_match.mode
+        debug["outer_bbox"] = {
+            "x": best_match.outer_bbox[0],
+            "y": best_match.outer_bbox[1],
+            "w": best_match.outer_bbox[2],
+            "h": best_match.outer_bbox[3],
+        }
+        debug["tight_bbox"] = {
+            "x": best_match.tight_bbox[0],
+            "y": best_match.tight_bbox[1],
+            "w": best_match.tight_bbox[2],
+            "h": best_match.tight_bbox[3],
+        }
+        tpl_preview = None
+        for tpl in project_templates.get(best_match.class_name, []):
+            if tpl.template_name == best_match.template_name:
+                tpl_preview = tpl.image_proc_edge
+                break
+        if tpl_preview is not None and tpl_preview.size > 0:
+            ok4, buffer4 = cv2.imencode(".png", tpl_preview)
+            if ok4:
+                debug["template_edge_preview_base64"] = base64.b64encode(
+                    buffer4.tobytes()
+                ).decode("ascii")
+        if roi.size > 0:
+            roi_match = roi.copy()
+            mx = int(round(match_offset_x))
+            my = int(round(match_offset_y))
+            mw = int(round(best_match.bbox[2]))
+            mh = int(round(best_match.bbox[3]))
+            cv2.rectangle(
+                roi_match,
+                (max(0, mx), max(0, my)),
+                (min(roi_match.shape[1] - 1, mx + mw), min(roi_match.shape[0] - 1, my + mh)),
+                (255, 0, 0),
+                2,
+            )
+            ok5, buffer5 = cv2.imencode(".png", roi_match)
+            if ok5:
+                roi_match_preview_base64 = base64.b64encode(buffer5.tobytes()).decode(
+                    "ascii"
+                )
+                debug["roi_match_preview_base64"] = roi_match_preview_base64
+
+    return DetectPointResponse(results=results, debug=debug)
 
 
 @app.post("/detect/full", response_model=DetectFullResponse)
@@ -1082,6 +1167,19 @@ def detect_full(payload: DetectFullRequest) -> DetectFullResponse:
                             match.bbox[2],
                             match.bbox[3],
                         ),
+                        outer_bbox=(
+                            match.outer_bbox[0] + x0,
+                            match.outer_bbox[1] + y0,
+                            match.outer_bbox[2],
+                            match.outer_bbox[3],
+                        ),
+                        tight_bbox=(
+                            match.tight_bbox[0] + x0,
+                            match.tight_bbox[1] + y0,
+                            match.tight_bbox[2],
+                            match.tight_bbox[3],
+                        ),
+                        mode=match.mode,
                     )
                 )
 
@@ -1180,7 +1278,7 @@ def segment_candidate(payload: SegmentCandidateRequest) -> SegmentCandidateRespo
         point_coords = np.array([[px, py]], dtype=np.float32)
         point_labels = np.array([1], dtype=np.int32)
 
-    def fallback_segment() -> SegmentCandidateResponse | None:
+    def fallback_segment() -> Optional[SegmentCandidateResponse]:
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         _th, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         kernel = np.ones((3, 3), np.uint8)

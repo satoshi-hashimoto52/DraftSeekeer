@@ -16,6 +16,21 @@ export type DetectResult = {
 
 export type DetectPointResponse = {
   results: DetectResult[];
+  debug?: {
+    clicked_image_xy?: { x: number; y: number };
+    roi_click_xy?: { x: number; y: number };
+    roi_bbox?: { x1: number; y1: number; x2: number; y2: number };
+    roi_preview_base64?: string;
+    roi_preview_marked_base64?: string;
+    roi_edge_preview_base64?: string;
+    template_edge_preview_base64?: string;
+    match_score?: number;
+    match_offset_in_roi?: { x: number; y: number };
+    match_mode?: string;
+    roi_match_preview_base64?: string;
+    outer_bbox?: { x: number; y: number; w: number; h: number };
+    tight_bbox?: { x: number; y: number; w: number; h: number };
+  };
 };
 
 export type Candidate = {
