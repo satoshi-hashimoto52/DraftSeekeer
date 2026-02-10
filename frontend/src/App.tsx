@@ -2995,9 +2995,7 @@ export default function App() {
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>
-                        全自動 閾値（高いほど慎重）
-                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>全自動 閾値</div>
                       <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
                         高いほど誤検出が減ります。低いほど拾いやすくなります。
                       </div>
@@ -3180,15 +3178,15 @@ export default function App() {
                           {[
                             {
                               key: "combined",
-                              label: "合成スコア（edge + contour + placement + shape）",
-                              help: "精度優先。複数の指標を合成して判定します。",
+                              label: "合成スコア（二値化 + match + 黒線一致率 + NMS）",
+                              help: "速度寄り。二値化線画の一致率も加味して判定。",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
                             {
                               key: "scaled_templates",
                               label: "scaled_templates",
-                              help: "速度優先。matchTemplate のスコアのみで判定します。",
+                              help: "精度寄り。タイル/ROIでテンプレ一致度のみ判定。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },

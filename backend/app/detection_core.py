@@ -127,9 +127,10 @@ def annotate_all(
 
     height, width = img.shape[:2]
 
-    # Legacy-style binary matching pipeline (close to original implementation)
+    # Legacy-style binary matching pipeline (aligned with provided script)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    image_bin = np.where(gray < 128, 255, 0).astype(np.uint8)
+    image_bin = np.zeros_like(gray, dtype=np.uint8)
+    image_bin[gray < 128] = 255
 
     def _iter_scales() -> List[float]:
         if scale_steps <= 1:
@@ -139,14 +140,15 @@ def annotate_all(
             for i in range(scale_steps)
         ]
 
-    def _compute_match_ratio(template_bin: np.ndarray, patch: np.ndarray) -> float:
-        if template_bin.size == 0 or patch.size == 0:
+    def _compute_match_ratio(black_coords: np.ndarray, patch: np.ndarray) -> float:
+        if patch.size == 0 or black_coords.size == 0:
             return 0.0
-        mask = template_bin == 255
-        if not np.any(mask):
+        ys = black_coords[:, 0]
+        xs = black_coords[:, 1]
+        if ys.size == 0:
             return 0.0
-        matched = patch[mask] == 255
-        return float(np.mean(matched))
+        matched = np.count_nonzero(patch[ys, xs])
+        return float(matched / len(black_coords))
 
     def _nms(cands: List[Dict], iou_threshold: float) -> List[Dict]:
         if not cands:
@@ -177,8 +179,8 @@ def annotate_all(
         return kept
 
     match_threshold = float(threshold)
-    black_match_threshold = 0.6
-    nms_threshold = 0.3
+    black_match_threshold = 0.69
+    nms_threshold = 0.8
 
     candidates: List[Dict] = []
     for class_name, tpls in templates_by_class.items():
@@ -186,7 +188,8 @@ def annotate_all(
             tpl_gray = tpl.image_gray
             if tpl_gray is None or tpl_gray.size == 0:
                 continue
-            template_bin_base = np.where(tpl_gray < 128, 255, 0).astype(np.uint8)
+            template_bin_base = np.zeros_like(tpl_gray, dtype=np.uint8)
+            template_bin_base[tpl_gray < 128] = 255
             for scale in _iter_scales():
                 if scale <= 0:
                     continue
@@ -201,6 +204,9 @@ def annotate_all(
                     continue
                 if rh > height or rw > width:
                     continue
+                black_coords = np.column_stack(np.where(resized > 0))
+                if black_coords.size == 0:
+                    continue
                 result = cv2.matchTemplate(image_bin, resized, cv2.TM_CCORR_NORMED)
                 ys, xs = np.where(result >= match_threshold)
                 for (x, y) in zip(xs, ys):
@@ -208,10 +214,10 @@ def annotate_all(
                     if patch.shape[0] != rh or patch.shape[1] != rw:
                         continue
                     match_score = float(result[y, x])
-                    match_ratio = _compute_match_ratio(resized, patch)
+                    match_ratio = _compute_match_ratio(black_coords, patch)
                     if match_ratio < black_match_threshold:
                         continue
-                    combined_score = match_score + match_ratio
+                    combined_score = (match_score + match_ratio) / 2.0
                     candidates.append(
                         {
                             "class_name": class_name,
