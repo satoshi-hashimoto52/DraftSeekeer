@@ -143,6 +143,7 @@ export default function App() {
   const autoProgressTimerRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const exportDirInputRef = useRef<HTMLInputElement | null>(null);
   const [coordDebug, setCoordDebug] = useState<{
     screen: { x: number; y: number };
     image: { x: number; y: number };
@@ -303,6 +304,40 @@ export default function App() {
       test: _test.length,
     };
   }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
+
+  const handleBrowseExportDir = async () => {
+    try {
+      if ("showDirectoryPicker" in window) {
+        // @ts-expect-error - File System Access API (browser dependent)
+        const handle = await window.showDirectoryPicker();
+        if (handle?.name) {
+          setExportOutputDir(handle.name);
+          setExportDirHistory((prev) =>
+            prev.includes(handle.name) ? prev : [handle.name, ...prev].slice(0, 8)
+          );
+        }
+        return;
+      }
+      exportDirInputRef.current?.click();
+    } catch {
+      // ignore cancel
+    }
+  };
+
+  const handleExportDirPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+    const first = files[0] as File & { webkitRelativePath?: string };
+    const rel = first.webkitRelativePath || "";
+    const topDir = rel.split("/")[0];
+    if (topDir) {
+      setExportOutputDir(topDir);
+      setExportDirHistory((prev) =>
+        prev.includes(topDir) ? prev : [topDir, ...prev].slice(0, 8)
+      );
+    }
+    event.target.value = "";
+  };
 
   const totalAnnotations = useMemo(
     () => Object.values(imageStatusMap).reduce((acc, v) => acc + v, 0),
@@ -1636,6 +1671,17 @@ export default function App() {
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Output directory</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <input
+                    ref={exportDirInputRef}
+                    type="file"
+                    multiple
+                    {...({
+                      webkitdirectory: "true",
+                      directory: "true",
+                    } as React.InputHTMLAttributes<HTMLInputElement>)}
+                    onChange={handleExportDirPicked}
+                    style={{ display: "none" }}
+                  />
+                  <input
                     type="text"
                     placeholder="/Users/you/exports"
                     value={exportOutputDir}
@@ -1644,41 +1690,46 @@ export default function App() {
                   />
                   <button
                     type="button"
-                    disabled
+                    onClick={handleBrowseExportDir}
                     style={{
                       height: 32,
                       padding: "0 10px",
                       borderRadius: 8,
                       border: "1px solid #e0e0e0",
-                      background: "#f7f7f7",
-                      color: "#999",
-                      cursor: "not-allowed",
+                      background: "#fff",
+                      color: "#333",
+                      cursor: "pointer",
                     }}
                   >
                     Browse...
                   </button>
                 </div>
                 {exportDirHistory.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {asChildren(
-                      exportDirHistory.map((dir, idx) => (
-                        <button
-                          key={`${dir}-${idx}`}
-                          type="button"
-                          onClick={() => setExportOutputDir(dir)}
-                          style={{
-                            padding: "4px 8px",
-                            borderRadius: 999,
-                            border: "1px solid #e0e0e0",
-                            background: "#f7f7f7",
-                            fontSize: 11,
-                            cursor: "pointer",
-                          }}
-                        >
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "#666" }}>履歴</span>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          setExportOutputDir(e.target.value);
+                        }
+                      }}
+                      style={{
+                        height: 28,
+                        fontSize: 11,
+                        borderRadius: 6,
+                        border: "1px solid #e0e0e0",
+                        padding: "0 6px",
+                        background: "#fff",
+                      }}
+                    >
+                      <option value="">選択してください</option>
+                      {exportDirHistory.map((dir, idx) => (
+                        <option key={`${dir}-${idx}`} value={dir}>
                           {dir}
-                        </button>
-                      ))
-                    )}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
               </div>
@@ -2444,7 +2495,19 @@ export default function App() {
                   <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 11 }}>
                     クラス別カラー
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      maxHeight: 84,
+                      overflowY: "auto",
+                      padding: "4px 2px",
+                      borderRadius: 6,
+                      border: "1px solid #eceff1",
+                      background: "#fcfcfc",
+                    }}
+                  >
                     {asChildren(
                       Object.entries(colorMap).map(([name, color], idx) => {
                         const hexColor = normalizeToHex(color);
