@@ -171,6 +171,7 @@ class ExportYoloResponse(BaseModel):
 class AnnotationPayload(BaseModel):
     class_name: str
     bbox: BBox
+    score: Optional[float] = None
     segPolygon: Optional[List[Point]] = None
     source: Optional[str] = None
     created_at: Optional[str] = None

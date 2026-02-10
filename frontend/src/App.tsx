@@ -26,6 +26,7 @@ import {
   autoAnnotate,
 } from "./api";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
+import NumericInputWithButtons from "./components/NumericInputWithButtons";
 import { normalizeToHex } from "./utils/color";
 import { clampToImage, simplifyPolygon } from "./utils/polygon";
 
@@ -1224,14 +1225,10 @@ export default function App() {
   useEffect(() => {
     if (!datasetId || !datasetSelectedName) return;
     if (isLoadingAnnotationsRef.current) return;
-    const sanitized = annotations.map((ann) => {
-      const { score, ...rest } = ann;
-      return rest;
-    });
     const payload = {
       project_name: datasetId,
       image_key: datasetSelectedName,
-      annotations: sanitized,
+      annotations,
     };
     saveAnnotations(payload).catch(() => {
       // ignore save errors for now
@@ -1331,6 +1328,66 @@ export default function App() {
         overflow: "hidden",
       }}
     >
+      <style>{`
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield;
+        }
+        .rightPanel {
+          overflow-x: hidden;
+        }
+        .rightPanel,
+        .rightPanel * {
+          box-sizing: border-box;
+        }
+        .rightPanel input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+        .rightPanel select,
+        .rightPanel textarea {
+          font-size: 13px;
+        }
+        .rightPanel .formRow {
+          display: grid;
+          grid-template-columns: 104px 1fr;
+          gap: 8px;
+          align-items: center;
+        }
+        .rightPanel .controlWrap {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          align-items: center;
+        }
+        .rightPanel .numInput {
+          width: 84px !important;
+          max-width: 84px !important;
+        }
+        .rightPanel .midInput {
+          width: 120px !important;
+          max-width: 120px !important;
+        }
+        .rightPanel .stepBtn {
+          width: 36px !important;
+          height: 36px !important;
+        }
+        .rightPanel .autoAdvanced {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+        .rightPanel .autoAdvanced .autoMethodCard {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+        .rightPanel .autoAdvanced .autoMethodHelp {
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+      `}</style>
       <div
         style={{
           padding: "12px 20px",
@@ -1887,7 +1944,7 @@ export default function App() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "260px 1fr 360px",
+            gridTemplateColumns: "260px 1fr 400px",
             gap: 16,
             padding: 16,
             flex: 1,
@@ -2106,6 +2163,7 @@ export default function App() {
           </div>
 
           <div
+            className="rightPanel"
             style={{
               borderLeft: "1px solid #eee",
               paddingLeft: 16,
@@ -2169,51 +2227,77 @@ export default function App() {
             {showAdvanced && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>検出パラメータ</div>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, minWidth: 90 }}>スケール</span>
-                  <input
-                    type="number"
-                    step={0.1}
-                    min={0.1}
-                    value={scaleMin}
-                    onChange={(e) => setScaleMin(Number(e.target.value))}
-                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                    style={{ width: 70, height: 28 }}
-                  />
-                  <span style={{ fontSize: 12, color: "#888" }}>〜</span>
-                  <input
-                    type="number"
-                    step={0.1}
-                    min={0.1}
-                    value={scaleMax}
-                    onChange={(e) => setScaleMax(Number(e.target.value))}
-                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                    style={{ width: 70, height: 28 }}
-                  />
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, minWidth: 90 }}>上位件数</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={3}
-                    value={topk}
-                    onChange={(e) => setTopk(Number(e.target.value))}
-                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                    style={{ width: 60, height: 28 }}
-                  />
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, minWidth: 90 }}>スケール分割数</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={scaleSteps}
-                    onChange={(e) => setScaleSteps(Number(e.target.value))}
-                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                    style={{ width: 60, height: 28 }}
-                  />
-                </label>
+                <div className="formRow" style={{ marginBottom: 6 }}>
+                  <span style={{ fontSize: 12 }}>スケール</span>
+                  <div className="controlWrap">
+                    <span style={{ fontSize: 11, color: "#607d8b" }}>min</span>
+                    <NumericInputWithButtons
+                      value={scaleMin}
+                      onChange={(v) => typeof v === "number" && setScaleMin(v)}
+                      min={0.1}
+                      step={0.1}
+                      height={32}
+                      inputWidth={84}
+                      ariaLabel="scale min"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                  </div>
+                </div>
+                <div className="formRow" style={{ marginBottom: 6 }}>
+                  <span style={{ fontSize: 12 }} />
+                  <div className="controlWrap">
+                    <span style={{ fontSize: 11, color: "#607d8b" }}>max</span>
+                    <NumericInputWithButtons
+                      value={scaleMax}
+                      onChange={(v) => typeof v === "number" && setScaleMax(v)}
+                      min={0.1}
+                      step={0.1}
+                      height={32}
+                      inputWidth={84}
+                      ariaLabel="scale max"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                  </div>
+                </div>
+                <div className="formRow" style={{ marginBottom: 8 }}>
+                  <span style={{ fontSize: 12 }}>分割</span>
+                  <div className="controlWrap">
+                    <NumericInputWithButtons
+                      value={scaleSteps}
+                      onChange={(v) => typeof v === "number" && setScaleSteps(v)}
+                      min={1}
+                      step={1}
+                      height={32}
+                      inputWidth={84}
+                      ariaLabel="scale steps"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                  </div>
+                </div>
+                <div className="formRow" style={{ marginBottom: 6 }}>
+                  <span style={{ fontSize: 12 }}>上位件数</span>
+                  <div className="controlWrap">
+                    <NumericInputWithButtons
+                      value={topk}
+                      onChange={(v) => typeof v === "number" && setTopk(v)}
+                      min={1}
+                      max={3}
+                      step={1}
+                      height={32}
+                      inputWidth={84}
+                      ariaLabel="topk"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                  </div>
+                </div>
                 <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
                 <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <input
@@ -2246,19 +2330,25 @@ export default function App() {
                     <option value="any_class">any_class</option>
                   </select>
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, minWidth: 64 }}>IoU</span>
-                  <input
-                    type="number"
-                    step={0.05}
-                    min={0.4}
-                    max={0.8}
-                    disabled={!excludeEnabled}
-                    value={excludeIouThreshold}
-                    onChange={(e) => setExcludeIouThreshold(Number(e.target.value))}
-                    style={{ width: 72, height: 28 }}
-                  />
-                </label>
+                <div className="formRow" style={{ marginBottom: 8 }}>
+                  <span style={{ fontSize: 12 }}>IoU</span>
+                  <div className="controlWrap">
+                    <NumericInputWithButtons
+                      value={excludeIouThreshold}
+                      onChange={(v) => typeof v === "number" && setExcludeIouThreshold(v)}
+                      min={0.4}
+                      max={0.8}
+                      step={0.05}
+                      height={32}
+                      inputWidth={84}
+                      disabled={!excludeEnabled}
+                      ariaLabel="exclude iou"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                  </div>
+                </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input
                     type="checkbox"
@@ -2473,22 +2563,26 @@ export default function App() {
                   marginBottom: 10,
                   paddingBottom: 10,
                   borderBottom: "1px dashed #e0e0e0",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
                 }}
               >
-                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 72 }}>ROIサイズ</span>
-                <input
-                  type="number"
-                  min={10}
-                  value={roiSize}
-                  step={10}
-                  onChange={(e) => setRoiSize(Number(e.target.value))}
-                  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                  style={{ width: 90, height: 28 }}
-                />
-                <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+                <div className="formRow">
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
+                  <div className="controlWrap">
+                    <NumericInputWithButtons
+                      value={roiSize}
+                      onChange={(v) => typeof v === "number" && setRoiSize(v)}
+                      min={10}
+                      step={10}
+                      height={32}
+                      inputWidth={84}
+                      ariaLabel="roi size"
+                      className="controlWrap"
+                      inputClassName="numInput"
+                      buttonClassName="stepBtn"
+                    />
+                    <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+                  </div>
+                </div>
               </div>
               {Object.keys(colorMap).length > 0 && (
                 <div style={{ marginBottom: 4 }}>
@@ -2552,7 +2646,13 @@ export default function App() {
                 background: "#fff",
               }}
             >
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                  gap: 8,
+                }}
+              >
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <button
                     type="button"
@@ -2726,8 +2826,8 @@ export default function App() {
                       <div
                         style={{
                           marginTop: 6,
-                          display: "grid",
-                          gridTemplateColumns: "1fr 80px",
+                          display: "flex",
+                          flexWrap: "wrap",
                           gap: 8,
                           alignItems: "center",
                         }}
@@ -2740,19 +2840,18 @@ export default function App() {
                           value={autoThreshold}
                           onChange={(e) => setAutoThreshold(Number(e.target.value))}
                         />
-                        <input
-                          type="number"
+                        <NumericInputWithButtons
+                          value={autoThreshold}
+                          onChange={(v) => typeof v === "number" && setAutoThreshold(v)}
                           min={0}
                           max={1}
                           step={0.01}
-                          value={autoThreshold}
-                          onChange={(e) => setAutoThreshold(Number(e.target.value))}
-                          style={{
-                            height: 30,
-                            borderRadius: 6,
-                            border: "1px solid #d9e2ec",
-                            padding: "0 6px",
-                          }}
+                          height={32}
+                          inputWidth={84}
+                          ariaLabel="auto threshold"
+                          className="controlWrap"
+                          inputClassName="numInput"
+                          buttonClassName="stepBtn"
                         />
                       </div>
                     </div>
@@ -2780,6 +2879,7 @@ export default function App() {
                                   border: "1px solid #d9e2ec",
                                   borderRadius: 999,
                                   background: checked ? "#e3f2fd" : "#fff",
+                                  flexWrap: "wrap",
                                 }}
                               >
                                 <input
@@ -2883,7 +2983,7 @@ export default function App() {
                       {autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く"}
                     </button>
                     {autoAdvancedOpen && (
-                      <div style={{ display: "grid", gap: 8 }}>
+                      <div className="autoAdvanced" style={{ display: "grid", gap: 8 }}>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
                         <div style={{ display: "grid", gap: 6 }}>
                           {[
@@ -2906,6 +3006,7 @@ export default function App() {
                             return (
                               <label
                                 key={`auto-method-${item.key}`}
+                                className="autoMethodCard"
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
@@ -2916,6 +3017,9 @@ export default function App() {
                                   background: selected ? item.bg : "#fff",
                                   fontSize: 11,
                                   cursor: "pointer",
+                                  width: "100%",
+                                  flexWrap: "wrap",
+                                  boxSizing: "border-box",
                                 }}
                               >
                                 <input
@@ -2926,69 +3030,104 @@ export default function App() {
                                 />
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                                   <span style={{ fontWeight: 700, color: item.accent }}>{item.label}</span>
-                                  <span style={{ color: "#666" }}>{item.help}</span>
+                                  <span className="autoMethodHelp" style={{ color: "#666" }}>
+                                    {item.help}
+                                  </span>
                                 </div>
                               </label>
                             );
                           })}
                         </div>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>スケール</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <input
-                            type="number"
-                            step={0.1}
-                            min={0.1}
-                            value={scaleMin}
-                            onChange={(e) => setScaleMin(Number(e.target.value))}
-                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                            style={{ width: 70, height: 28 }}
-                          />
-                          <span style={{ fontSize: 12, color: "#888" }}>〜</span>
-                          <input
-                            type="number"
-                            step={0.1}
-                            min={0.1}
-                            value={scaleMax}
-                            onChange={(e) => setScaleMax(Number(e.target.value))}
-                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                            style={{ width: 70, height: 28 }}
-                          />
-                          <span style={{ fontSize: 12, color: "#888" }}>分割</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={scaleSteps}
-                            onChange={(e) => setScaleSteps(Number(e.target.value))}
-                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                            style={{ width: 60, height: 28 }}
-                          />
+                        <div className="formRow">
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>スケール</span>
+                          <div className="controlWrap">
+                            <span style={{ fontSize: 11, color: "#607d8b" }}>min</span>
+                            <NumericInputWithButtons
+                              value={scaleMin}
+                              onChange={(v) => typeof v === "number" && setScaleMin(v)}
+                              min={0.1}
+                              step={0.1}
+                              height={32}
+                              inputWidth={84}
+                              ariaLabel="auto scale min"
+                              className="controlWrap"
+                              inputClassName="numInput"
+                              buttonClassName="stepBtn"
+                            />
+                          </div>
                         </div>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>stride</div>
-                        <input
-                          type="number"
-                          min={1}
-                          value={autoStride ?? ""}
-                          onChange={(e) =>
-                            setAutoStride(e.target.value === "" ? null : Number(e.target.value))
-                          }
-                          onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                          style={{ width: 120, height: 28 }}
-                          placeholder="空欄で自動"
-                        />
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <input
-                            type="number"
-                            min={10}
-                            value={roiSize}
-                            step={10}
-                            onChange={(e) => setRoiSize(Number(e.target.value))}
-                            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
-                            style={{ width: 90, height: 28 }}
-                          />
-                          <span style={{ fontSize: 11, color: "#607d8b" }}>
-                            手動/自動で共通
-                          </span>
+                        <div className="formRow">
+                          <span style={{ fontSize: 12 }} />
+                          <div className="controlWrap">
+                            <span style={{ fontSize: 11, color: "#607d8b" }}>max</span>
+                            <NumericInputWithButtons
+                              value={scaleMax}
+                              onChange={(v) => typeof v === "number" && setScaleMax(v)}
+                              min={0.1}
+                              step={0.1}
+                              height={32}
+                              inputWidth={84}
+                              ariaLabel="auto scale max"
+                              className="controlWrap"
+                              inputClassName="numInput"
+                              buttonClassName="stepBtn"
+                            />
+                          </div>
+                        </div>
+                        <div className="formRow">
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>分割</span>
+                          <div className="controlWrap">
+                            <NumericInputWithButtons
+                              value={scaleSteps}
+                              onChange={(v) => typeof v === "number" && setScaleSteps(v)}
+                              min={1}
+                              step={1}
+                              height={32}
+                              inputWidth={84}
+                              ariaLabel="auto scale steps"
+                              className="controlWrap"
+                              inputClassName="numInput"
+                              buttonClassName="stepBtn"
+                            />
+                          </div>
+                        </div>
+                        <div className="formRow">
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>stride</span>
+                          <div className="controlWrap">
+                            <NumericInputWithButtons
+                              value={autoStride ?? ""}
+                              onChange={(v) => setAutoStride(v === "" ? null : v)}
+                              min={1}
+                              step={1}
+                              height={32}
+                              inputWidth={120}
+                              ariaLabel="auto stride"
+                              placeholder="空欄で自動"
+                              className="controlWrap"
+                              inputClassName="midInput"
+                              buttonClassName="stepBtn"
+                            />
+                          </div>
+                        </div>
+                        <div className="formRow">
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
+                          <div className="controlWrap">
+                            <NumericInputWithButtons
+                              value={roiSize}
+                              onChange={(v) => typeof v === "number" && setRoiSize(v)}
+                              min={10}
+                              step={10}
+                              height={32}
+                              inputWidth={84}
+                              ariaLabel="auto roi size"
+                              className="controlWrap"
+                              inputClassName="numInput"
+                              buttonClassName="stepBtn"
+                            />
+                            <span style={{ fontSize: 11, color: "#607d8b" }}>
+                              手動/自動で共通
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )}
