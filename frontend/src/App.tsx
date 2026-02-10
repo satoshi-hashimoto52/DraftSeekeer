@@ -484,6 +484,9 @@ export default function App() {
       setDatasetSelectedName(null);
       setNotice(`Dataset imported: ${res.project_name} (${res.count} files)`);
       refreshProjectList();
+      if (info.images.length > 0) {
+        void loadAllAnnotationCounts(res.project_name, info.images);
+      }
       setImageId(null);
       setImageUrl(null);
       setCandidates([]);
@@ -526,6 +529,16 @@ export default function App() {
         const nextColors = buildColorMapFromClasses(classOptions);
         setColorMap(nextColors);
         saveColorMapForProject(projectName, nextColors);
+      }
+      const storedAuto = loadAutoSettingsForProject(projectName);
+      if (storedAuto) {
+        if (typeof storedAuto.autoThreshold === "number") setAutoThreshold(storedAuto.autoThreshold);
+        if (storedAuto.autoMethod) setAutoMethod(storedAuto.autoMethod);
+      }
+      const allClasses = classOptions.length > 0 ? classOptions : [];
+      setAutoClassFilter(allClasses);
+      if (info.images.length > 0) {
+        void loadAllAnnotationCounts(projectName, info.images);
       }
       if (info.images.length > 0) {
         await loadDatasetImage(projectName, info.images[0].original_filename);
@@ -1039,6 +1052,35 @@ export default function App() {
     }
   };
 
+  const loadAutoSettingsForProject = (projectName: string) => {
+    try {
+      const raw = localStorage.getItem(`draftseeker.auto.${projectName}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as {
+        autoThreshold?: number;
+        autoMethod?: "combined" | "scaled_templates";
+        autoClassFilter?: string[];
+      };
+      if (!parsed || typeof parsed !== "object") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveAutoSettingsForProject = (projectName: string) => {
+    try {
+      const payload = {
+        autoThreshold,
+        autoMethod,
+        autoClassFilter,
+      };
+      localStorage.setItem(`draftseeker.auto.${projectName}`, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  };
+
   const normalizeLoadedAnnotations = (items: Annotation[]) => {
     const now = Date.now();
     return items.map((ann, idx) => ({
@@ -1074,6 +1116,32 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Dataset select failed");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const loadAllAnnotationCounts = async (projectName: string, images: DatasetImageEntry[]) => {
+    if (!projectName || images.length === 0) return;
+    try {
+      const entries = await Promise.all(
+        images.map(async (entry) => {
+          const name = entry.original_filename || entry.filename || "";
+          if (!name) return null;
+          try {
+            const loaded = await loadAnnotations({ project_name: projectName, image_key: name });
+            return [name, loaded.annotations?.length || 0] as const;
+          } catch {
+            return [name, 0] as const;
+          }
+        })
+      );
+      const next: Record<string, number> = {};
+      entries.forEach((item) => {
+        if (!item) return;
+        next[item[0]] = item[1];
+      });
+      setImageStatusMap(next);
+    } catch {
+      // ignore
     }
   };
 
@@ -1284,6 +1352,20 @@ export default function App() {
 
   useEffect(() => {
     if (!datasetId) return;
+    const saved = loadAutoSettingsForProject(datasetId);
+    if (!saved) {
+      setAutoThreshold(0.7);
+      setAutoMethod("combined");
+      setAutoClassFilter([]);
+      return;
+    }
+    if (typeof saved.autoThreshold === "number") setAutoThreshold(saved.autoThreshold);
+    if (saved.autoMethod) setAutoMethod(saved.autoMethod);
+    if (Array.isArray(saved.autoClassFilter)) setAutoClassFilter(saved.autoClassFilter);
+  }, [datasetId]);
+
+  useEffect(() => {
+    if (!datasetId) return;
     saveAdvancedSettingsForProject(datasetId);
   }, [
     datasetId,
@@ -1298,6 +1380,11 @@ export default function App() {
     excludeIouThreshold,
     refineContour,
   ]);
+
+  useEffect(() => {
+    if (!datasetId) return;
+    saveAutoSettingsForProject(datasetId);
+  }, [datasetId, autoThreshold, autoMethod, autoClassFilter]);
 
   useEffect(() => {
     return () => {
@@ -1414,122 +1501,126 @@ export default function App() {
               justifyContent: "flex-end",
             }}
           >
-            <button
-              type="button"
-              onClick={handleBackToHome}
-              disabled={!datasetId}
-              style={{
-                height: 30,
-                padding: "0 10px",
-                borderRadius: 8,
-                border: "1px solid #e3e3e3",
-                background: "#fff",
-                fontSize: 12,
-                cursor: datasetId ? "pointer" : "not-allowed",
-                opacity: datasetId ? 1 : 0.5,
-              }}
-            >
-              Project Homeへ戻る
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!exportOutputDir.trim()) {
-                  setExportOutputDir("~/Downloads");
-                }
-                setExportResult(null);
-                setShowExportDrawer(true);
-              }}
-              style={{
-                height: 30,
-                padding: "0 10px",
-                borderRadius: 8,
-                border: "1px solid #e3e3e3",
-                background: "#fff",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              Export dataset
-            </button>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                height: 30,
-                padding: "4px 6px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 8,
-                background: "#f7f7f7",
-                opacity: 0.9,
-              }}
-            >
-              <span style={{ fontSize: 11 }}>プロジェクト</span>
-              <select
-                value={project}
-                onChange={(e) => setProject(e.target.value)}
-                style={{ minWidth: 120, height: 22, fontSize: 11 }}
-              >
-                {projects.length === 0 && (
-                  <option key="project-none" value="">
-                    (none)
-                  </option>
-                )}
-                {asChildren(
-                  projects.map((p, idx) => (
-                    <option key={`${p}-${idx}`} value={p}>
-                      {p}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-            <label
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                height: 30,
-                padding: "4px 6px",
-                border: "1px solid #e3e3e3",
-                borderRadius: 8,
-                background: "#fafafa",
-              }}
-            >
-              <input
-                ref={folderInputRef}
-                type="file"
-                multiple
-                {...({
-                  webkitdirectory: "true",
-                  directory: "true",
-                } as React.InputHTMLAttributes<HTMLInputElement>)}
-                onChange={handleFolderImport}
-                style={{ display: "none" }}
-                disabled={!datasetId}
-              />
+            {datasetId && (
               <button
                 type="button"
-                onClick={() => folderInputRef.current?.click()}
-                disabled={!datasetId}
+                onClick={handleBackToHome}
                 style={{
-                  height: 22,
-                  padding: "0 8px",
-                  borderRadius: 6,
+                  height: 30,
+                  padding: "0 10px",
+                  borderRadius: 8,
                   border: "1px solid #e3e3e3",
                   background: "#fff",
-                  fontSize: 11,
-                  cursor: datasetId ? "pointer" : "not-allowed",
-                  opacity: datasetId ? 1 : 0.6,
+                  fontSize: 12,
+                  cursor: "pointer",
                 }}
               >
-                画像取り込み
+                Project Homeへ戻る
               </button>
-              <span style={{ fontSize: 11, color: "#666" }}>
-                {lastImportPath ? lastImportPath : "未取込"}
-              </span>
-            </label>
+            )}
+            {datasetId && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!exportOutputDir.trim()) {
+                      setExportOutputDir("~/Downloads");
+                    }
+                    setExportResult(null);
+                    setShowExportDrawer(true);
+                  }}
+                  style={{
+                    height: 30,
+                    padding: "0 10px",
+                    borderRadius: 8,
+                    border: "1px solid #e3e3e3",
+                    background: "#fff",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Export dataset
+                </button>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    height: 30,
+                    padding: "4px 6px",
+                    border: "1px solid #e3e3e3",
+                    borderRadius: 8,
+                    background: "#f7f7f7",
+                    opacity: 0.9,
+                  }}
+                >
+                  <span style={{ fontSize: 11 }}>プロジェクト</span>
+                  <select
+                    value={project}
+                    onChange={(e) => setProject(e.target.value)}
+                    style={{ minWidth: 120, height: 22, fontSize: 11 }}
+                  >
+                    {projects.length === 0 && (
+                      <option key="project-none" value="">
+                        (none)
+                      </option>
+                    )}
+                    {asChildren(
+                      projects.map((p, idx) => (
+                        <option key={`${p}-${idx}`} value={p}>
+                          {p}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    height: 30,
+                    padding: "4px 6px",
+                    border: "1px solid #e3e3e3",
+                    borderRadius: 8,
+                    background: "#fafafa",
+                  }}
+                >
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    multiple
+                    {...({
+                      webkitdirectory: "true",
+                      directory: "true",
+                    } as React.InputHTMLAttributes<HTMLInputElement>)}
+                    onChange={handleFolderImport}
+                    style={{ display: "none" }}
+                    disabled={!datasetId}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                    disabled={!datasetId}
+                    style={{
+                      height: 22,
+                      padding: "0 8px",
+                      borderRadius: 6,
+                      border: "1px solid #e3e3e3",
+                      background: "#fff",
+                      fontSize: 11,
+                      cursor: datasetId ? "pointer" : "not-allowed",
+                      opacity: datasetId ? 1 : 0.6,
+                    }}
+                  >
+                    画像取り込み
+                  </button>
+                  <span style={{ fontSize: 11, color: "#666" }}>
+                    {lastImportPath ? lastImportPath : "未取込"}
+                  </span>
+                </label>
+              </>
+            )}
           </div>
         </div>
         {datasetImporting && (
@@ -2176,22 +2267,6 @@ export default function App() {
             }}
           >
             <div style={{ marginBottom: 8 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-              <input
-                type="checkbox"
-                checked={showCandidates}
-                onChange={(e) => setShowCandidates(e.target.checked)}
-              />
-              <span style={{ fontSize: 12 }}>未確定候補を表示</span>
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={showAnnotations}
-                onChange={(e) => setShowAnnotations(e.target.checked)}
-              />
-              <span style={{ fontSize: 12 }}>確定アノテーションを表示</span>
-            </label>
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <button
                 type="button"
@@ -2558,6 +2633,106 @@ export default function App() {
               }}
             >
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>検出 共通設定</div>
+              <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+                <button
+                  type="button"
+                  aria-pressed={showCandidates}
+                  onClick={() => setShowCandidates((prev) => !prev)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                    gap: 10,
+                    height: 32,
+                    padding: "0 10px",
+                    borderRadius: 999,
+                    border: "1px solid #d9e2ec",
+                    background: showCandidates ? "#e3f2fd" : "#fff",
+                    color: "#0b3954",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 34,
+                      height: 18,
+                      borderRadius: 999,
+                      background: showCandidates ? "#1a73e8" : "#cfd8dc",
+                      position: "relative",
+                      transition: "background 120ms ease",
+                      display: "inline-block",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: "50%",
+                        background: "#fff",
+                        position: "absolute",
+                        top: 2,
+                        left: showCandidates ? 18 : 2,
+                        transition: "left 120ms ease",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                      }}
+                    />
+                  </span>
+                  <span style={{ fontWeight: 600 }}>未確定候補を表示</span>
+                  <span style={{ marginLeft: "auto", width: 28, textAlign: "right", fontWeight: 700 }}>
+                    {showCandidates ? "ON" : "OFF"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={showAnnotations}
+                  onClick={() => setShowAnnotations((prev) => !prev)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                    gap: 10,
+                    height: 32,
+                    padding: "0 10px",
+                    borderRadius: 999,
+                    border: "1px solid #d9e2ec",
+                    background: showAnnotations ? "#e8f5e9" : "#fff",
+                    color: "#0b3954",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 34,
+                      height: 18,
+                      borderRadius: 999,
+                      background: showAnnotations ? "#2e7d32" : "#cfd8dc",
+                      position: "relative",
+                      transition: "background 120ms ease",
+                      display: "inline-block",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: "50%",
+                        background: "#fff",
+                        position: "absolute",
+                        top: 2,
+                        left: showAnnotations ? 18 : 2,
+                        transition: "left 120ms ease",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                      }}
+                    />
+                  </span>
+                  <span style={{ fontWeight: 600 }}>確定アノテーションを表示</span>
+                  <span style={{ marginLeft: "auto", width: 28, textAlign: "right", fontWeight: 700 }}>
+                    {showAnnotations ? "ON" : "OFF"}
+                  </span>
+                </button>
+              </div>
               <div
                 style={{
                   marginBottom: 10,
@@ -2648,12 +2823,11 @@ export default function App() {
             >
               <div
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                  display: "flex",
                   gap: 8,
                 }}
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                   <button
                     type="button"
                     onClick={handleConfirmCandidate}
@@ -2663,6 +2837,7 @@ export default function App() {
                     onMouseDown={() => setActiveAction("confirm")}
                     onMouseUp={() => setActiveAction(null)}
                     style={{
+                      width: "100%",
                       height: 36,
                       borderRadius: 8,
                       border: "1px solid #1a73e8",
@@ -2685,7 +2860,7 @@ export default function App() {
                     </span>
                   </button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                   <button
                     type="button"
                     onClick={handleNextCandidate}
@@ -2695,6 +2870,7 @@ export default function App() {
                     onMouseDown={() => setActiveAction("next")}
                     onMouseUp={() => setActiveAction(null)}
                     style={{
+                      width: "100%",
                       height: 36,
                       borderRadius: 8,
                       border: "1px solid #90a4ae",
@@ -2717,7 +2893,7 @@ export default function App() {
                     </span>
                   </button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                   <button
                     type="button"
                     onClick={handleRejectCandidate}
@@ -2727,6 +2903,7 @@ export default function App() {
                     onMouseDown={() => setActiveAction("discard")}
                     onMouseUp={() => setActiveAction(null)}
                     style={{
+                      width: "100%",
                       height: 36,
                       borderRadius: 8,
                       border: "1px solid #d32f2f",
@@ -2749,7 +2926,7 @@ export default function App() {
                     </span>
                   </button>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                   <button
                     type="button"
                     onClick={handleSegCandidate}
@@ -2759,6 +2936,7 @@ export default function App() {
                     onMouseDown={() => setActiveAction("sam")}
                     onMouseUp={() => setActiveAction(null)}
                     style={{
+                      width: "100%",
                       height: 36,
                       borderRadius: 8,
                       border: "1px solid #2e7d32",
@@ -2860,7 +3038,20 @@ export default function App() {
                       <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
                         未チェックのクラスは対象外になります。
                       </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 6,
+                          marginTop: 6,
+                          maxHeight: 84,
+                          overflowY: "auto",
+                          padding: "4px 2px",
+                          borderRadius: 6,
+                          border: "1px solid #eceff1",
+                          background: "#fcfcfc",
+                        }}
+                      >
                         {classOptions.length === 0 && (
                           <span style={{ fontSize: 12, color: "#888" }}>クラス未設定</span>
                         )}
