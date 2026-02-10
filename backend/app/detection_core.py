@@ -16,7 +16,6 @@ import numpy as np
 
 from .matching import MatchResult, match_templates
 from .templates import TemplateImage
-from .candidate_scoring import score_candidates
 from .annotation_exporter import export_annotations
 
 
@@ -128,32 +127,105 @@ def annotate_all(
 
     height, width = img.shape[:2]
 
-    # Sliding window for recall
-    tile_size = max(64, int(roi_size))
-    stride = max(1, int(stride if stride is not None else tile_size * 0.25))
-    max_per_tile = 50
+    # Legacy-style binary matching pipeline (close to original implementation)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    image_bin = np.where(gray < 128, 255, 0).astype(np.uint8)
 
-    candidates: List[Candidate] = []
-    for x0, y0, x1, y1 in _iter_tiles(width, height, tile_size, stride):
-        tile = img[y0:y1, x0:x1]
-        if tile.size == 0:
-            continue
-        candidates.extend(
-            _match_tile(
-                tile,
-                x0,
-                y0,
-                templates_by_class,
-                scale_min,
-                scale_max,
-                scale_steps,
-                max_per_tile,
-                roi_size,
-            )
-        )
+    def _iter_scales() -> List[float]:
+        if scale_steps <= 1:
+            return [float(scale_min)]
+        return [
+            float(scale_min + (scale_max - scale_min) * i / (scale_steps - 1))
+            for i in range(scale_steps)
+        ]
 
-    scored = score_candidates(img, candidates)
-    confirmed = [c for c in scored if c["final_score"] >= threshold]
+    def _compute_match_ratio(template_bin: np.ndarray, patch: np.ndarray) -> float:
+        if template_bin.size == 0 or patch.size == 0:
+            return 0.0
+        mask = template_bin == 255
+        if not np.any(mask):
+            return 0.0
+        matched = patch[mask] == 255
+        return float(np.mean(matched))
+
+    def _nms(cands: List[Dict], iou_threshold: float) -> List[Dict]:
+        if not cands:
+            return []
+        sorted_cands = sorted(cands, key=lambda c: c["final_score"], reverse=True)
+        kept: List[Dict] = []
+        for cand in sorted_cands:
+            x1, y1, w1, h1 = cand["bbox"]
+            x2 = x1 + w1
+            y2 = y1 + h1
+            overlap = False
+            for kept_c in kept:
+                kx1, ky1, kw, kh = kept_c["bbox"]
+                kx2 = kx1 + kw
+                ky2 = ky1 + kh
+                inter_w = max(0, min(x2, kx2) - max(x1, kx1))
+                inter_h = max(0, min(y2, ky2) - max(y1, ky1))
+                inter = inter_w * inter_h
+                if inter <= 0:
+                    continue
+                union = w1 * h1 + kw * kh - inter
+                iou = inter / union if union > 0 else 0.0
+                if iou >= iou_threshold:
+                    overlap = True
+                    break
+            if not overlap:
+                kept.append(cand)
+        return kept
+
+    match_threshold = float(threshold)
+    black_match_threshold = 0.6
+    nms_threshold = 0.3
+
+    candidates: List[Dict] = []
+    for class_name, tpls in templates_by_class.items():
+        for tpl in tpls:
+            tpl_gray = tpl.image_gray
+            if tpl_gray is None or tpl_gray.size == 0:
+                continue
+            template_bin_base = np.where(tpl_gray < 128, 255, 0).astype(np.uint8)
+            for scale in _iter_scales():
+                if scale <= 0:
+                    continue
+                th, tw = template_bin_base.shape[:2]
+                resized = cv2.resize(
+                    template_bin_base,
+                    (max(1, int(tw * scale)), max(1, int(th * scale))),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                rh, rw = resized.shape[:2]
+                if rh <= 1 or rw <= 1:
+                    continue
+                if rh > height or rw > width:
+                    continue
+                result = cv2.matchTemplate(image_bin, resized, cv2.TM_CCORR_NORMED)
+                ys, xs = np.where(result >= match_threshold)
+                for (x, y) in zip(xs, ys):
+                    patch = image_bin[y : y + rh, x : x + rw]
+                    if patch.shape[0] != rh or patch.shape[1] != rw:
+                        continue
+                    match_score = float(result[y, x])
+                    match_ratio = _compute_match_ratio(resized, patch)
+                    if match_ratio < black_match_threshold:
+                        continue
+                    combined_score = match_score + match_ratio
+                    candidates.append(
+                        {
+                            "class_name": class_name,
+                            "bbox": (int(x), int(y), int(rw), int(rh)),
+                            "edge_score": match_score,
+                            "contour_score": 0.0,
+                            "layout_score": 0.0,
+                            "shape_score": 0.0,
+                            "final_score": combined_score,
+                            "template_name": tpl.template_name,
+                        }
+                    )
+
+    confirmed = _nms(candidates, nms_threshold)
 
     export_payload = export_annotations(
         image_path=image_path,
@@ -165,7 +237,7 @@ def annotate_all(
     return {
         "image": str(image_path),
         "threshold": threshold,
-        "total_candidates": len(scored),
+        "total_candidates": len(candidates),
         "confirmed": confirmed,
         "export": export_payload,
     }

@@ -2416,6 +2416,7 @@ export default function App() {
                 background: "#fff",
               }}
             >
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>検出 共通設定</div>
               <div
                 style={{
                   marginBottom: 10,
@@ -2438,6 +2439,56 @@ export default function App() {
                 />
                 <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
               </div>
+              {Object.keys(colorMap).length > 0 && (
+                <div style={{ marginBottom: 4 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 11 }}>
+                    クラス別カラー
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {asChildren(
+                      Object.entries(colorMap).map(([name, color], idx) => {
+                        const hexColor = normalizeToHex(color);
+                        return (
+                          <label
+                            key={`${name}-${idx}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "4px 6px",
+                              border: "1px solid #e3e3e3",
+                              borderRadius: 999,
+                              background: "#fff",
+                              fontSize: 11,
+                            }}
+                          >
+                            <input
+                              type="color"
+                              value={hexColor}
+                              onChange={(e) =>
+                                setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                              }
+                              style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                            />
+                            <span>{name}</span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                marginBottom: 12,
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                padding: 10,
+                background: "#fff",
+              }}
+            >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <button
@@ -2883,43 +2934,6 @@ export default function App() {
               </div>
             </div>
             <div style={{ marginBottom: 16 }} />
-            {Object.keys(colorMap).length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>クラス別カラー</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {asChildren(
-                    Object.entries(colorMap).map(([name, color], idx) => {
-                      const hexColor = normalizeToHex(color);
-                      return (
-                        <label
-                          key={`${name}-${idx}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "4px 6px",
-                            border: "1px solid #e3e3e3",
-                            borderRadius: 999,
-                            background: "#fff",
-                            fontSize: 11,
-                          }}
-                        >
-                          <input
-                            type="color"
-                            value={hexColor}
-                            onChange={(e) =>
-                              setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                            }
-                            style={{ width: 20, height: 20, padding: 0, border: "none" }}
-                          />
-                          <span>{name}</span>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
 
             <div style={{ marginBottom: 12, paddingTop: 4, flex: "1 1 auto", minHeight: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>

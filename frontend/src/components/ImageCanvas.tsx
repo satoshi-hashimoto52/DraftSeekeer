@@ -274,6 +274,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.restore();
       };
 
+      const lineScale = Math.max(1, scale);
       const drawBox = (
         x: number,
         y: number,
@@ -288,7 +289,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.strokeStyle = color;
-        ctx.lineWidth = lineWidth;
+        ctx.lineWidth = lineWidth / lineScale;
         ctx.setLineDash(dashed ? [6, 4] : []);
         if (fillAlpha > 0) {
           ctx.globalAlpha = fillAlpha;
@@ -453,10 +454,22 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.save();
         ctx.strokeStyle = "#ff9800";
         ctx.fillStyle = "rgba(255, 152, 0, 0.15)";
-        ctx.lineWidth = baseLine * 1.6;
+        ctx.lineWidth = (baseLine * 1.6) / lineScale;
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(left, top, w, h);
         ctx.fillRect(left, top, w, h);
+        ctx.restore();
+      }
+
+      if (pendingManualBBox) {
+        const { x, y, w, h } = pendingManualBBox;
+        ctx.save();
+        ctx.strokeStyle = "#ff6f00";
+        ctx.fillStyle = "rgba(255, 183, 77, 0.15)";
+        ctx.lineWidth = (baseLine * 1.6) / lineScale;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillRect(x, y, w, h);
         ctx.restore();
       }
 
