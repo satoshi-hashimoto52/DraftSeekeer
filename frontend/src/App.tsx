@@ -1447,14 +1447,31 @@ export default function App() {
           flex-wrap: wrap;
           gap: 8px;
           align-items: center;
+          justify-content: flex-end;
+          width: 100%;
+        }
+        .rightPanel .controlStack {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          align-items: flex-end;
+          width: 100%;
+        }
+        .rightPanel .miniLabel {
+          font-size: 11px;
+          color: #607d8b;
+          min-width: 28px;
+          text-align: right;
         }
         .rightPanel .numInput {
           width: 84px !important;
           max-width: 84px !important;
+          text-align: center;
         }
         .rightPanel .midInput {
           width: 120px !important;
           max-width: 120px !important;
+          text-align: center;
         }
         .rightPanel .stepBtn {
           width: 36px !important;
@@ -2302,40 +2319,39 @@ export default function App() {
             {showAdvanced && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>検出パラメータ</div>
-                <div className="formRow" style={{ marginBottom: 6 }}>
-                  <span style={{ fontSize: 12 }}>スケール</span>
-                  <div className="controlWrap">
-                    <span style={{ fontSize: 11, color: "#607d8b" }}>min</span>
-                    <NumericInputWithButtons
-                      value={scaleMin}
-                      onChange={(v) => typeof v === "number" && setScaleMin(v)}
-                      min={0.1}
-                      step={0.1}
-                      height={32}
-                      inputWidth={84}
-                      ariaLabel="scale min"
-                      className="controlWrap"
-                      inputClassName="numInput"
-                      buttonClassName="stepBtn"
-                    />
-                  </div>
-                </div>
-                <div className="formRow" style={{ marginBottom: 6 }}>
-                  <span style={{ fontSize: 12 }} />
-                  <div className="controlWrap">
-                    <span style={{ fontSize: 11, color: "#607d8b" }}>max</span>
-                    <NumericInputWithButtons
-                      value={scaleMax}
-                      onChange={(v) => typeof v === "number" && setScaleMax(v)}
-                      min={0.1}
-                      step={0.1}
-                      height={32}
-                      inputWidth={84}
-                      ariaLabel="scale max"
-                      className="controlWrap"
-                      inputClassName="numInput"
-                      buttonClassName="stepBtn"
-                    />
+                <div className="formRow" style={{ marginBottom: 6, alignItems: "start" }}>
+                  <span style={{ fontSize: 12, paddingTop: 4 }}>スケール</span>
+                  <div className="controlStack">
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                      <NumericInputWithButtons
+                        value={scaleMin}
+                        onChange={(v) => typeof v === "number" && setScaleMin(v)}
+                        min={0.1}
+                        step={0.1}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="scale min"
+                        className="controlWrap"
+                        inputClassName="numInput"
+                        buttonClassName="stepBtn"
+                      />
+                      <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                      <NumericInputWithButtons
+                        value={scaleMax}
+                        onChange={(v) => typeof v === "number" && setScaleMax(v)}
+                        min={0.1}
+                        step={0.1}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="scale max"
+                        className="controlWrap"
+                        inputClassName="numInput"
+                        buttonClassName="stepBtn"
+                      />
+                      <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                    </div>
                   </div>
                 </div>
                 <div className="formRow" style={{ marginBottom: 8 }}>
@@ -2633,26 +2649,21 @@ export default function App() {
               }}
             >
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>検出 共通設定</div>
-              <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
-                <button
-                  type="button"
+              <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+                <div
+                  role="button"
                   aria-pressed={showCandidates}
                   onClick={() => setShowCandidates((prev) => !prev)}
                   style={{
-                    display: "flex",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto auto",
                     alignItems: "center",
-                    justifyContent: "flex-start",
                     gap: 10,
-                    height: 32,
-                    padding: "0 10px",
-                    borderRadius: 999,
-                    border: "1px solid #d9e2ec",
-                    background: showCandidates ? "#e3f2fd" : "#fff",
-                    color: "#0b3954",
-                    fontSize: 12,
+                    height: 28,
                     cursor: "pointer",
                   }}
                 >
+                  <span style={{ fontSize: 12, color: "#455a64" }}>未確定候補を表示</span>
                   <span
                     style={{
                       width: 34,
@@ -2678,30 +2689,32 @@ export default function App() {
                       }}
                     />
                   </span>
-                  <span style={{ fontWeight: 600 }}>未確定候補を表示</span>
-                  <span style={{ marginLeft: "auto", width: 28, textAlign: "right", fontWeight: 700 }}>
+                  <span
+                    style={{
+                      width: 28,
+                      textAlign: "right",
+                      fontSize: 11,
+                      color: showCandidates ? "#455a64" : "#90a4ae",
+                      fontWeight: 600,
+                    }}
+                  >
                     {showCandidates ? "ON" : "OFF"}
                   </span>
-                </button>
-                <button
-                  type="button"
+                </div>
+                <div
+                  role="button"
                   aria-pressed={showAnnotations}
                   onClick={() => setShowAnnotations((prev) => !prev)}
                   style={{
-                    display: "flex",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto auto",
                     alignItems: "center",
-                    justifyContent: "flex-start",
                     gap: 10,
-                    height: 32,
-                    padding: "0 10px",
-                    borderRadius: 999,
-                    border: "1px solid #d9e2ec",
-                    background: showAnnotations ? "#e8f5e9" : "#fff",
-                    color: "#0b3954",
-                    fontSize: 12,
+                    height: 28,
                     cursor: "pointer",
                   }}
                 >
+                  <span style={{ fontSize: 12, color: "#455a64" }}>確定アノテーションを表示</span>
                   <span
                     style={{
                       width: 34,
@@ -2727,11 +2740,18 @@ export default function App() {
                       }}
                     />
                   </span>
-                  <span style={{ fontWeight: 600 }}>確定アノテーションを表示</span>
-                  <span style={{ marginLeft: "auto", width: 28, textAlign: "right", fontWeight: 700 }}>
+                  <span
+                    style={{
+                      width: 28,
+                      textAlign: "right",
+                      fontSize: 11,
+                      color: showAnnotations ? "#455a64" : "#90a4ae",
+                      fontWeight: 600,
+                    }}
+                  >
                     {showAnnotations ? "ON" : "OFF"}
                   </span>
-                </button>
+                </div>
               </div>
               <div
                 style={{
@@ -2994,20 +3014,14 @@ export default function App() {
                 </button>
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>全自動 閾値</div>
-                      <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
-                        高いほど誤検出が減ります。低いほど拾いやすくなります。
+                    <div className="formRow">
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>全自動 閾値</div>
+                        <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
+                          高いほど誤検出が減ります。低いほど拾いやすくなります。
+                        </div>
                       </div>
-                      <div
-                        style={{
-                          marginTop: 6,
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 8,
-                          alignItems: "center",
-                        }}
-                      >
+                      <div className="controlWrap">
                         <input
                           type="range"
                           min={0}
@@ -3015,6 +3029,7 @@ export default function App() {
                           step={0.01}
                           value={autoThreshold}
                           onChange={(e) => setAutoThreshold(Number(e.target.value))}
+                          style={{ maxWidth: 200 }}
                         />
                         <NumericInputWithButtons
                           value={autoThreshold}
@@ -3227,40 +3242,39 @@ export default function App() {
                             );
                           })}
                         </div>
-                        <div className="formRow">
-                          <span style={{ fontSize: 12, fontWeight: 600 }}>スケール</span>
-                          <div className="controlWrap">
-                            <span style={{ fontSize: 11, color: "#607d8b" }}>min</span>
-                            <NumericInputWithButtons
-                              value={scaleMin}
-                              onChange={(v) => typeof v === "number" && setScaleMin(v)}
-                              min={0.1}
-                              step={0.1}
-                              height={32}
-                              inputWidth={84}
-                              ariaLabel="auto scale min"
-                              className="controlWrap"
-                              inputClassName="numInput"
-                              buttonClassName="stepBtn"
-                            />
-                          </div>
-                        </div>
-                        <div className="formRow">
-                          <span style={{ fontSize: 12 }} />
-                          <div className="controlWrap">
-                            <span style={{ fontSize: 11, color: "#607d8b" }}>max</span>
-                            <NumericInputWithButtons
-                              value={scaleMax}
-                              onChange={(v) => typeof v === "number" && setScaleMax(v)}
-                              min={0.1}
-                              step={0.1}
-                              height={32}
-                              inputWidth={84}
-                              ariaLabel="auto scale max"
-                              className="controlWrap"
-                              inputClassName="numInput"
-                              buttonClassName="stepBtn"
-                            />
+                        <div className="formRow" style={{ alignItems: "start" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, paddingTop: 4 }}>スケール</span>
+                          <div className="controlStack">
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                              <NumericInputWithButtons
+                                value={scaleMin}
+                                onChange={(v) => typeof v === "number" && setScaleMin(v)}
+                                min={0.1}
+                                step={0.1}
+                                height={32}
+                                inputWidth={84}
+                                ariaLabel="auto scale min"
+                                className="controlWrap"
+                                inputClassName="numInput"
+                                buttonClassName="stepBtn"
+                              />
+                              <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                              <NumericInputWithButtons
+                                value={scaleMax}
+                                onChange={(v) => typeof v === "number" && setScaleMax(v)}
+                                min={0.1}
+                                step={0.1}
+                                height={32}
+                                inputWidth={84}
+                                ariaLabel="auto scale max"
+                                className="controlWrap"
+                                inputClassName="numInput"
+                                buttonClassName="stepBtn"
+                              />
+                              <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                            </div>
                           </div>
                         </div>
                         <div className="formRow">
