@@ -1407,15 +1407,215 @@ export default function App() {
 
   return (
     <div
+      className="appRoot"
       style={{
         fontFamily: "\"IBM Plex Sans\", system-ui, sans-serif",
         height: "100vh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        background: "var(--bg)",
+        color: "var(--text)",
       }}
     >
       <style>{`
+        :root {
+          --bg: #f3f6fb;
+          --panel: #ffffff;
+          --panel2: #f7f9fc;
+          --border: #e1e6ef;
+          --text: #0b1f3a;
+          --muted: #6b7a90;
+          --primary: #2b74ff;
+          --primary-2: #35c4ff;
+          --danger: #e15656;
+          --shadow: 0 10px 24px rgba(7, 20, 40, 0.08);
+          --radius: 12px;
+        }
+        .topBar {
+          background: var(--panel);
+          border-bottom: 1px solid var(--border);
+          box-shadow: 0 6px 16px rgba(7, 20, 40, 0.06);
+        }
+        .panelShell {
+          background: var(--panel);
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          box-shadow: var(--shadow);
+        }
+        .sectionCard {
+          background: var(--panel) !important;
+          border: 1px solid var(--border) !important;
+          border-radius: var(--radius) !important;
+          box-shadow: var(--shadow) !important;
+          padding: 12px;
+        }
+        .sectionCard.muted {
+          background: var(--panel2) !important;
+        }
+        .sectionTitle {
+          font-weight: 700;
+          color: var(--text);
+          font-size: 12px;
+          margin-bottom: 8px;
+        }
+        .btn {
+          border-radius: 10px;
+          border: 1px solid transparent;
+          padding: 0 12px;
+          height: 32px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 120ms ease;
+          box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+        }
+        .btnPrimary {
+          background: linear-gradient(120deg, var(--primary), var(--primary-2)) !important;
+          color: #fff !important;
+          border-color: transparent !important;
+          box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          transition: all 120ms ease;
+        }
+        .btnSecondary {
+          background: var(--panel2) !important;
+          color: var(--text) !important;
+          border-color: var(--border) !important;
+        }
+        .btnDanger {
+          background: var(--danger) !important;
+          color: #fff !important;
+          border-color: transparent !important;
+        }
+        .btnGhost {
+          background: transparent !important;
+          border-color: var(--border) !important;
+          color: var(--text) !important;
+          box-shadow: none !important;
+        }
+        .btnSpecial {
+          background: linear-gradient(120deg, #6a5cff, #2b74ff) !important;
+          color: #fff !important;
+          border-color: transparent !important;
+        }
+        .btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+        .btn:hover:not(:disabled) {
+          box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
+          filter: brightness(1.03);
+        }
+        .btn:active:not(:disabled) {
+          transform: translateY(1px);
+          box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+          filter: brightness(0.98);
+        }
+        .btn:focus-visible {
+          outline: 2px solid rgba(53, 196, 255, 0.5);
+          outline-offset: 2px;
+        }
+        .sectionTitle {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
+          color: var(--muted);
+        }
+        .sectionBody {
+          margin-top: 8px;
+        }
+        .warningCard {
+          border-radius: 10px;
+          padding: 8px 10px;
+          font-size: 12px;
+          border: 1px solid transparent;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .warningYellow {
+          background: #fff7d6;
+          color: #9a7b00;
+          border-color: #f5dda0;
+          border-left: 4px solid #f0c75e;
+        }
+        .warningOrange {
+          background: #ffe9d8;
+          color: #b25b00;
+          border-color: #ffc79f;
+          border-left: 4px solid #f29d50;
+        }
+        .warningRed {
+          background: #ffe1e1;
+          color: #b00020;
+          border-color: #ffb3b3;
+          border-left: 4px solid #e15656;
+        }
+        .drawerFooter {
+          position: sticky;
+          bottom: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          padding: 12px 12px 14px;
+          border-top: 1px solid var(--border);
+          background: rgba(255, 255, 255, 0.92);
+          box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.10);
+        }
+        .drawerMetaLine {
+          font-size: 12px;
+          color: var(--muted);
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .rightPanel {
+          min-height: 0;
+          height: calc(100vh - var(--topbar-h, 72px) - 24px);
+        }
+        .confirmedSection {
+          display: flex;
+          flex-direction: column;
+          flex: 1 1 auto;
+          min-height: 0;
+        }
+        .confirmedBody {
+          display: flex;
+          flex-direction: column;
+          flex: 1 1 auto;
+          min-height: 0;
+        }
+        .confirmedList {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          overflow-y: auto;
+          flex: 1 1 auto;
+          min-height: 0;
+          padding-right: 4px;
+          overscroll-behavior: contain;
+          scrollbar-gutter: stable;
+        }
+        .confirmedRow {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
+        }
+        .inputCompact {
+          width: 84px;
+          text-align: right;
+        }
+        .inputMid {
+          width: 96px;
+          text-align: right;
+        }
         input[type="number"]::-webkit-outer-spin-button,
         input[type="number"]::-webkit-inner-spin-button {
           -webkit-appearance: none;
@@ -1493,12 +1693,11 @@ export default function App() {
         }
       `}</style>
       <div
+        className="topBar"
         style={{
           padding: "12px 20px",
-          borderBottom: "1px solid #eee",
           position: "sticky",
           top: 0,
-          background: "#fff",
           zIndex: 10,
         }}
       >
@@ -1519,21 +1718,17 @@ export default function App() {
             }}
           >
             {datasetId && (
-              <button
-                type="button"
-                onClick={handleBackToHome}
-                style={{
+                <button
+                  type="button"
+                  onClick={handleBackToHome}
+                  className="btn btnSecondary"
+                  style={{
                   height: 30,
                   padding: "0 10px",
-                  borderRadius: 8,
-                  border: "1px solid #e3e3e3",
-                  background: "#fff",
-                  fontSize: 12,
-                  cursor: "pointer",
                 }}
-              >
-                Project Homeへ戻る
-              </button>
+                >
+                  Project Homeへ戻る
+                </button>
             )}
             {datasetId && (
               <>
@@ -1546,14 +1741,10 @@ export default function App() {
                     setExportResult(null);
                     setShowExportDrawer(true);
                   }}
+                  className="btn btnSecondary"
                   style={{
                     height: 30,
                     padding: "0 10px",
-                    borderRadius: 8,
-                    border: "1px solid #e3e3e3",
-                    background: "#fff",
-                    fontSize: 12,
-                    cursor: "pointer",
                   }}
                 >
                   Export dataset
@@ -1565,9 +1756,9 @@ export default function App() {
                     gap: 6,
                     height: 30,
                     padding: "4px 6px",
-                    border: "1px solid #e3e3e3",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
-                    background: "#f7f7f7",
+                    background: "var(--panel2)",
                     opacity: 0.9,
                   }}
                 >
@@ -1619,12 +1810,10 @@ export default function App() {
                     type="button"
                     onClick={() => folderInputRef.current?.click()}
                     disabled={!datasetId}
+                    className="btn btnSecondary"
                     style={{
                       height: 22,
                       padding: "0 8px",
-                      borderRadius: 6,
-                      border: "1px solid #e3e3e3",
-                      background: "#fff",
                       fontSize: 11,
                       cursor: datasetId ? "pointer" : "not-allowed",
                       opacity: datasetId ? 1 : 0.6,
@@ -1676,15 +1865,14 @@ export default function App() {
             }}
           />
           <div
+            className="panelShell"
             style={{
               position: "fixed",
               top: 0,
               right: 0,
               height: "100vh",
               width: 420,
-              background: "#fff",
               zIndex: 50,
-              boxShadow: "-8px 0 24px rgba(0,0,0,0.18)",
               display: "flex",
               flexDirection: "column",
             }}
@@ -1693,40 +1881,32 @@ export default function App() {
             <div
               style={{
                 padding: "14px 16px",
-                borderBottom: "1px solid #eee",
+                borderBottom: "1px solid var(--border)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
               }}
             >
-              <div style={{ fontWeight: 700 }}>Export dataset</div>
+              <div className="sectionTitle">Export dataset</div>
               <button
                 type="button"
                 onClick={closeExportDrawer}
+                className="btn btnGhost"
                 style={{
-                  border: "none",
-                  background: "transparent",
                   fontSize: 18,
-                  cursor: "pointer",
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  boxShadow: "none",
                 }}
               >
                 ×
               </button>
             </div>
-            <div style={{ padding: 16, overflowY: "auto" }}>
-              <div
-                style={{
-                  borderRadius: 8,
-                  padding: 12,
-                  background:
-                    "repeating-linear-gradient(135deg, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 6px, rgba(0,0,0,0.06) 6px, rgba(0,0,0,0.06) 12px)",
-                  color: "#333",
-                  fontSize: 12,
-                  pointerEvents: "none",
-                  marginBottom: 16,
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Summary</div>
+            <div style={{ padding: 16, overflowY: "auto", display: "grid", gap: 12 }}>
+              <div className="sectionCard muted" style={{ pointerEvents: "none" }}>
+                <div className="sectionTitle">Summary</div>
+                <div className="sectionBody" style={{ fontSize: 12, color: "var(--muted)" }}>
                 <div>Project: {project || "-"}</div>
                 <div>Dataset: {datasetInfo?.project_name || "-"}</div>
                 <div>Total images: {totalImages}</div>
@@ -1734,35 +1914,25 @@ export default function App() {
                 <div>Total annotations: {totalAnnotations}</div>
                 <div>Classes: {classesCount}</div>
                 <div>Negative include: {includeNegatives ? "ON" : "OFF"}</div>
+                </div>
               </div>
 
-              <div style={{ marginBottom: 16 }}>
+              <div className="sectionCard">
                 <button
                   type="button"
                   onClick={() => setShowSplitSettings((prev) => !prev)}
+                  className="btn btnGhost"
                   style={{
                     width: "100%",
                     height: 32,
-                    borderRadius: 8,
-                    border: "1px solid #e3e3e3",
-                    background: "#fff",
-                    fontSize: 12,
-                    cursor: "pointer",
                     marginBottom: 8,
                   }}
                 >
                   Split settings
                 </button>
                 {showSplitSettings && (
-                  <div
-                    style={{
-                      border: "1px solid #e3e3e3",
-                      borderRadius: 8,
-                      padding: 10,
-                      background: "#fff",
-                    }}
-                  >
-                    <div style={{ display: "grid", gridTemplateColumns: "64px 64px 64px", gap: 8 }}>
+                  <div className="sectionBody">
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                       <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         <span style={{ fontSize: 11, color: "#666" }}>Train</span>
                         <input
@@ -1770,7 +1940,8 @@ export default function App() {
                           min={0}
                           value={splitTrain}
                           onChange={(e) => setSplitTrain(Number(e.target.value))}
-                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                          className="inputCompact"
+                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
                         />
                       </label>
                       <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1780,7 +1951,8 @@ export default function App() {
                           min={0}
                           value={splitVal}
                           onChange={(e) => setSplitVal(Number(e.target.value))}
-                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                          className="inputCompact"
+                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
                         />
                       </label>
                       <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1790,7 +1962,8 @@ export default function App() {
                           min={0}
                           value={splitTest}
                           onChange={(e) => setSplitTest(Number(e.target.value))}
-                          style={{ height: 32, padding: "0 8px", width: 64 }}
+                          className="inputCompact"
+                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
                         />
                       </label>
                     </div>
@@ -1800,7 +1973,8 @@ export default function App() {
                         type="number"
                         value={splitSeed}
                         onChange={(e) => setSplitSeed(Number(e.target.value))}
-                        style={{ height: 32, padding: "0 8px", width: 96 }}
+                        className="inputMid"
+                        style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
                       />
                     </div>
                     <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
@@ -1815,8 +1989,9 @@ export default function App() {
                 )}
               </div>
 
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Dataset type</div>
+              <div className="sectionCard">
+                <div className="sectionTitle">Dataset type</div>
+                <div className="sectionBody">
                 <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                   <input
                     type="radio"
@@ -1830,10 +2005,12 @@ export default function App() {
                   <input type="radio" name="datasetType" checked={datasetType === "seg"} disabled />
                   <span style={{ fontSize: 12 }}>seg (disabled)</span>
                 </label>
+                </div>
               </div>
 
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Output directory</div>
+              <div className="sectionCard">
+                <div className="sectionTitle">Output directory</div>
+                <div className="sectionBody" style={{ display: "grid", gap: 8 }}>
                 <div style={{ display: "flex", gap: 8 }}>
                   <input
                     ref={exportDirInputRef}
@@ -1856,14 +2033,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleBrowseExportDir}
+                    className="btn btnSecondary"
                     style={{
                       height: 32,
                       padding: "0 10px",
-                      borderRadius: 8,
-                      border: "1px solid #e0e0e0",
-                      background: "#fff",
-                      color: "#333",
-                      cursor: "pointer",
                     }}
                   >
                     Browse...
@@ -1883,9 +2056,9 @@ export default function App() {
                         height: 28,
                         fontSize: 11,
                         borderRadius: 6,
-                        border: "1px solid #e0e0e0",
+                        border: "1px solid var(--border)",
                         padding: "0 6px",
-                        background: "#fff",
+                        background: "var(--panel)",
                       }}
                     >
                       <option value="">選択してください</option>
@@ -1897,23 +2070,19 @@ export default function App() {
                     </select>
                   </div>
                 )}
+                </div>
               </div>
 
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Validation & Warnings</div>
+              <div className="sectionCard">
+                <div className="sectionTitle">Validation & Warnings</div>
+                <div className="sectionBody">
                 {asChildren(
                   exportErrors.map((msg, idx) => (
                     <div
                       key={`${msg}-${idx}`}
-                      style={{
-                        padding: "6px 8px",
-                        borderRadius: 6,
-                        background: "#ffebee",
-                        color: "#b00020",
-                        fontSize: 12,
-                        marginBottom: 6,
-                      }}
+                      className="warningCard warningRed"
                     >
+                      <span style={{ fontWeight: 700, fontSize: 11 }}>ERROR</span>
                       {msg}
                     </div>
                   ))
@@ -1922,15 +2091,13 @@ export default function App() {
                   exportWarnings.map((w, idx) => (
                     <div
                       key={`${w.text}-${idx}`}
-                      style={{
-                        padding: "6px 8px",
-                        borderRadius: 6,
-                        background: w.level === "orange" ? "#fff3e0" : "#fffde7",
-                        color: w.level === "orange" ? "#ef6c00" : "#9e7b00",
-                        fontSize: 12,
-                        marginBottom: 6,
-                      }}
+                      className={`warningCard ${
+                        w.level === "orange" ? "warningOrange" : "warningYellow"
+                      }`}
                     >
+                      <span style={{ fontWeight: 700, fontSize: 11 }}>
+                        {w.level === "orange" ? "CAUTION" : "WARN"}
+                      </span>
                       {w.text}
                     </div>
                   ))
@@ -1938,50 +2105,58 @@ export default function App() {
                 {exportErrors.length === 0 && exportWarnings.length === 0 && (
                   <div style={{ fontSize: 12, color: "#666" }}>問題は検出されていません。</div>
                 )}
+                </div>
               </div>
 
-              <div
-                style={{
-                  borderRadius: 8,
-                  padding: 12,
-                  background:
-                    "repeating-linear-gradient(135deg, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 6px, rgba(0,0,0,0.06) 6px, rgba(0,0,0,0.06) 12px)",
-                  color: "#333",
-                  fontSize: 12,
-                  pointerEvents: "none",
-                  marginBottom: 16,
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Export summary</div>
+              <div className="sectionCard muted" style={{ pointerEvents: "none" }}>
+                <div className="sectionTitle">Export summary</div>
+                <div className="sectionBody" style={{ fontSize: 12, color: "var(--muted)" }}>
                 <div>Train: {splitSummary.train} images</div>
                 <div>Val: {splitSummary.val} images</div>
                 <div>Test: {splitSummary.test} images</div>
                 <div style={{ marginTop: 6 }}>Output: {exportOutputDir || "-"}</div>
                 <div>Folder: {exportFolderName}</div>
+                </div>
               </div>
             </div>
-            <div
-              style={{
-                padding: 16,
-                borderTop: "1px solid #eee",
-                background: "#fff",
-                position: "sticky",
-                bottom: 0,
-              }}
-            >
+            <div className="drawerFooter">
+              {(exportErrors.length > 0 || exportWarnings.length > 0) && (
+                <div
+                  className={`warningCard ${
+                    exportErrors.length > 0
+                      ? "warningRed"
+                      : exportWarnings[0]?.level === "orange"
+                        ? "warningOrange"
+                        : "warningYellow"
+                  }`}
+                  style={{ lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                >
+                  <span style={{ fontWeight: 700, fontSize: 11 }}>
+                    {exportErrors.length > 0
+                      ? "ERROR"
+                      : exportWarnings[0]?.level === "orange"
+                        ? "CAUTION"
+                        : "WARN"}
+                  </span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {exportErrors.length > 0
+                      ? exportErrors[0]
+                      : exportWarnings[0]?.text || "警告があります"}
+                  </span>
+                </div>
+              )}
+              <div className="drawerMetaLine">
+                Output: {exportOutputDir || "-"}  |  Folder: {exportFolderName}
+              </div>
               <button
                 type="button"
                 onClick={datasetType === "seg" ? handleExportDatasetSeg : handleExportDatasetBBox}
                 disabled={!canExport || busy}
+                className="btn btnPrimary"
                 style={{
                   width: "100%",
                   height: 40,
-                  borderRadius: 10,
-                  border: "1px solid #1a73e8",
-                  background: !canExport || busy ? "#f2f2f2" : "#1a73e8",
-                  color: !canExport || busy ? "#888" : "#fff",
                   fontWeight: 700,
-                  cursor: !canExport || busy ? "not-allowed" : "pointer",
                 }}
               >
                 {busy ? "Exporting..." : "Export dataset"}
@@ -1989,7 +2164,6 @@ export default function App() {
               {exportResult && (
                 <div
                   style={{
-                    marginTop: 8,
                     fontSize: 12,
                     color: exportResult.ok ? "#2e7d32" : "#b00020",
                     wordBreak: "break-all",
@@ -2060,9 +2234,9 @@ export default function App() {
           }}
         >
           <div
+            className="panelShell"
             style={{
-              borderRight: "1px solid #eee",
-              paddingRight: 12,
+              padding: 12,
               minHeight: 0,
               overflowY: "auto",
               display: "flex",
@@ -2271,14 +2445,14 @@ export default function App() {
           </div>
 
           <div
-            className="rightPanel"
+            className="rightPanel panelShell"
             style={{
-              borderLeft: "1px solid #eee",
-              paddingLeft: 16,
+              padding: 16,
               minHeight: 0,
               overflowY: "auto",
               display: "flex",
               flexDirection: "column",
+              gap: 10,
               opacity: isCanvasInteracting ? 0.6 : 1,
               transition: "opacity 160ms ease",
             }}
@@ -2288,14 +2462,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowAdvanced((prev) => !prev)}
+                className="btn btnGhost"
                 style={{
                   flex: 1,
                   height: 32,
-                  borderRadius: 8,
-                  border: "1px solid #e3e3e3",
-                  background: "#fff",
-                  fontSize: 12,
-                  cursor: "pointer",
                 }}
               >
                 Advanced settings
@@ -2303,14 +2473,11 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowDebug((prev) => !prev)}
+                className="btn btnGhost"
                 style={{
                   width: 80,
                   height: 32,
-                  borderRadius: 8,
-                  border: "1px solid #e3e3e3",
-                  background: showDebug ? "#f1f8ff" : "#fff",
-                  fontSize: 12,
-                  cursor: "pointer",
+                  background: showDebug ? "var(--panel2)" : "transparent",
                 }}
               >
                 Debug
@@ -2639,17 +2806,9 @@ export default function App() {
                 )}
               </div>
             )}
-            <div
-              style={{
-                marginBottom: 12,
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                padding: 10,
-                background: "#fff",
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>検出 共通設定</div>
-              <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            <div className="sectionCard">
+              <div className="sectionTitle">検出 共通設定</div>
+              <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }}>
                 <div
                   role="button"
                   aria-pressed={showCandidates}
@@ -2832,15 +2991,7 @@ export default function App() {
               )}
             </div>
 
-            <div
-              style={{
-                marginBottom: 12,
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                padding: 10,
-                background: "#fff",
-              }}
-            >
+            <div className="sectionCard">
               <div
                 style={{
                   display: "flex",
@@ -2856,22 +3007,13 @@ export default function App() {
                     onMouseLeave={() => setHoverAction(null)}
                     onMouseDown={() => setActiveAction("confirm")}
                     onMouseUp={() => setActiveAction(null)}
+                    className="btn btnPrimary"
                     style={{
                       width: "100%",
                       height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #1a73e8",
-                      background: "#1a73e8",
-                      color: "#fff",
                       fontWeight: 700,
-                      cursor: "pointer",
                       opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "confirm"
-                          ? "0 6px 12px rgba(26,115,232,0.24)"
-                          : "0 4px 10px rgba(26,115,232,0.16)",
                       transform: activeAction === "confirm" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
                     }}
                   >
                     <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
@@ -2889,22 +3031,13 @@ export default function App() {
                     onMouseLeave={() => setHoverAction(null)}
                     onMouseDown={() => setActiveAction("next")}
                     onMouseUp={() => setActiveAction(null)}
+                    className="btn btnSecondary"
                     style={{
                       width: "100%",
                       height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #90a4ae",
-                      background: "#eceff1",
-                      color: "#455a64",
                       fontWeight: 700,
-                      cursor: "pointer",
                       opacity: candidates.length === 0 ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "next"
-                          ? "0 6px 12px rgba(144,164,174,0.25)"
-                          : "0 4px 10px rgba(144,164,174,0.16)",
                       transform: activeAction === "next" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
                     }}
                   >
                     <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
@@ -2922,22 +3055,13 @@ export default function App() {
                     onMouseLeave={() => setHoverAction(null)}
                     onMouseDown={() => setActiveAction("discard")}
                     onMouseUp={() => setActiveAction(null)}
+                    className="btn btnDanger"
                     style={{
                       width: "100%",
                       height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #d32f2f",
-                      background: "#d32f2f",
-                      color: "#fff",
                       fontWeight: 700,
-                      cursor: "pointer",
                       opacity: !selectedCandidate ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "discard"
-                          ? "0 6px 12px rgba(211,47,47,0.25)"
-                          : "0 4px 10px rgba(211,47,47,0.16)",
                       transform: activeAction === "discard" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
                     }}
                   >
                     <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
@@ -2955,22 +3079,13 @@ export default function App() {
                     onMouseLeave={() => setHoverAction(null)}
                     onMouseDown={() => setActiveAction("sam")}
                     onMouseUp={() => setActiveAction(null)}
+                    className="btn btnSpecial"
                     style={{
                       width: "100%",
                       height: 36,
-                      borderRadius: 8,
-                      border: "1px solid #2e7d32",
-                      background: "#2e7d32",
-                      color: "#fff",
                       fontWeight: 700,
-                      cursor: "pointer",
                       opacity: !selectedCandidate ? 0.45 : 1,
-                      boxShadow:
-                        hoverAction === "sam"
-                          ? "0 6px 12px rgba(46,125,50,0.25)"
-                          : "0 4px 10px rgba(46,125,50,0.16)",
                       transform: activeAction === "sam" ? "translateY(1px)" : "none",
-                      transition: "all 120ms ease",
                     }}
                   >
                     <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
@@ -2980,15 +3095,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <div
-                style={{
-                  marginTop: 12,
-                  border: "1px solid #d9e2ec",
-                  borderRadius: 12,
-                  padding: 12,
-                  background: "#f7fbff",
-                }}
-              >
+              <div className="sectionCard muted" style={{ marginTop: 12 }}>
                 <button
                   type="button"
                   onClick={() => setAutoPanelOpen((prev) => !prev)}
@@ -3340,11 +3447,13 @@ export default function App() {
             </div>
             <div style={{ marginBottom: 16 }} />
 
-            <div style={{ marginBottom: 12, paddingTop: 4, flex: "1 1 auto", minHeight: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                確定アノテーション（表示 {sortedAnnotations.length}件）
+            <div className="sectionCard confirmedSection" style={{ paddingTop: 4 }}>
+              <div className="sectionTitle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>確定アノテーション</span>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>表示 {sortedAnnotations.length}件</span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <div className="sectionBody confirmedBody">
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap", rowGap: 6 }}>
                 <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
                 <select
                   value={annotationFilterClass}
@@ -3423,49 +3532,61 @@ export default function App() {
                       .map(([name, count]) => `${name}: ${count}`)
                       .join(" / ")}
               </div>
-              <div style={{ overflowY: "auto", maxHeight: "36vh", paddingRight: 6 }}>
+              <div className="confirmedList">
                 {sortedAnnotations.length === 0 && (
-                  <div style={{ color: "#666" }}>確定アノテはまだありません。</div>
+                  <div style={{ color: "var(--muted)" }}>確定アノテはまだありません。</div>
                 )}
                 {asChildren(sortedAnnotations.map((a, idx) => (
                   <div
                     key={`${a.id || "ann"}-${idx}`}
+                    className="confirmedRow"
                     style={{
-                      padding: "6px 8px",
-                      marginBottom: 6,
-                      border: "1px solid #e3e3e3",
-                      borderRadius: 6,
-                      background: selectedAnnotationId === a.id ? "#eef6ff" : "#fff",
+                      padding: "8px 10px",
+                      marginBottom: 8,
+                      border: "1px solid var(--border)",
+                      borderRadius: 12,
+                      background: selectedAnnotationId === a.id ? "rgba(37,99,235,0.06)" : "var(--panel)",
+                      borderLeft: selectedAnnotationId === a.id ? "3px solid rgba(37,99,235,0.45)" : `1px solid var(--border)`,
                       cursor: "pointer",
-                      display: "flex",
-                      justifyContent: "space-between",
+                      display: "grid",
+                      gridTemplateColumns: "18px 1fr auto 36px",
                       alignItems: "center",
-                      gap: 8,
+                      gap: 12,
+                      minHeight: 52,
                     }}
                     onClick={() => handleSelectAnnotation(a)}
                   >
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={checkedAnnotationIds.includes(a.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...checkedAnnotationIds, a.id]
-                            : checkedAnnotationIds.filter((id) => id !== a.id);
-                          setCheckedAnnotationIds(next);
-                        }}
-                      />
-                      <div>
-                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                        <span style={{ color: colorMap[a.class_name] || "#333" }}>{a.class_name}</span>
+                    <input
+                      type="checkbox"
+                      checked={checkedAnnotationIds.includes(a.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...checkedAnnotationIds, a.id]
+                          : checkedAnnotationIds.filter((id) => id !== a.id);
+                        setCheckedAnnotationIds(next);
+                      }}
+                    />
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            background: colorMap[a.class_name] || "#333",
+                            display: "inline-block",
+                          }}
+                        />
+                        <span style={{ color: "#0b1f3a" }}>{a.class_name}</span>
                         <span
                           style={{
                             fontSize: 10,
                             padding: "2px 6px",
                             borderRadius: 10,
-                            background: "#455a64",
-                            color: "#fff",
+                            background: "var(--panel2)",
+                            color: "var(--text)",
+                            border: "1px solid var(--border)",
                           }}
                         >
                           {a.source.toUpperCase()}
@@ -3497,12 +3618,14 @@ export default function App() {
                           </span>
                         )}
                       </div>
-                      <div style={{ fontSize: 12, color: "#666" }}>
+                      <div style={{ fontSize: 12, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
                         bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
                       </div>
-                      <div style={{ fontSize: 12, color: "#666" }}>
-                        確信度: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
-                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", fontVariantNumeric: "tabular-nums", justifySelf: "end" }}>
+                      {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
+                      <div style={{ marginTop: 2 }}>
+                        {a.created_at ? new Date(a.created_at).toLocaleTimeString() : ""}
                       </div>
                     </div>
                     <button
@@ -3515,17 +3638,21 @@ export default function App() {
                           setSelectedAnnotationId(null);
                         }
                       }}
+                      className="btn btnGhost"
                       style={{
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        fontSize: 16,
+                        width: 32,
+                        height: 32,
+                        padding: 0,
+                        borderRadius: 8,
+                        fontSize: 14,
+                        boxShadow: "none",
                       }}
                     >
                       🗑
                     </button>
                   </div>
                 )))}
+              </div>
               </div>
             </div>
 
