@@ -510,6 +510,9 @@ export default function App() {
     setError(null);
     setNotice(null);
     setBusy(true);
+    setShowAdvanced(false);
+    setShowDebug(false);
+    setAutoAdvancedOpen(false);
     try {
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
