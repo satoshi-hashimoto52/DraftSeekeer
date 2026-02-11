@@ -35,6 +35,7 @@ type Props = {
     zoom: number;
     pan: { x: number; y: number };
     dpr: number;
+    cssScale?: { sx: number; sy: number };
   }) => void;
   debugOverlay?: {
     clicked_image_xy?: { x: number; y: number };
@@ -111,7 +112,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     active: boolean;
     handle: "tl" | "tr" | "bl" | "br" | null;
     origin: { x: number; y: number; w: number; h: number } | null;
-  }>({ active: false, handle: null, origin: null });
+    target: "candidate" | "annotation" | null;
+  }>({ active: false, handle: null, origin: null, target: null });
   const panDragRef = useRef<{
     active: boolean;
     start: { x: number; y: number } | null;
@@ -499,7 +501,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           drawDebugPoint(debugOverlay.clicked_image_xy, "#d81b60");
         }
       }
-      if (debugPoints) {
+      if ((debugOverlay || onDebugCoords) && debugPoints) {
         const dpr = getDpr();
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -660,6 +662,42 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     return findResizeHandleForBBox(bbox, x, y);
   };
 
+  const findEdgeForBBox = (
+    bbox: { x: number; y: number; w: number; h: number },
+    x: number,
+    y: number
+  ) => {
+    const canvas = canvasRef.current;
+    const tolerance = canvas
+      ? Math.max(6, Math.round(Math.min(canvas.width, canvas.height) * 0.006))
+      : 8;
+    const left = bbox.x;
+    const right = bbox.x + bbox.w;
+    const top = bbox.y;
+    const bottom = bbox.y + bbox.h;
+    const nearLeft = Math.abs(x - left) <= tolerance && y >= top && y <= bottom;
+    const nearRight = Math.abs(x - right) <= tolerance && y >= top && y <= bottom;
+    const nearTop = Math.abs(y - top) <= tolerance && x >= left && x <= right;
+    const nearBottom = Math.abs(y - bottom) <= tolerance && x >= left && x <= right;
+    if (nearLeft) return "w";
+    if (nearRight) return "e";
+    if (nearTop) return "n";
+    if (nearBottom) return "s";
+    return null;
+  };
+
+  const hitTestSelectedAnnotation = (x: number, y: number) => {
+    const ann = getSelectedAnnotation();
+    if (!ann) return null;
+    const bbox = ann.bbox;
+    const corner = findResizeHandleForBBox(bbox, x, y);
+    if (corner) return { type: "corner" as const, corner };
+    const edge = findEdgeForBBox(bbox, x, y);
+    if (edge) return { type: "edge" as const, edge };
+    if (isPointInsideBBox(bbox, x, y)) return { type: "inside" as const };
+    return null;
+  };
+
   const findMoveEdge = (x: number, y: number) => {
     const selected = getSelectedCandidate();
     if (!selected || selected.source !== "manual") return false;
@@ -713,7 +751,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               active: true,
               handle,
               origin: { ...(selectedAnn?.bbox || selected!.bbox) },
+              target: selectedAnn ? "annotation" : "candidate",
             };
+            if (selectedAnn) onAnnotationEditStart?.();
             draggingRef.current = true;
             return;
           }
@@ -733,7 +773,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               active: true,
               handle: hitAnn.handle!,
               origin: { ...hitAnn.ann.bbox },
+              target: "annotation",
             };
+            onAnnotationEditStart?.();
             draggingRef.current = true;
             return;
           }
@@ -764,6 +806,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             start: coords,
             target: "annotation",
           };
+          onAnnotationEditStart?.();
           suppressNextClickRef.current = true;
           draggingRef.current = true;
           return;
@@ -788,6 +831,51 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (spacePressedRef.current) {
       setCursorStyle("grab");
+      return;
+    }
+    if (moveDragRef.current.active) {
+      setCursorStyle("grabbing");
+      return;
+    }
+    if (resizeDragRef.current.active) {
+      const handle = resizeDragRef.current.handle;
+      if (handle === "tl" || handle === "br") {
+        setCursorStyle("nwse-resize");
+        return;
+      }
+      if (handle === "tr" || handle === "bl") {
+        setCursorStyle("nesw-resize");
+        return;
+      }
+    }
+    if (manualDragRef.current.active) {
+      setCursorStyle("crosshair");
+      return;
+    }
+    const annHit = hitTestSelectedAnnotation(x, y);
+    if (annHit?.type === "corner") {
+      const handle = annHit.corner;
+      if (handle === "tl" || handle === "br") {
+        setCursorStyle("nwse-resize");
+        return;
+      }
+      if (handle === "tr" || handle === "bl") {
+        setCursorStyle("nesw-resize");
+        return;
+      }
+    }
+    if (annHit?.type === "edge") {
+      if (annHit.edge === "n" || annHit.edge === "s") {
+        setCursorStyle("ns-resize");
+        return;
+      }
+      if (annHit.edge === "e" || annHit.edge === "w") {
+        setCursorStyle("ew-resize");
+        return;
+      }
+    }
+    if (annHit?.type === "inside") {
+      setCursorStyle("move");
       return;
     }
     if (findMoveEdge(x, y)) {
@@ -906,6 +994,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       return;
     }
     if (moveDragRef.current.active) {
+      if (moveDragRef.current.target === "annotation") {
+        onAnnotationEditEnd?.();
+      }
       moveDragRef.current = { active: false, origin: null, start: null, target: null };
       suppressNextClickRef.current = true;
       draggingRef.current = false;
@@ -913,7 +1004,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       return;
     }
     if (resizeDragRef.current.active) {
-      resizeDragRef.current = { active: false, handle: null, origin: null };
+      if (resizeDragRef.current.target === "annotation") {
+        onAnnotationEditEnd?.();
+      }
+      resizeDragRef.current = { active: false, handle: null, origin: null, target: null };
       suppressNextClickRef.current = true;
       draggingRef.current = false;
       clickTrackRef.current = { active: false, start: null, moved: false };
@@ -967,14 +1061,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     const screen = getScreenCoords(event);
     if (!screen) return;
     const coords = screenToImage(screen);
-    setDebugPoints({ screen, image: coords });
-    onDebugCoords?.({
-      screen,
-      image: coords,
-      zoom: scaleRef.current,
-      pan: { ...panRef.current },
-      dpr: getDpr(),
-    });
+    if (debugOverlay || onDebugCoords) {
+      setDebugPoints({ screen, image: coords });
+      onDebugCoords?.({
+        screen,
+        image: coords,
+        zoom: scaleRef.current,
+        pan: { ...panRef.current },
+        dpr: getDpr(),
+        cssScale: { ...getCssScale() },
+      });
+    }
     if (annotations.length > 0) {
       const hit = annotations
         .filter(

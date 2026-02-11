@@ -56,6 +56,8 @@ from .schemas import (
     DatasetSelectRequest,
     ProjectCreateRequest,
     LoadAnnotationsResponse,
+    ClearAnnotationsRequest,
+    ClearAnnotationsResponse,
     ExportDatasetBBoxRequest,
     ExportDatasetBBoxResponse,
     ExportDatasetSegRequest,
@@ -417,6 +419,26 @@ def list_projects() -> List[str]:
     return sorted(templates_cache.keys())
 
 
+@app.get("/templates/{project}/{class_name}/{template_name}/preview")
+def get_template_preview(project: str, class_name: str, template_name: str) -> Dict[str, Optional[str]]:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    class_templates = project_templates.get(class_name)
+    if class_templates is None:
+        raise HTTPException(status_code=404, detail="class not found")
+    tpl = next((t for t in class_templates if t.template_name == template_name), None)
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    img = tpl.image_proc_edge
+    if img is None or getattr(img, "size", 0) == 0:
+        return {"base64": None}
+    ok, buffer = cv2.imencode(".png", img)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to encode template")
+    return {"base64": base64.b64encode(buffer.tobytes()).decode("ascii")}
+
+
 @app.get("/dataset/projects", response_model=List[DatasetInfo])
 def list_dataset_projects() -> List[DatasetInfo]:
     DATASETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -634,6 +656,24 @@ def load_annotations(project_name: str, image_key: str) -> LoadAnnotationsRespon
     except Exception as exc:
         raise HTTPException(status_code=500, detail="invalid annotations") from exc
     return LoadAnnotationsResponse(ok=True, annotations=data)
+
+
+@app.post("/annotations/clear", response_model=ClearAnnotationsResponse)
+def clear_annotations(payload: ClearAnnotationsRequest) -> ClearAnnotationsResponse:
+    project_dir = _project_dir(payload.project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+    annotations_dir = _project_annotations_dir(payload.project_name)
+    if not annotations_dir.exists():
+        return ClearAnnotationsResponse(ok=True, deleted=0)
+    deleted = 0
+    for ann_path in annotations_dir.glob("*.json"):
+        try:
+            ann_path.unlink()
+            deleted += 1
+        except Exception:
+            continue
+    return ClearAnnotationsResponse(ok=True, deleted=deleted)
 
 
 @app.post("/export/dataset/bbox", response_model=ExportDatasetBBoxResponse)

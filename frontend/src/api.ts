@@ -244,6 +244,36 @@ export async function fetchTemplates(): Promise<ProjectTemplates[]> {
   return (await res.json()) as ProjectTemplates[];
 }
 
+export async function fetchTemplatePreview(
+  project: string,
+  className: string,
+  templateName: string
+): Promise<{ base64: string | null }> {
+  const res = await fetch(
+    `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(
+      className
+    )}/${encodeURIComponent(templateName)}/preview`
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Template preview fetch failed");
+  }
+  return (await res.json()) as { base64: string | null };
+}
+
+export async function clearProjectAnnotations(project_name: string): Promise<{ ok: boolean; deleted: number }> {
+  const res = await fetch(`${API_BASE}/annotations/clear`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_name }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Clear annotations failed");
+  }
+  return (await res.json()) as { ok: boolean; deleted: number };
+}
+
 export async function detectPoint(params: {
   image_id: string;
   project: string;

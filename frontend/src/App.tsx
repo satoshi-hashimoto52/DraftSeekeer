@@ -10,6 +10,8 @@ import {
   detectPoint,
   fetchProjects,
   fetchTemplates,
+  fetchTemplatePreview,
+  clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
   importDataset,
@@ -83,7 +85,18 @@ export default function App() {
     }
   });
   const [projects, setProjects] = useState<string[]>([]);
+  const [templateProjects, setTemplateProjects] = useState<ProjectTemplates[]>([]);
+  const [templateByDataset, setTemplateByDataset] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem("draftseeker.templateByDataset");
+      const parsed = raw ? JSON.parse(raw) : {};
+      return typeof parsed === "object" && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const [project, setProject] = useState<string>("");
+  const [projectChangeUnlocked, setProjectChangeUnlocked] = useState<boolean>(false);
   const [classOptions, setClassOptions] = useState<string[]>([]);
   const [roiSize, setRoiSize] = useState<number>(DEFAULT_ROI_SIZE);
   const [topk, setTopk] = useState<number>(DEFAULT_TOPK);
@@ -100,6 +113,10 @@ export default function App() {
   const [annotationUndoStack, setAnnotationUndoStack] = useState<Annotation[][]>([]);
   const [annotationRedoStack, setAnnotationRedoStack] = useState<Annotation[][]>([]);
   const annotationEditActiveRef = useRef<boolean>(false);
+  const editSessionRef = useRef<{
+    activeId: string | null;
+    before: Annotation[];
+  } | null>(null);
   const [colorMap, setColorMap] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +150,28 @@ export default function App() {
   const [autoPanelOpen, setAutoPanelOpen] = useState<boolean>(true);
   const [autoAdvancedOpen, setAutoAdvancedOpen] = useState<boolean>(false);
   const [autoStride, setAutoStride] = useState<number | null>(null);
+  const [advancedBaseline, setAdvancedBaseline] = useState<{
+    roiSize: number;
+    topk: number;
+    scaleMin: number;
+    scaleMax: number;
+    scaleSteps: number;
+    excludeEnabled: boolean;
+    excludeMode: "same_class" | "any_class";
+    excludeCenter: boolean;
+    excludeIouThreshold: number;
+    refineContour: boolean;
+  } | null>(null);
+  const [autoBaseline, setAutoBaseline] = useState<{
+    autoThreshold: number;
+    autoMethod: "combined" | "scaled_templates";
+    autoClassFilter: string[];
+    autoStride: number | null;
+    scaleMin: number;
+    scaleMax: number;
+    scaleSteps: number;
+    roiSize: number;
+  } | null>(null);
   const [autoRunning, setAutoRunning] = useState<boolean>(false);
   const [autoResult, setAutoResult] = useState<{
     added: number;
@@ -143,6 +182,7 @@ export default function App() {
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressTimerRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
+  const annotationRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const exportDirInputRef = useRef<HTMLInputElement | null>(null);
   const [coordDebug, setCoordDebug] = useState<{
@@ -151,7 +191,10 @@ export default function App() {
     zoom: number;
     pan: { x: number; y: number };
     dpr: number;
+    cssScale?: { sx: number; sy: number };
   } | null>(null);
+  const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
+  const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
   const asChildren = (nodes: React.ReactNode[]) => React.Children.toArray(nodes);
 
   const dismissHints = () => {
@@ -180,7 +223,25 @@ export default function App() {
   const refreshProjectList = async () => {
     try {
       const list = await listDatasetProjects();
-      setProjectList(list);
+      const enriched = await Promise.all(
+        list.map(async (p) => {
+          try {
+            const detail = await fetchDataset(p.project_name);
+            return {
+              ...p,
+              total_images: detail.total_images,
+              annotated_images: detail.annotated_images,
+              bbox_count: detail.bbox_count,
+              seg_count: detail.seg_count,
+              updated_at: detail.updated_at ?? p.updated_at,
+              images: detail.images ?? p.images,
+            };
+          } catch {
+            return p;
+          }
+        })
+      );
+      setProjectList(enriched);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project list failed");
     }
@@ -305,6 +366,78 @@ export default function App() {
       test: _test.length,
     };
   }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
+
+  const isSameArray = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((v, idx) => v === b[idx]);
+
+  const advancedDirty = useMemo(() => {
+    if (!advancedBaseline) return false;
+    return (
+      roiSize !== advancedBaseline.roiSize ||
+      topk !== advancedBaseline.topk ||
+      scaleMin !== advancedBaseline.scaleMin ||
+      scaleMax !== advancedBaseline.scaleMax ||
+      scaleSteps !== advancedBaseline.scaleSteps ||
+      excludeEnabled !== advancedBaseline.excludeEnabled ||
+      excludeMode !== advancedBaseline.excludeMode ||
+      excludeCenter !== advancedBaseline.excludeCenter ||
+      excludeIouThreshold !== advancedBaseline.excludeIouThreshold ||
+      refineContour !== advancedBaseline.refineContour
+    );
+  }, [
+    advancedBaseline,
+    roiSize,
+    topk,
+    scaleMin,
+    scaleMax,
+    scaleSteps,
+    excludeEnabled,
+    excludeMode,
+    excludeCenter,
+    excludeIouThreshold,
+    refineContour,
+  ]);
+
+  const autoDirty = useMemo(() => {
+    if (!autoBaseline) return false;
+    return (
+      autoThreshold !== autoBaseline.autoThreshold ||
+      autoMethod !== autoBaseline.autoMethod ||
+      autoStride !== autoBaseline.autoStride ||
+      scaleMin !== autoBaseline.scaleMin ||
+      scaleMax !== autoBaseline.scaleMax ||
+      scaleSteps !== autoBaseline.scaleSteps ||
+      roiSize !== autoBaseline.roiSize ||
+      !isSameArray(autoClassFilter, autoBaseline.autoClassFilter)
+    );
+  }, [
+    autoBaseline,
+    autoThreshold,
+    autoMethod,
+    autoStride,
+    scaleMin,
+    scaleMax,
+    scaleSteps,
+    roiSize,
+    autoClassFilter,
+  ]);
+
+  const scaleMinDanger = scaleMin < 0.2;
+  const scaleMaxDanger = scaleMax > 3.0;
+  const scaleMinWarn = scaleMin < 0.4 || scaleMin > 0.8;
+  const scaleMaxWarn = scaleMax < 1.2 || scaleMax > 2.0;
+  const scaleStepsDanger = scaleSteps > 20;
+  const scaleStepsWarn = scaleSteps < 6 || scaleSteps > 12;
+  const topkDanger = topk > 10;
+  const topkWarn = topk < 1 || topk > 5;
+  const roiDanger = roiSize < 100 || roiSize > 1200;
+  const roiWarn = roiSize < 200 || roiSize > 600;
+  const autoThresholdDanger = autoThreshold < 0.3;
+  const autoThresholdWarn = autoThreshold < 0.6 || autoThreshold > 0.85;
+  const strideDanger =
+    typeof autoStride === "number" && (autoStride < 16 || autoStride > 256);
+  const strideWarn =
+    typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
 
   const handleBrowseExportDir = async () => {
     try {
@@ -437,6 +570,7 @@ export default function App() {
     fetchTemplates()
       .then((list: ProjectTemplates[]) => {
         if (!mounted) return;
+        setTemplateProjects(list);
         const selected = list.find((p: ProjectTemplates) => p.name === project) || list[0];
         const classes = selected
           ? selected.classes.map((c: { class_name: string; count: number }) => c.class_name)
@@ -501,6 +635,85 @@ export default function App() {
     }
   };
 
+  const resetAnnotationWorkState = () => {
+    setCandidates([]);
+    setSelectedCandidateId(null);
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    setCheckedAnnotationIds([]);
+    setAnnotationUndoStack([]);
+    setAnnotationRedoStack([]);
+    setPendingManualBBox(null);
+    setPendingManualClass("");
+    setIsCreatingManualBBox(false);
+    setLastClick(null);
+    setDetectDebug(null);
+    setCoordDebug(null);
+    setSegEditMode(false);
+    setShowSegVertices(true);
+    setSelectedVertexIndex(null);
+    setSegUndoStack([]);
+    setHighlightAnnotationId(null);
+    setLastAutoAddedIds([]);
+    setAutoResult(null);
+    setAutoProgress(0);
+    setAutoRunning(false);
+    setAutoPanelOpen(false);
+    setAutoAdvancedOpen(false);
+    setShowExportDrawer(false);
+    setExportResult(null);
+    setImageStatusMap({});
+  };
+
+  const handleProjectTemplateChange = async (nextProject: string) => {
+    if (nextProject === project) {
+      setProjectChangeUnlocked(false);
+      return;
+    }
+    const ok = window.confirm(
+      "プロジェクト（テンプレ）を変更します。\nクラス定義が変わる可能性があるため、現在のアノテーション（確定/候補）とUI状態は全て削除し、クラス一覧を再読み込みします。続行しますか？"
+    );
+    if (!ok) {
+      setProjectChangeUnlocked(false);
+      return;
+    }
+    resetAnnotationWorkState();
+    if (datasetId) {
+      try {
+        await clearProjectAnnotations(datasetId);
+      } catch {
+        // ignore clear failures
+      }
+    }
+    if (datasetId) {
+      setTemplateByDataset((prev) => {
+        const next = { ...prev, [datasetId]: nextProject };
+        try {
+          localStorage.setItem("draftseeker.templateByDataset", JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    }
+    setProject(nextProject);
+    try {
+      const list = await fetchTemplates();
+      const selected = list.find((p: ProjectTemplates) => p.name === nextProject) || list[0];
+      const classes = selected
+        ? selected.classes.map((c: { class_name: string; count: number }) => c.class_name)
+        : [];
+      setClassOptions(classes);
+      const nextColors = buildColorMapFromClasses(classes);
+      setColorMap(nextColors);
+      setAutoClassFilter(classes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Templates fetch failed");
+    } finally {
+      setProjectChangeUnlocked(false);
+    }
+  };
+
   const handleSelectDatasetImage = async (filename: string) => {
     if (!datasetId) return;
     await loadDatasetImage(datasetId, filename);
@@ -513,7 +726,14 @@ export default function App() {
     setShowAdvanced(false);
     setShowDebug(false);
     setAutoAdvancedOpen(false);
+    setAutoPanelOpen(false);
+    setShowSplitSettings(false);
+    setShowExportDrawer(false);
     try {
+      const storedTemplate = templateByDataset[projectName];
+      if (storedTemplate) {
+        setProject(storedTemplate);
+      }
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
       setDatasetInfo(info);
@@ -1208,6 +1428,16 @@ export default function App() {
         });
         setAnnotations(normalizeLoadedAnnotations(loaded.annotations || []));
       }
+      setAutoBaseline({
+        autoThreshold,
+        autoMethod,
+        autoClassFilter: [...autoClassFilter],
+        autoStride,
+        scaleMin,
+        scaleMax,
+        scaleSteps,
+        roiSize,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto annotate failed");
     } finally {
@@ -1273,6 +1503,27 @@ export default function App() {
     );
   };
 
+  const sameAnnotationShape = (a?: Annotation, b?: Annotation) => {
+    if (!a || !b) return false;
+    if (
+      a.bbox.x !== b.bbox.x ||
+      a.bbox.y !== b.bbox.y ||
+      a.bbox.w !== b.bbox.w ||
+      a.bbox.h !== b.bbox.h
+    ) {
+      return false;
+    }
+    const ap = a.segPolygon;
+    const bp = b.segPolygon;
+    if (!ap && !bp) return true;
+    if (!ap || !bp) return false;
+    if (ap.length !== bp.length) return false;
+    for (let i = 0; i < ap.length; i += 1) {
+      if (ap[i].x !== bp[i].x || ap[i].y !== bp[i].y) return false;
+    }
+    return true;
+  };
+
   const applySegSimplify = () => {
     if (!selectedAnnotation?.segPolygon) return;
     let next = selectedAnnotation.segPolygon;
@@ -1292,6 +1543,49 @@ export default function App() {
       [datasetSelectedName]: annotations.length,
     }));
   }, [annotations.length, datasetSelectedName]);
+
+  useEffect(() => {
+    if (!showDebug) {
+      setTemplatePreviewBase64(null);
+      return;
+    }
+    const candidate = candidates.find((c) => c.id === selectedCandidateId);
+    if (!candidate || !project) {
+      setTemplatePreviewBase64(null);
+      return;
+    }
+    const cacheKey = `${project}::${candidate.class_name}::${candidate.template}`;
+    const cached = templatePreviewCacheRef.current.get(cacheKey);
+    if (cached) {
+      setTemplatePreviewBase64(cached);
+      return;
+    }
+    setTemplatePreviewBase64(null);
+    let cancelled = false;
+    fetchTemplatePreview(project, candidate.class_name, candidate.template)
+      .then((res) => {
+        if (cancelled) return;
+        if (res?.base64) {
+          templatePreviewCacheRef.current.set(cacheKey, res.base64);
+          setTemplatePreviewBase64(res.base64);
+        } else {
+          setTemplatePreviewBase64(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTemplatePreviewBase64(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showDebug, selectedCandidateId, candidates, project]);
+
+  useEffect(() => {
+    if (!selectedAnnotationId) return;
+    const el = annotationRowRefs.current[selectedAnnotationId];
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }, [selectedAnnotationId]);
 
   useEffect(() => {
     if (!datasetId || !datasetSelectedName) return;
@@ -1324,47 +1618,55 @@ export default function App() {
   useEffect(() => {
     if (!datasetId) return;
     const saved = loadAdvancedSettingsForProject(datasetId);
-    if (!saved) {
-      setRoiSize(DEFAULT_ROI_SIZE);
-      setTopk(DEFAULT_TOPK);
-      setScaleMin(DEFAULT_SCALE_MIN);
-      setScaleMax(DEFAULT_SCALE_MAX);
-      setScaleSteps(DEFAULT_SCALE_STEPS);
-      setExcludeEnabled(true);
-      setExcludeMode("same_class");
-      setExcludeCenter(true);
-      setExcludeIouThreshold(0.6);
-      setRefineContour(false);
-      return;
-    }
-    if (typeof saved.roiSize === "number") setRoiSize(saved.roiSize);
-    if (typeof saved.topk === "number") setTopk(saved.topk);
-    if (typeof saved.scaleMin === "number") setScaleMin(saved.scaleMin);
-    if (typeof saved.scaleMax === "number") setScaleMax(saved.scaleMax);
-    if (typeof saved.scaleSteps === "number") setScaleSteps(saved.scaleSteps);
-    if (typeof saved.excludeEnabled === "boolean") setExcludeEnabled(saved.excludeEnabled);
-    if (saved.excludeMode === "same_class" || saved.excludeMode === "any_class") {
-      setExcludeMode(saved.excludeMode);
-    }
-    if (typeof saved.excludeCenter === "boolean") setExcludeCenter(saved.excludeCenter);
-    if (typeof saved.excludeIouThreshold === "number") {
-      setExcludeIouThreshold(saved.excludeIouThreshold);
-    }
-    if (typeof saved.refineContour === "boolean") setRefineContour(saved.refineContour);
+    const baseline = {
+      roiSize: typeof saved?.roiSize === "number" ? saved.roiSize : DEFAULT_ROI_SIZE,
+      topk: typeof saved?.topk === "number" ? saved.topk : DEFAULT_TOPK,
+      scaleMin: typeof saved?.scaleMin === "number" ? saved.scaleMin : DEFAULT_SCALE_MIN,
+      scaleMax: typeof saved?.scaleMax === "number" ? saved.scaleMax : DEFAULT_SCALE_MAX,
+      scaleSteps:
+        typeof saved?.scaleSteps === "number" ? saved.scaleSteps : DEFAULT_SCALE_STEPS,
+      excludeEnabled: typeof saved?.excludeEnabled === "boolean" ? saved.excludeEnabled : true,
+      excludeMode:
+        saved?.excludeMode === "same_class" || saved?.excludeMode === "any_class"
+          ? saved.excludeMode
+          : "same_class",
+      excludeCenter: typeof saved?.excludeCenter === "boolean" ? saved.excludeCenter : true,
+      excludeIouThreshold:
+        typeof saved?.excludeIouThreshold === "number" ? saved.excludeIouThreshold : 0.6,
+      refineContour: typeof saved?.refineContour === "boolean" ? saved.refineContour : false,
+    };
+    setAdvancedBaseline(baseline);
+    setRoiSize(baseline.roiSize);
+    setTopk(baseline.topk);
+    setScaleMin(baseline.scaleMin);
+    setScaleMax(baseline.scaleMax);
+    setScaleSteps(baseline.scaleSteps);
+    setExcludeEnabled(baseline.excludeEnabled);
+    setExcludeMode(baseline.excludeMode);
+    setExcludeCenter(baseline.excludeCenter);
+    setExcludeIouThreshold(baseline.excludeIouThreshold);
+    setRefineContour(baseline.refineContour);
   }, [datasetId]);
 
   useEffect(() => {
     if (!datasetId) return;
     const saved = loadAutoSettingsForProject(datasetId);
-    if (!saved) {
-      setAutoThreshold(0.7);
-      setAutoMethod("combined");
-      setAutoClassFilter([]);
-      return;
-    }
-    if (typeof saved.autoThreshold === "number") setAutoThreshold(saved.autoThreshold);
-    if (saved.autoMethod) setAutoMethod(saved.autoMethod);
-    if (Array.isArray(saved.autoClassFilter)) setAutoClassFilter(saved.autoClassFilter);
+    const baseline = {
+      autoThreshold:
+        typeof saved?.autoThreshold === "number" ? saved.autoThreshold : 0.7,
+      autoMethod: saved?.autoMethod ? saved.autoMethod : "combined",
+      autoClassFilter: Array.isArray(saved?.autoClassFilter) ? saved.autoClassFilter : [],
+      autoStride: null,
+      scaleMin,
+      scaleMax,
+      scaleSteps,
+      roiSize,
+    };
+      setAutoBaseline(baseline);
+      setAutoThreshold(baseline.autoThreshold);
+      setAutoMethod(baseline.autoMethod);
+      setAutoClassFilter(baseline.autoClassFilter);
+      setAutoStride(baseline.autoStride);
   }, [datasetId]);
 
   useEffect(() => {
@@ -1432,6 +1734,8 @@ export default function App() {
           --primary: #2b74ff;
           --primary-2: #35c4ff;
           --danger: #e15656;
+          --warning: #f59e0b;
+          --warning-bg: #fff7e6;
           --shadow: 0 10px 24px rgba(7, 20, 40, 0.08);
           --radius: 12px;
         }
@@ -1461,6 +1765,42 @@ export default function App() {
           color: var(--text);
           font-size: 12px;
           margin-bottom: 8px;
+        }
+        .hintText {
+          font-size: 11px;
+          color: var(--muted);
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
+          justify-content: flex-end;
+        }
+        .badge {
+          font-size: 10px;
+          padding: 2px 6px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--panel2);
+          color: var(--muted);
+          line-height: 1.2;
+        }
+        .badgeWarn {
+          border-color: #ffd8a8;
+          background: #fff4e0;
+          color: #a15c00;
+        }
+        .badgeDanger {
+          border-color: #ffc2c2;
+          background: #ffe8e8;
+          color: #b00020;
+        }
+        .warnInput {
+          border-color: #f5c168 !important;
+          box-shadow: 0 0 0 2px rgba(245, 193, 104, 0.18) !important;
+        }
+        .dangerInput {
+          border-color: var(--warning) !important;
+          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15) !important;
         }
         .btn {
           border-radius: 10px;
@@ -1694,6 +2034,10 @@ export default function App() {
           white-space: normal;
           overflow-wrap: anywhere;
         }
+        .noWrapRow {
+          flex-wrap: nowrap !important;
+          gap: 6px;
+        }
       `}</style>
       <div
         className="topBar"
@@ -1765,11 +2109,18 @@ export default function App() {
                     opacity: 0.9,
                   }}
                 >
-                  <span style={{ fontSize: 11 }}>プロジェクト</span>
+                  <span style={{ fontSize: 11 }}>テンプレート</span>
                   <select
                     value={project}
-                    onChange={(e) => setProject(e.target.value)}
-                    style={{ minWidth: 120, height: 22, fontSize: 11 }}
+                    onChange={(e) => handleProjectTemplateChange(e.target.value)}
+                    disabled={!projectChangeUnlocked}
+                    style={{
+                      minWidth: 120,
+                      height: 22,
+                      fontSize: 11,
+                      opacity: projectChangeUnlocked ? 1 : 0.6,
+                      cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
+                    }}
                   >
                     {projects.length === 0 && (
                       <option key="project-none" value="">
@@ -1784,6 +2135,20 @@ export default function App() {
                       ))
                     )}
                   </select>
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    style={{ height: 22, padding: "0 8px", fontSize: 10 }}
+                    onClick={() => {
+                      if (projects.length <= 1) {
+                        setNotice("現在は1種類のため変更不要です");
+                        return;
+                      }
+                      setProjectChangeUnlocked(true);
+                    }}
+                  >
+                    変更…
+                  </button>
                 </label>
                 <label
                   style={{
@@ -2361,75 +2726,120 @@ export default function App() {
               <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
             )}
             <div style={{ position: "sticky", top: 0 }}>
-              <ImageCanvas
-                ref={canvasRef}
-                imageUrl={imageUrl}
-                candidates={candidates}
-                selectedCandidateId={selectedCandidateId}
-                annotations={filteredAnnotations}
-                selectedAnnotationId={selectedAnnotationId}
-                colorMap={colorMap}
-                showCandidates={showCandidates}
-                showAnnotations={showAnnotations}
-                editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
-                editMode={segEditMode}
-                showVertices={showSegVertices}
-                selectedVertexIndex={selectedVertexIndex}
-                highlightAnnotationId={highlightAnnotationId}
-                onSelectVertex={setSelectedVertexIndex}
-                onUpdateEditablePolygon={(next) => {
-                  if (!selectedAnnotation) return;
-                  setAnnotations((prev) =>
-                    prev.map((a) =>
-                      a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a
-                    )
-                  );
-                }}
-                onVertexDragStart={() => {
-                  if (!selectedAnnotation?.segPolygon) return;
-                  setSegUndoStack((prev) => [
-                    ...prev,
-                    selectedAnnotation.segPolygon!.map((p: { x: number; y: number }) => ({
-                      ...p,
-                    })),
-                  ]);
-                }}
-                onClickPoint={handleClickPoint}
-                onCreateManualBBox={(bbox) => {
-                  setPendingManualBBox(bbox);
-                  setPendingManualClass("");
-                  setSelectedCandidateId(null);
-                  setSelectedAnnotationId(null);
-                }}
-                onManualCreateStateChange={setIsCreatingManualBBox}
-                onResizeSelectedBBox={(bbox) => {
-                  if (!selectedCandidateId) return;
-                  setCandidates((prev) =>
-                    prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
-                  );
-                }}
-                onResizeSelectedAnnotation={(bbox) => {
-                  if (!selectedAnnotationId) return;
-                  setAnnotations((prev) =>
-                    prev.map((a) =>
-                      a.id === selectedAnnotationId ? { ...a, bbox: clampBBoxToImage(bbox) } : a
-                    )
-                  );
-                }}
+              <div style={{ position: "relative" }}>
+                <ImageCanvas
+                  ref={canvasRef}
+                  imageUrl={imageUrl}
+                  candidates={candidates}
+                  selectedCandidateId={selectedCandidateId}
+                  annotations={filteredAnnotations}
+                  selectedAnnotationId={selectedAnnotationId}
+                  colorMap={colorMap}
+                  showCandidates={showCandidates}
+                  showAnnotations={showAnnotations}
+                  editablePolygon={segEditMode ? selectedAnnotation?.segPolygon || null : null}
+                  editMode={segEditMode}
+                  showVertices={showSegVertices}
+                  selectedVertexIndex={selectedVertexIndex}
+                  highlightAnnotationId={highlightAnnotationId}
+                  onSelectVertex={setSelectedVertexIndex}
+                  onUpdateEditablePolygon={(next) => {
+                    if (!selectedAnnotation) return;
+                    setAnnotations((prev) =>
+                      prev.map((a) =>
+                        a.id === selectedAnnotation.id ? { ...a, segPolygon: next } : a
+                      )
+                    );
+                  }}
+                  onVertexDragStart={() => {
+                    if (!selectedAnnotation?.segPolygon) return;
+                    setSegUndoStack((prev) => [
+                      ...prev,
+                      selectedAnnotation.segPolygon!.map((p: { x: number; y: number }) => ({
+                        ...p,
+                      })),
+                    ]);
+                  }}
+                  onClickPoint={handleClickPoint}
+                  onCreateManualBBox={(bbox) => {
+                    setPendingManualBBox(bbox);
+                    setPendingManualClass("");
+                    setSelectedCandidateId(null);
+                    setSelectedAnnotationId(null);
+                  }}
+                  onManualCreateStateChange={setIsCreatingManualBBox}
+                  onResizeSelectedBBox={(bbox) => {
+                    if (!selectedCandidateId) return;
+                    setCandidates((prev) =>
+                      prev.map((c) => (c.id === selectedCandidateId ? { ...c, bbox } : c))
+                    );
+                  }}
+                  onResizeSelectedAnnotation={(bbox) => {
+                    if (!selectedAnnotationId) return;
+                    setAnnotations((prev) =>
+                      prev.map((a) =>
+                        a.id === selectedAnnotationId
+                          ? {
+                              ...a,
+                              bbox: clampBBoxToImage(bbox),
+                              source: a.source === "template" ? "manual" : a.source,
+                            }
+                          : a
+                      )
+                    );
+                  }}
                 onAnnotationEditStart={() => {
                   if (annotationEditActiveRef.current) return;
                   annotationEditActiveRef.current = true;
-                  pushAnnotationHistory();
+                  if (selectedAnnotationId) {
+                    editSessionRef.current = {
+                      activeId: selectedAnnotationId,
+                      before: cloneAnnotations(annotations),
+                    };
+                  }
                 }}
                 onAnnotationEditEnd={() => {
                   annotationEditActiveRef.current = false;
+                  const session = editSessionRef.current;
+                  editSessionRef.current = null;
+                  if (!session?.activeId) return;
+                  const beforeAnn = session.before.find((a) => a.id === session.activeId);
+                  const afterAnn = annotations.find((a) => a.id === session.activeId);
+                  if (!beforeAnn || !afterAnn) return;
+                  if (sameAnnotationShape(beforeAnn, afterAnn)) return;
+                  setAnnotationUndoStack((prev) => [...prev, session.before]);
+                  setAnnotationRedoStack([]);
+                  setAnnotations((prev) =>
+                    prev.map((a) =>
+                      a.id === session.activeId ? { ...a, source: "manual" } : a
+                    )
+                  );
                 }}
-                onSelectAnnotation={handleSelectAnnotation}
-                pendingManualBBox={pendingManualBBox}
-                shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
-                onDebugCoords={setCoordDebug}
+                  onSelectAnnotation={handleSelectAnnotation}
+                  pendingManualBBox={pendingManualBBox}
+                  shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
+                onDebugCoords={showDebug ? setCoordDebug : undefined}
                 debugOverlay={showDebug ? detectDebug || null : null}
               />
+                {selectedAnnotationId && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: 12,
+                      top: 12,
+                      padding: "4px 8px",
+                      borderRadius: 8,
+                      background: "rgba(11, 31, 58, 0.75)",
+                      color: "#fff",
+                      fontSize: 11,
+                      letterSpacing: 0.2,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    編集中（ドラッグで調整）
+                  </div>
+                )}
+              </div>
             </div>
             {notice && (
               <div
@@ -2458,8 +2868,30 @@ export default function App() {
               gap: 10,
               opacity: isCanvasInteracting ? 0.6 : 1,
               transition: "opacity 160ms ease",
+              position: "relative",
             }}
           >
+            {autoRunning && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: "rgba(255,255,255,0.55)",
+                  backdropFilter: "blur(1px)",
+                  zIndex: 2,
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "flex-end",
+                  padding: 10,
+                  fontSize: 12,
+                  color: "#0b1f3a",
+                  fontWeight: 600,
+                  pointerEvents: "auto",
+                }}
+              >
+                全自動 実行中… {autoProgress}%
+              </div>
+            )}
             <div style={{ marginBottom: 8 }}>
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <button
@@ -2469,9 +2901,12 @@ export default function App() {
                 style={{
                   flex: 1,
                   height: 32,
+                  background: showAdvanced ? "var(--panel2)" : "transparent",
+                  borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
+                  color: showAdvanced ? "var(--primary)" : "inherit",
                 }}
               >
-                Advanced settings
+                {showAdvanced ? "▼ Advanced settings" : "▶︎ Advanced settings"}
               </button>
               <button
                 type="button"
@@ -2481,18 +2916,43 @@ export default function App() {
                   width: 80,
                   height: 32,
                   background: showDebug ? "var(--panel2)" : "transparent",
+                  borderColor: showDebug ? "var(--primary)" : "var(--border)",
+                  color: showDebug ? "var(--primary)" : "inherit",
                 }}
               >
-                Debug
+                {showDebug ? "▼ Debug" : "▶︎ Debug"}
               </button>
             </div>
             {showAdvanced && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>検出パラメータ</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>検出パラメータ</div>
+                  {advancedDirty && advancedBaseline && (
+                    <button
+                      type="button"
+                      className="btn btnGhost"
+                      style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                      onClick={() => {
+                        setRoiSize(advancedBaseline.roiSize);
+                        setTopk(advancedBaseline.topk);
+                        setScaleMin(advancedBaseline.scaleMin);
+                        setScaleMax(advancedBaseline.scaleMax);
+                        setScaleSteps(advancedBaseline.scaleSteps);
+                        setExcludeEnabled(advancedBaseline.excludeEnabled);
+                        setExcludeMode(advancedBaseline.excludeMode);
+                        setExcludeCenter(advancedBaseline.excludeCenter);
+                        setExcludeIouThreshold(advancedBaseline.excludeIouThreshold);
+                        setRefineContour(advancedBaseline.refineContour);
+                      }}
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
                 <div className="formRow" style={{ marginBottom: 6, alignItems: "start" }}>
                   <span style={{ fontSize: 12, paddingTop: 4 }}>スケール</span>
                   <div className="controlStack">
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
                       <NumericInputWithButtons
                         value={scaleMin}
                         onChange={(v) => typeof v === "number" && setScaleMin(v)}
@@ -2501,13 +2961,14 @@ export default function App() {
                         height={32}
                         inputWidth={84}
                         ariaLabel="scale min"
+                        placeholder="推奨 0.4–0.8"
                         className="controlWrap"
-                        inputClassName="numInput"
+                        inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
                         buttonClassName="stepBtn"
                       />
                       <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
                       <NumericInputWithButtons
                         value={scaleMax}
                         onChange={(v) => typeof v === "number" && setScaleMax(v)}
@@ -2516,17 +2977,28 @@ export default function App() {
                         height={32}
                         inputWidth={84}
                         ariaLabel="scale max"
+                        placeholder="推奨 1.2–2.0"
                         className="controlWrap"
-                        inputClassName="numInput"
+                        inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
                         buttonClassName="stepBtn"
                       />
                       <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                    </div>
+                    <div className="hintText">
+                      <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
+                      <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
+                      {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
+                        <span className="badge badgeDanger">注意</span>
+                      )}
+                      {(scaleMinDanger || scaleMaxDanger) && (
+                        <span className="badge badgeDanger">Danger</span>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div className="formRow" style={{ marginBottom: 8 }}>
                   <span style={{ fontSize: 12 }}>分割</span>
-                  <div className="controlWrap">
+                  <div className="controlWrap" title="±1">
                     <NumericInputWithButtons
                       value={scaleSteps}
                       onChange={(v) => typeof v === "number" && setScaleSteps(v)}
@@ -2535,15 +3007,20 @@ export default function App() {
                       height={32}
                       inputWidth={84}
                       ariaLabel="scale steps"
+                      placeholder="推奨 6–12"
                       className="controlWrap"
-                      inputClassName="numInput"
+                      inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
                       buttonClassName="stepBtn"
                     />
+                    <span className="badge">推奨 6–12</span>
+                    <span className="badge badgeWarn">危険 &gt;20</span>
+                    {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
+                    {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
                   </div>
                 </div>
                 <div className="formRow" style={{ marginBottom: 6 }}>
                   <span style={{ fontSize: 12 }}>上位件数</span>
-                  <div className="controlWrap">
+                  <div className="controlWrap" title="±1">
                     <NumericInputWithButtons
                       value={topk}
                       onChange={(v) => typeof v === "number" && setTopk(v)}
@@ -2553,8 +3030,9 @@ export default function App() {
                       height={32}
                       inputWidth={84}
                       ariaLabel="topk"
+                      placeholder="推奨 1–5"
                       className="controlWrap"
-                      inputClassName="numInput"
+                      inputClassName={`numInput ${topkDanger ? "dangerInput" : topkWarn ? "warnInput" : ""}`}
                       buttonClassName="stepBtn"
                     />
                   </div>
@@ -2593,7 +3071,7 @@ export default function App() {
                 </label>
                 <div className="formRow" style={{ marginBottom: 8 }}>
                   <span style={{ fontSize: 12 }}>IoU</span>
-                  <div className="controlWrap">
+                  <div className="controlWrap" title="±0.05">
                     <NumericInputWithButtons
                       value={excludeIouThreshold}
                       onChange={(v) => typeof v === "number" && setExcludeIouThreshold(v)}
@@ -2604,10 +3082,12 @@ export default function App() {
                       inputWidth={84}
                       disabled={!excludeEnabled}
                       ariaLabel="exclude iou"
+                      placeholder="推奨 0.4–0.8"
                       className="controlWrap"
                       inputClassName="numInput"
                       buttonClassName="stepBtn"
                     />
+                    <span className="badge">推奨 0.4–0.8</span>
                   </div>
                 </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2620,114 +3100,180 @@ export default function App() {
                 </label>
               </div>
             )}
-            {showDebug && detectDebug && (
+            {showDebug && (detectDebug || coordDebug) && (
               <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
-                {detectDebug.clicked_image_xy && (
+                {detectDebug && (
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
+                )}
+                {detectDebug?.clicked_image_xy && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
                     click: {detectDebug.clicked_image_xy.x.toFixed(2)} ,{" "}
                     {detectDebug.clicked_image_xy.y.toFixed(2)}
                   </div>
                 )}
-                {detectDebug.roi_bbox && (
+                {detectDebug?.roi_bbox && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
                     roi: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) → (
                     {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
                   </div>
                 )}
-                {detectDebug.outer_bbox && (
+                {detectDebug?.outer_bbox && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
                     outer: {detectDebug.outer_bbox.x}, {detectDebug.outer_bbox.y},{" "}
                     {detectDebug.outer_bbox.w}×{detectDebug.outer_bbox.h}
                   </div>
                 )}
-                {detectDebug.tight_bbox && (
+                {detectDebug?.tight_bbox && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
                     tight: {detectDebug.tight_bbox.x}, {detectDebug.tight_bbox.y},{" "}
                     {detectDebug.tight_bbox.w}×{detectDebug.tight_bbox.h}
                   </div>
                 )}
-                {detectDebug.roi_click_xy && (
+                {detectDebug?.roi_click_xy && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
                     roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
                   </div>
                 )}
-                {detectDebug.match_score !== undefined && detectDebug.match_offset_in_roi && (
+                {detectDebug?.match_score !== undefined && detectDebug?.match_offset_in_roi && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
                     match score: {detectDebug.match_score.toFixed(4)} / offset:{" "}
                     {detectDebug.match_offset_in_roi.x.toFixed(1)}, {detectDebug.match_offset_in_roi.y.toFixed(1)}
                   </div>
                 )}
-                {detectDebug.match_mode && (
+                {detectDebug?.match_mode && (
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
                     match mode: {detectDebug.match_mode}
                   </div>
                 )}
-                {(detectDebug.roi_preview_marked_base64 || detectDebug.roi_preview_base64) && (
-                  <img
-                    src={`data:image/png;base64,${
-                      detectDebug.roi_preview_marked_base64 ||
-                      detectDebug.roi_preview_base64 ||
-                      ""
-                    }`}
-                    alt="roi preview"
-                    style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
-                  />
+                {coordDebug && (
+                  <div style={{ marginTop: detectDebug ? 10 : 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
+                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                      screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                      image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                      zoom: {coordDebug.zoom.toFixed(3)}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                      pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                      dpr: {coordDebug.dpr.toFixed(2)}
+                    </div>
+                    {coordDebug.cssScale && (
+                      <div style={{ fontSize: 11, color: "#666" }}>
+                        cssScale: {coordDebug.cssScale.sx.toFixed(3)}, {coordDebug.cssScale.sy.toFixed(3)}
+                      </div>
+                    )}
+                  </div>
                 )}
-                {detectDebug.roi_match_preview_base64 && (
-                  <img
-                    src={`data:image/png;base64,${detectDebug.roi_match_preview_base64}`}
-                    alt="roi match"
+                <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                  {(detectDebug?.roi_preview_marked_base64 || detectDebug?.roi_preview_base64) && (
+                    <img
+                      src={`data:image/png;base64,${
+                        detectDebug?.roi_preview_marked_base64 ||
+                        detectDebug?.roi_preview_base64 ||
+                        ""
+                      }`}
+                      alt="roi preview"
+                      style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
+                    />
+                  )}
+                  <div
                     style={{
-                      width: "100%",
-                      border: "1px solid #e3e3e3",
-                      borderRadius: 4,
-                      marginTop: 6,
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 6,
+                      alignItems: "stretch",
                     }}
-                  />
-                )}
-                {detectDebug.roi_edge_preview_base64 && (
-                  <img
-                    src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
-                    alt="roi edges"
-                    style={{
-                      width: "100%",
-                      border: "1px solid #e3e3e3",
-                      borderRadius: 4,
-                      marginTop: 6,
-                    }}
-                  />
-                )}
-                {detectDebug.template_edge_preview_base64 && (
-                  <img
-                    src={`data:image/png;base64,${detectDebug.template_edge_preview_base64}`}
-                    alt="template edges"
-                    style={{
-                      width: "100%",
-                      border: "1px solid #e3e3e3",
-                      borderRadius: 4,
-                      marginTop: 6,
-                    }}
-                  />
-                )}
-              </div>
-            )}
-            {showDebug && coordDebug && (
-              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
-                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                  screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
+                  >
+                    {detectDebug?.roi_edge_preview_base64 && (
+                      <div
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          border: "1px solid #e3e3e3",
+                          borderRadius: 4,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <img
+                          src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
+                          alt="roi edges"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            display: "block",
+                          }}
+                        />
+                      </div>
+                    )}
+                    {templatePreviewBase64 && (
+                      <div
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          border: "1px solid #e3e3e3",
+                          borderRadius: 4,
+                          overflow: "hidden",
+                          position: "relative",
+                        }}
+                      >
+                        <img
+                          src={`data:image/png;base64,${
+                            templatePreviewBase64 || ""
+                          }`}
+                          alt="template edges"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            display: "block",
+                          }}
+                        />
+                        {typeof selectedCandidate?.score === "number" && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 4,
+                              left: 4,
+                              padding: "2px 6px",
+                              borderRadius: 6,
+                              background: "rgba(0,0,0,0.65)",
+                              color: "#fff",
+                              fontSize: 10,
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {selectedCandidate.score.toFixed(3)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {!templatePreviewBase64 && (
+                      <div
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          border: "1px dashed #e3e3e3",
+                          borderRadius: 4,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 11,
+                          color: "#888",
+                          background: "#fafafa",
+                        }}
+                      >
+                        テンプレ未取得
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                  image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
-                </div>
-                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                  zoom: {coordDebug.zoom.toFixed(3)}
-                </div>
-                <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                  pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
-                </div>
-                <div style={{ fontSize: 11, color: "#666" }}>dpr: {coordDebug.dpr.toFixed(2)}</div>
               </div>
             )}
           </div>
@@ -3131,7 +3677,7 @@ export default function App() {
                           高いほど誤検出が減ります。低いほど拾いやすくなります。
                         </div>
                       </div>
-                      <div className="controlWrap">
+                      <div className="controlWrap" title="±0.01">
                         <input
                           type="range"
                           min={0}
@@ -3150,10 +3696,15 @@ export default function App() {
                           height={32}
                           inputWidth={84}
                           ariaLabel="auto threshold"
+                          placeholder="推奨 0.6–0.85"
                           className="controlWrap"
-                          inputClassName="numInput"
+                          inputClassName={`numInput ${autoThresholdDanger ? "dangerInput" : autoThresholdWarn ? "warnInput" : ""}`}
                           buttonClassName="stepBtn"
                         />
+                        <span className="badge">推奨 0.6–0.85</span>
+                        <span className="badge badgeWarn">危険 &lt;0.3</span>
+                        {autoThresholdWarn && !autoThresholdDanger && <span className="badge badgeDanger">注意</span>}
+                        {autoThresholdDanger && <span className="badge badgeDanger">Danger</span>}
                       </div>
                     </div>
                     <div>
@@ -3298,6 +3849,28 @@ export default function App() {
                     </button>
                     {autoAdvancedOpen && (
                       <div className="autoAdvanced" style={{ display: "grid", gap: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>詳細設定</div>
+                          {autoDirty && autoBaseline && (
+                            <button
+                              type="button"
+                              className="btn btnGhost"
+                              style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                              onClick={() => {
+                                setAutoThreshold(autoBaseline.autoThreshold);
+                                setAutoMethod(autoBaseline.autoMethod);
+                                setAutoClassFilter(autoBaseline.autoClassFilter);
+                                setAutoStride(autoBaseline.autoStride);
+                                setScaleMin(autoBaseline.scaleMin);
+                                setScaleMax(autoBaseline.scaleMax);
+                                setScaleSteps(autoBaseline.scaleSteps);
+                                setRoiSize(autoBaseline.roiSize);
+                              }}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
                         <div style={{ display: "grid", gap: 6 }}>
                           {[
@@ -3355,7 +3928,7 @@ export default function App() {
                         <div className="formRow" style={{ alignItems: "start" }}>
                           <span style={{ fontSize: 12, fontWeight: 600, paddingTop: 4 }}>スケール</span>
                           <div className="controlStack">
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
                               <NumericInputWithButtons
                                 value={scaleMin}
                                 onChange={(v) => typeof v === "number" && setScaleMin(v)}
@@ -3364,13 +3937,14 @@ export default function App() {
                                 height={32}
                                 inputWidth={84}
                                 ariaLabel="auto scale min"
+                                placeholder="推奨 0.4–0.8"
                                 className="controlWrap"
-                                inputClassName="numInput"
+                                inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
                                 buttonClassName="stepBtn"
                               />
                               <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
                             </div>
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
                               <NumericInputWithButtons
                                 value={scaleMax}
                                 onChange={(v) => typeof v === "number" && setScaleMax(v)}
@@ -3379,17 +3953,28 @@ export default function App() {
                                 height={32}
                                 inputWidth={84}
                                 ariaLabel="auto scale max"
+                                placeholder="推奨 1.2–2.0"
                                 className="controlWrap"
-                                inputClassName="numInput"
+                                inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
                                 buttonClassName="stepBtn"
                               />
                               <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                            </div>
+                            <div className="hintText">
+                              <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
+                              <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
+                              {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
+                                <span className="badge badgeDanger">注意</span>
+                              )}
+                              {(scaleMinDanger || scaleMaxDanger) && (
+                                <span className="badge badgeDanger">Danger</span>
+                              )}
                             </div>
                           </div>
                         </div>
                         <div className="formRow">
                           <span style={{ fontSize: 12, fontWeight: 600 }}>分割</span>
-                          <div className="controlWrap">
+                          <div className="controlWrap" title="±1">
                             <NumericInputWithButtons
                               value={scaleSteps}
                               onChange={(v) => typeof v === "number" && setScaleSteps(v)}
@@ -3398,33 +3983,47 @@ export default function App() {
                               height={32}
                               inputWidth={84}
                               ariaLabel="auto scale steps"
+                              placeholder="推奨 6–12"
                               className="controlWrap"
-                              inputClassName="numInput"
+                              inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
                               buttonClassName="stepBtn"
                             />
+                            <span className="badge">推奨 6–12</span>
+                            <span className="badge badgeWarn">危険 &gt;20</span>
+                            {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
+                            {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
                           </div>
                         </div>
                         <div className="formRow">
                           <span style={{ fontSize: 12, fontWeight: 600 }}>stride</span>
-                          <div className="controlWrap">
-                            <NumericInputWithButtons
-                              value={autoStride ?? ""}
-                              onChange={(v) => setAutoStride(v === "" ? null : v)}
-                              min={1}
-                              step={1}
-                              height={32}
-                              inputWidth={120}
-                              ariaLabel="auto stride"
-                              placeholder="空欄で自動"
-                              className="controlWrap"
-                              inputClassName="midInput"
-                              buttonClassName="stepBtn"
-                            />
+                          <div className="controlWrap" title="±1">
+                            <div style={{ display: "flex", flexWrap: "nowrap", gap: 6, alignItems: "center" }}>
+                              <NumericInputWithButtons
+                                value={autoStride ?? ""}
+                                onChange={(v) => setAutoStride(v === "" ? null : v)}
+                                min={1}
+                                step={1}
+                                height={32}
+                                inputWidth={120}
+                                ariaLabel="auto stride"
+                                placeholder="推奨 auto / 32–128"
+                                className="controlWrap noWrapRow"
+                                inputClassName={`midInput ${strideDanger ? "dangerInput" : strideWarn ? "warnInput" : ""}`}
+                                buttonClassName="stepBtn"
+                              />
+                            </div>
+                            <span className="badge">推奨 auto / 32–128</span>
+                            <span className="badge badgeWarn">危険 &lt;16 or &gt;256</span>
+                            {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
+                            {strideDanger && <span className="badge badgeDanger">Danger</span>}
+                            {typeof autoStride === "number" && autoStride <= 0 && (
+                              <span className="badge badgeDanger">入力が不正です</span>
+                            )}
                           </div>
                         </div>
                         <div className="formRow">
                           <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
-                          <div className="controlWrap">
+                          <div className="controlWrap" title="±10">
                             <NumericInputWithButtons
                               value={roiSize}
                               onChange={(v) => typeof v === "number" && setRoiSize(v)}
@@ -3433,13 +4032,18 @@ export default function App() {
                               height={32}
                               inputWidth={84}
                               ariaLabel="auto roi size"
+                              placeholder="推奨 200–600"
                               className="controlWrap"
-                              inputClassName="numInput"
+                              inputClassName={`numInput ${roiDanger ? "dangerInput" : roiWarn ? "warnInput" : ""}`}
                               buttonClassName="stepBtn"
                             />
                             <span style={{ fontSize: 11, color: "#607d8b" }}>
                               手動/自動で共通
                             </span>
+                            <span className="badge">推奨 200–600</span>
+                            <span className="badge badgeWarn">危険 &lt;100 or &gt;1200</span>
+                            {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
+                            {roiDanger && <span className="badge badgeDanger">Danger</span>}
                           </div>
                         </div>
                       </div>
@@ -3543,6 +4147,9 @@ export default function App() {
                   <div
                     key={`${a.id || "ann"}-${idx}`}
                     className="confirmedRow"
+                    ref={(el) => {
+                      if (a.id) annotationRowRefs.current[a.id] = el;
+                    }}
                     style={{
                       padding: "8px 10px",
                       marginBottom: 8,
@@ -3587,12 +4194,12 @@ export default function App() {
                             fontSize: 10,
                             padding: "2px 6px",
                             borderRadius: 10,
-                            background: "var(--panel2)",
-                            color: "var(--text)",
-                            border: "1px solid var(--border)",
+                            background: a.source === "manual" ? "#b00020" : "#2e7d32",
+                            color: "#fff",
+                            border: "1px solid transparent",
                           }}
                         >
-                          {a.source.toUpperCase()}
+                          {a.source === "manual" ? "MANUEL" : a.source.toUpperCase()}
                         </span>
                         {a.segPolygon && a.segMethod && (
                           <span
@@ -3622,7 +4229,7 @@ export default function App() {
                         )}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
-                        bbox: ({a.bbox.x}, {a.bbox.y}, {a.bbox.w}, {a.bbox.h})
+                        bbox: ({Math.round(a.bbox.x)}, {Math.round(a.bbox.y)}, {Math.round(a.bbox.w)}, {Math.round(a.bbox.h)})
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", fontVariantNumeric: "tabular-nums", justifySelf: "end" }}>
@@ -3765,6 +4372,9 @@ export default function App() {
                 }}
               >
                 <div style={{ fontWeight: 600 }}>{p.project_name}</div>
+                <div style={{ fontSize: 12, color: "#666" }}>
+                  テンプレート: {templateByDataset[p.project_name] || "未設定"}
+                </div>
                 <div style={{ fontSize: 12, color: "#666" }}>
                   画像: {p.total_images} / アノテ済: {p.annotated_images}
                 </div>

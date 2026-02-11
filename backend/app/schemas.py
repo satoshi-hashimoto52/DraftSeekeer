@@ -189,6 +189,15 @@ class LoadAnnotationsResponse(BaseModel):
     annotations: List[AnnotationPayload]
 
 
+class ClearAnnotationsRequest(BaseModel):
+    project_name: str
+
+
+class ClearAnnotationsResponse(BaseModel):
+    ok: bool
+    deleted: int = 0
+
+
 class ExportDatasetBBoxRequest(BaseModel):
     project_name: str
     project: str
