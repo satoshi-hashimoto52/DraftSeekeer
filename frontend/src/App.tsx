@@ -3394,12 +3394,28 @@ export default function App() {
                             display: "block",
                           }}
                         />
-                        {typeof selectedCandidate?.score === "number" && (
+                        {selectedCandidate?.class_name && (
                           <div
                             style={{
                               position: "absolute",
                               top: 4,
                               left: 4,
+                              padding: "2px 6px",
+                              borderRadius: 6,
+                              background: "rgba(0,0,0,0.65)",
+                              color: "#fff",
+                              fontSize: 10,
+                            }}
+                          >
+                            {selectedCandidate.class_name}
+                          </div>
+                        )}
+                        {typeof selectedCandidate?.score === "number" && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 4,
+                              right: 4,
                               padding: "2px 6px",
                               borderRadius: 6,
                               background: "rgba(0,0,0,0.65)",
