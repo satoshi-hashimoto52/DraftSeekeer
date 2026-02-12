@@ -196,7 +196,9 @@ export default function App() {
   const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
   const didAutoRestoreRef = useRef(false);
-  type AppViewState = { view: "home" } | { view: "project"; projectName: string };
+  type AppViewState =
+    | { view: "home" }
+    | { view: "project"; projectName: string; lastImageKey?: string };
   const VIEW_STATE_KEY = "draftseeker:viewState:v1";
   const [viewState, setViewState] = useState<AppViewState>(() => {
     try {
@@ -204,13 +206,28 @@ export default function App() {
       if (!raw) return { view: "home" };
       const parsed = JSON.parse(raw) as AppViewState;
       if (parsed && parsed.view === "project" && typeof (parsed as any).projectName === "string") {
-        return { view: "project", projectName: (parsed as any).projectName };
+        return {
+          view: "project",
+          projectName: (parsed as any).projectName,
+          lastImageKey:
+            typeof (parsed as any).lastImageKey === "string" ? (parsed as any).lastImageKey : undefined,
+        };
       }
       return { view: "home" };
     } catch {
       return { view: "home" };
     }
   });
+  const [leftFilter, setLeftFilter] = useState<"all" | "annotated" | "unannotated">(() => {
+    try {
+      const raw = localStorage.getItem("draftseeker:leftFilter:v1");
+      if (raw === "annotated" || raw === "unannotated") return raw;
+      return "all";
+    } catch {
+      return "all";
+    }
+  });
+  const restoredImageRef = useRef(false);
   const asChildren = (nodes: React.ReactNode[]) => React.Children.toArray(nodes);
 
   const dismissHints = () => {
@@ -286,6 +303,25 @@ export default function App() {
     if (annotationFilterClass === "all") return annotations;
     return annotations.filter((a) => a.class_name === annotationFilterClass);
   }, [annotations, annotationFilterClass]);
+
+  const imagesAll = useMemo(
+    () => (datasetInfo?.images ? [...datasetInfo.images] : []),
+    [datasetInfo]
+  );
+
+  const filteredImages = useMemo(() => {
+    if (leftFilter === "all") return imagesAll;
+    if (leftFilter === "annotated") {
+      return imagesAll.filter((entry) => {
+        const name = entry.original_filename || entry.filename || "";
+        return (imageStatusMap[name] || 0) > 0;
+      });
+    }
+    return imagesAll.filter((entry) => {
+      const name = entry.original_filename || entry.filename || "";
+      return (imageStatusMap[name] || 0) === 0;
+    });
+  }, [imagesAll, imageStatusMap, leftFilter]);
 
   const sortedAnnotations = useMemo(() => {
     return [...filteredAnnotations].sort((a, b) => {
@@ -621,6 +657,7 @@ export default function App() {
       return;
     }
     didAutoRestoreRef.current = true;
+    restoredImageRef.current = false;
     void handleOpenProject(viewState.projectName);
   }, [projectList, datasetId, viewState]);
 
@@ -765,7 +802,11 @@ export default function App() {
     setAutoPanelOpen(false);
     setShowSplitSettings(false);
     setShowExportDrawer(false);
-    setViewState({ view: "project", projectName });
+    setViewState((prev) =>
+      prev.view === "project" && prev.projectName === projectName
+        ? prev
+        : { view: "project", projectName }
+    );
     try {
       const storedTemplate = templateByDataset[projectName];
       if (storedTemplate) {
@@ -1361,6 +1402,12 @@ export default function App() {
     setError(null);
     setBusy(true);
     try {
+      setViewState((prev) => {
+        if (prev.view === "project" && prev.projectName === projectName) {
+          return { ...prev, lastImageKey: `${projectName}::${filename}` };
+        }
+        return { view: "project", projectName, lastImageKey: `${projectName}::${filename}` };
+      });
       const res = await selectDatasetImage({ project_name: projectName, filename });
       setImageId(res.image_id);
       setImageUrl(`${API_BASE}/dataset/${projectName}/image/${encodeURIComponent(filename)}`);
@@ -1647,6 +1694,25 @@ export default function App() {
   }, [viewState]);
 
   useEffect(() => {
+    if (!datasetId || !datasetInfo) return;
+    if (viewState.view !== "project" || viewState.projectName !== datasetId) return;
+    if (restoredImageRef.current) return;
+    const key = viewState.lastImageKey;
+    if (!key || !key.startsWith(`${datasetId}::`)) {
+      restoredImageRef.current = true;
+      return;
+    }
+    const filename = key.slice(`${datasetId}::`.length);
+    const exists = datasetInfo.images?.some(
+      (img) => (img.original_filename || img.filename) === filename
+    );
+    restoredImageRef.current = true;
+    if (!exists) return;
+    if (datasetSelectedName === filename) return;
+    void loadDatasetImage(datasetId, filename);
+  }, [datasetId, datasetInfo, viewState, datasetSelectedName]);
+
+  useEffect(() => {
     if (!notice) return;
     setNoticeVisible(true);
     const timer = window.setTimeout(() => {
@@ -1654,6 +1720,14 @@ export default function App() {
     }, 3000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("draftseeker:leftFilter:v1", leftFilter);
+    } catch {
+      // ignore
+    }
+  }, [leftFilter]);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -2658,9 +2732,39 @@ export default function App() {
               gap: 12,
             }}
           >
-            <div style={{ fontWeight: 600 }}>
-              Dataset
-              {datasetInfo?.project_name ? `: ${datasetInfo.project_name}` : ""}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontWeight: 600 }}>
+                Dataset
+                {datasetInfo?.project_name ? `: ${datasetInfo.project_name}` : ""}
+              </div>
+              <select
+                value={leftFilter}
+                onChange={(e) =>
+                  setLeftFilter(e.target.value as "all" | "annotated" | "unannotated")
+                }
+                style={{
+                  height: 26,
+                  fontSize: 11,
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  padding: "0 8px",
+                  background: "var(--panel)",
+                  color:
+                    leftFilter === "annotated"
+                      ? "#2e7d32"
+                      : leftFilter === "unannotated"
+                        ? "#c62828"
+                        : "inherit",
+                }}
+              >
+                <option value="all">全表示</option>
+                <option value="annotated" style={{ color: "#2e7d32" }}>
+                  アノテ済
+                </option>
+                <option value="unannotated" style={{ color: "#c62828" }}>
+                  未アノテ
+                </option>
+              </select>
             </div>
             {!datasetInfo && (
               <div style={{ fontSize: 12, color: "#666" }}>
@@ -2669,7 +2773,15 @@ export default function App() {
             )}
             {datasetInfo && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {asChildren(datasetInfo.images.map((entry: DatasetImageEntry, idx: number) => {
+                {datasetSelectedName &&
+                  !filteredImages.some(
+                    (entry) => (entry.original_filename || entry.filename || "") === datasetSelectedName
+                  ) && (
+                    <div style={{ fontSize: 11, color: "#a56900", marginBottom: 4 }}>
+                      現在選択中の画像はフィルタ条件により一覧に非表示です。
+                    </div>
+                  )}
+                {asChildren(filteredImages.map((entry: DatasetImageEntry, idx: number) => {
                   const name = entry.original_filename || entry.filename || "";
                   const indexLabel = entry.internal_id || "000";
                   if (!name) {
@@ -2728,8 +2840,8 @@ export default function App() {
                                 marginLeft: 6,
                                 padding: "2px 6px",
                                 borderRadius: 10,
-                                background: isDone ? "#e8f5e9" : "#f1f1f1",
-                                color: isDone ? "#2e7d32" : "#666",
+                                background: isDone ? "#e8f5e9" : "#fdeaea",
+                                color: isDone ? "#2e7d32" : "#c62828",
                               }}
                             >
                               {isDone ? `済 ${count}` : "未"}
