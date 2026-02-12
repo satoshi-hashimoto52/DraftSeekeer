@@ -9,13 +9,13 @@ CAD 図面画像のアノテーション支援ツールです。テンプレー�
 
 Backend:
 ```bash
-cd /Users/hashimoto/vscode/_project/draft_seeker/backend
+cd /Users/hashimoto/vscode/_project/DraftSeeker/backend
 /Users/hashimoto/vscode/_project/draft_seeker/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Frontend:
 ```bash
-cd /Users/hashimoto/vscode/_project/draft_seeker/frontend
+cd /Users/hashimoto/vscode/_project/DraftSeeker/frontend
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
