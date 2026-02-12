@@ -65,6 +65,7 @@ export default function App() {
   const [showExportDrawer, setShowExportDrawer] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [showDebug, setShowDebug] = useState<boolean>(false);
+  const [showClassColors, setShowClassColors] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
   const [showSplitSettings, setShowSplitSettings] = useState<boolean>(false);
@@ -1389,7 +1390,10 @@ export default function App() {
       id: ann.id || `${now}-${Math.random()}-${idx}`,
       class_name: ann.class_name,
       bbox: ann.bbox,
-      source: ann.source || "template",
+      source:
+        ann.source === "template" || ann.source === "manual" || ann.source === "sam"
+          ? ann.source
+          : "template",
       created_at: ann.created_at || new Date().toISOString(),
       score: ann.score,
       segPolygon: ann.segPolygon,
@@ -1496,7 +1500,7 @@ export default function App() {
       });
       if (res.created_annotations && res.created_annotations.length > 0) {
         const createdAt = new Date().toISOString();
-        const appended = res.created_annotations.map((item, idx) => ({
+        const appended: Annotation[] = res.created_annotations.map((item, idx) => ({
           id: `${Date.now()}-${Math.random()}-${idx}`,
           class_name: item.class_name,
           bbox: item.bbox,
@@ -3472,16 +3476,14 @@ export default function App() {
                       if (!nextClass || !pendingManualBBox) return;
                       pushAnnotationHistory();
                       const createdAt = new Date().toISOString();
-                      setAnnotations((prev) => [
-                        ...prev,
-                        {
-                          id: `${Date.now()}-${Math.random()}`,
-                          class_name: nextClass,
-                          bbox: clampBBoxToImage(pendingManualBBox),
-                          source: "manual",
-                          created_at: createdAt,
-                        },
-                      ]);
+                      const nextAnnotation: Annotation = {
+                        id: `${Date.now()}-${Math.random()}`,
+                        class_name: nextClass,
+                        bbox: clampBBoxToImage(pendingManualBBox),
+                        source: "manual",
+                        created_at: createdAt,
+                      };
+                      setAnnotations((prev) => [...prev, nextAnnotation]);
                       if (nextClass) {
                         setColorMap((prev) => {
                           if (prev[nextClass]) return prev;
@@ -3664,53 +3666,70 @@ export default function App() {
               </div>
               {Object.keys(colorMap).length > 0 && (
                 <div style={{ marginBottom: 4 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 11 }}>
-                    クラス別カラー
-                  </div>
                   <div
                     style={{
                       display: "flex",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      maxHeight: 84,
-                      overflowY: "auto",
-                      padding: "4px 2px",
-                      borderRadius: 6,
-                      border: "1px solid #eceff1",
-                      background: "#fcfcfc",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 8,
                     }}
                   >
-                    {asChildren(
-                      Object.entries(colorMap).map(([name, color], idx) => {
-                        const hexColor = normalizeToHex(color);
-                        return (
-                          <label
-                            key={`${name}-${idx}`}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 8,
-                              padding: "4px 6px",
-                              border: "1px solid #e3e3e3",
-                              borderRadius: 999,
-                              background: "#fff",
-                              fontSize: 11,
-                            }}
-                          >
-                            <input
-                              type="color"
-                              value={hexColor}
-                              onChange={(e) =>
-                                setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                              }
-                              style={{ width: 20, height: 20, padding: 0, border: "none" }}
-                            />
-                            <span>{name}</span>
-                          </label>
-                        );
-                      })
-                    )}
+                    <div style={{ fontWeight: 600, fontSize: 11 }}>クラス別カラー</div>
+                    <button
+                      type="button"
+                      onClick={() => setShowClassColors((prev) => !prev)}
+                      className="btn btnGhost"
+                      style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                    >
+                      {showClassColors ? "▼" : "▶︎"}
+                    </button>
                   </div>
+                  {showClassColors && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        maxHeight: 84,
+                        overflowY: "auto",
+                        padding: "4px 2px",
+                        borderRadius: 6,
+                        border: "1px solid #eceff1",
+                        background: "#fcfcfc",
+                      }}
+                    >
+                      {asChildren(
+                        Object.entries(colorMap).map(([name, color], idx) => {
+                          const hexColor = normalizeToHex(color);
+                          return (
+                            <label
+                              key={`${name}-${idx}`}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "4px 6px",
+                                border: "1px solid #e3e3e3",
+                                borderRadius: 999,
+                                background: "#fff",
+                                fontSize: 11,
+                              }}
+                            >
+                              <input
+                                type="color"
+                                value={hexColor}
+                                onChange={(e) =>
+                                  setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
+                                }
+                                style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                              />
+                              <span>{name}</span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
