@@ -25,6 +25,7 @@ type Props = {
   onResizeSelectedBBox: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onResizeSelectedAnnotation: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onSelectAnnotation: (annotation: Annotation) => void;
+  onClearSelectedAnnotation?: () => void;
   shouldIgnoreCanvasClick?: () => boolean;
   onAnnotationEditStart?: () => void;
   onAnnotationEditEnd?: () => void;
@@ -73,6 +74,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onResizeSelectedBBox,
   onResizeSelectedAnnotation,
   onSelectAnnotation,
+  onClearSelectedAnnotation,
   shouldIgnoreCanvasClick,
   onAnnotationEditStart,
   onAnnotationEditEnd,
@@ -129,6 +131,13 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   }>({ active: false, origin: null, start: null, target: null });
   const [blinkActive, setBlinkActive] = useState(false);
   const [blinkTick, setBlinkTick] = useState(0);
+  const [selectionBlinkEnabled, setSelectionBlinkEnabled] = useState(false);
+  const DEBUG_EDIT = false;
+  const editSessionRef = useRef<{ active: boolean; target: "annotation" | null }>({
+    active: false,
+    target: null,
+  });
+  const blinkTimerRef = useRef<number | null>(null);
   const [manualPreview, setManualPreview] = useState<{
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -138,6 +147,24 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     image: { x: number; y: number };
   } | null>(null);
 
+  const endAnnotationEditSession = (reason: string) => {
+    if (!editSessionRef.current.active) return;
+    if (DEBUG_EDIT) {
+      console.log("EDIT END", reason, selectedAnnotationId);
+    }
+    editSessionRef.current = { active: false, target: null };
+    onAnnotationEditEnd?.();
+  };
+
+  const startAnnotationEditSession = (reason: string) => {
+    if (editSessionRef.current.active) return;
+    editSessionRef.current = { active: true, target: "annotation" };
+    if (DEBUG_EDIT) {
+      console.log("EDIT START", reason, selectedAnnotationId);
+    }
+    onAnnotationEditStart?.();
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") {
@@ -146,6 +173,30 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const tag = event.target.tagName.toLowerCase();
           if (tag !== "input" && tag !== "textarea" && tag !== "select") {
             event.preventDefault();
+          }
+        }
+      }
+      if (event.code === "Enter" || event.code === "Escape") {
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName?.toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") return;
+        if (draggingRef.current) return;
+        if (DEBUG_EDIT) {
+          console.log("KEY", event.code, editSessionRef.current.active, draggingRef.current, tag);
+        }
+        if (editSessionRef.current.active || selectionBlinkEnabled) {
+          moveDragRef.current.active = false;
+          resizeDragRef.current.active = false;
+          panDragRef.current.active = false;
+          dragRef.current.active = false;
+          suppressNextClickRef.current = true;
+          if (selectionBlinkEnabled) {
+            setSelectionBlinkEnabled(false);
+            setBlinkActive(false);
+            onClearSelectedAnnotation?.();
+          }
+          if (editSessionRef.current.active) {
+            endAnnotationEditSession("key");
           }
         }
       }
@@ -171,17 +222,35 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   }, [imageUrl]);
 
   useEffect(() => {
-    if (!blinkActive) return;
-    let raf = 0;
-    const loop = () => {
-      setBlinkTick((t) => (t + 1) % 1000000);
-      raf = window.requestAnimationFrame(loop);
-    };
-    raf = window.requestAnimationFrame(loop);
-    return () => {
-      window.cancelAnimationFrame(raf);
-    };
+    if (blinkActive) {
+      if (!blinkTimerRef.current) {
+        blinkTimerRef.current = window.setInterval(() => {
+          setBlinkTick((t) => t + 1);
+        }, 280);
+      }
+      return;
+    }
+    if (blinkTimerRef.current) {
+      window.clearInterval(blinkTimerRef.current);
+      blinkTimerRef.current = null;
+    }
   }, [blinkActive]);
+
+  useEffect(() => {
+    if (!selectedAnnotationId) {
+      setSelectionBlinkEnabled(false);
+      return;
+    }
+    setSelectionBlinkEnabled(true);
+  }, [selectedAnnotationId]);
+
+  useEffect(() => {
+    if (editMode) {
+      setBlinkActive(false);
+      return;
+    }
+    setBlinkActive(selectionBlinkEnabled);
+  }, [selectionBlinkEnabled, editMode]);
 
   const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
   const getCssScale = () => {
@@ -412,10 +481,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const selectedAnn = selectedAnnotationId
         ? annotations.find((a) => a.id === selectedAnnotationId) || null
         : null;
-      const blinkAlpha =
-        blinkActive && selectedAnn
-          ? 0.15 + 0.85 * (0.5 + 0.5 * Math.sin(blinkTick * 0.45))
-          : 1;
+      const isEditingAnn = editSessionRef.current.active && selectedAnn && !editMode;
+      const blinkPhase = blinkTick % 2;
+      const blinkAlpha = isEditingAnn ? (blinkPhase === 0 ? 0.85 : 1) : 1;
+      const blinkFill = isEditingAnn ? (blinkPhase === 0 ? 0.06 : 0.14) : 0.1;
 
       if (showAnnotations) {
         annotations.forEach((a) => {
@@ -423,7 +492,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const isHighlighted = a.id === highlightAnnotationId;
           const color = colorMap[a.class_name] || "#ff2b2b";
           const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 1.2;
-          const dashed = isSelected && editMode;
+          const dashed = isSelected && (editMode || editSessionRef.current.active);
           drawBox(
             a.bbox.x,
             a.bbox.y,
@@ -433,7 +502,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             lineWidth,
             dashed,
             isSelected ? blinkAlpha : 1,
-            0.1
+            isSelected ? blinkFill : 0.1
           );
         if (!isDragging && a.segPolygon) {
           drawPolygon(
@@ -733,6 +802,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   };
 
   const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (DEBUG_EDIT) {
+      console.log("DOWN", {
+        button: event.button,
+        shift: event.shiftKey,
+        space: spacePressedRef.current,
+        editMode,
+        selectedAnnotationId,
+        selectedCandidateId,
+      });
+    }
     if (event.button === 0 && !event.shiftKey && !spacePressedRef.current) {
       clickTrackRef.current = {
         active: true,
@@ -742,6 +821,33 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     } else {
       clickTrackRef.current = { active: false, start: null, moved: false };
     }
+    const hitTestSelectedAnnotation = (x: number, y: number) => {
+      const selectedAnn = getSelectedAnnotation();
+      if (!selectedAnn) return "none" as const;
+      const handle = findResizeHandleForBBox(selectedAnn.bbox, x, y);
+      if (handle) return `corner-${handle}` as const;
+      if (isPointInsideBBox(selectedAnn.bbox, x, y)) return "inside" as const;
+      return "none" as const;
+    };
+
+    if (
+      event.button === 0 &&
+      !event.shiftKey &&
+      !spacePressedRef.current &&
+      !editMode
+    ) {
+      const coords = getImageCoords(event);
+      const selectedAnn = getSelectedAnnotation();
+      if (coords && selectedAnn) {
+        const hit = hitTestSelectedAnnotation(coords.x, coords.y);
+        if (DEBUG_EDIT) console.log("HIT", hit);
+        if (hit !== "none") {
+          setSelectionBlinkEnabled(true);
+          startAnnotationEditSession("mousedown-hit");
+        }
+      }
+    }
+
     if (event.button === 1 || spacePressedRef.current) {
       const coords = getImageCoords(event);
       if (!coords) return;
@@ -769,8 +875,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               target: selectedAnn ? "annotation" : "candidate",
             };
             if (selectedAnn) {
-              setBlinkActive(true);
-              onAnnotationEditStart?.();
+              setSelectionBlinkEnabled(true);
+              startAnnotationEditSession("resize-selected");
             }
             draggingRef.current = true;
             return;
@@ -793,8 +899,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               origin: { ...hitAnn.ann.bbox },
               target: "annotation",
             };
-            setBlinkActive(true);
-            onAnnotationEditStart?.();
+            setSelectionBlinkEnabled(true);
+            startAnnotationEditSession("resize-hit");
             draggingRef.current = true;
             return;
           }
@@ -825,8 +931,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             start: coords,
             target: "annotation",
           };
-          setBlinkActive(true);
-          onAnnotationEditStart?.();
+          setSelectionBlinkEnabled(true);
+          startAnnotationEditSession("move");
           suppressNextClickRef.current = true;
           draggingRef.current = true;
           return;
@@ -1015,8 +1121,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (moveDragRef.current.active) {
       if (moveDragRef.current.target === "annotation") {
-        setBlinkActive(false);
-        onAnnotationEditEnd?.();
+        endAnnotationEditSession("mouseup");
       }
       moveDragRef.current = { active: false, origin: null, start: null, target: null };
       suppressNextClickRef.current = true;
@@ -1026,8 +1131,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (resizeDragRef.current.active) {
       if (resizeDragRef.current.target === "annotation") {
-        setBlinkActive(false);
-        onAnnotationEditEnd?.();
+        endAnnotationEditSession("mouseup");
       }
       resizeDragRef.current = { active: false, handle: null, origin: null, target: null };
       suppressNextClickRef.current = true;
@@ -1147,7 +1251,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const imgX = cursorX / (sx * scaleRef.current) - panRef.current.x;
       const imgY = cursorY / (sy * scaleRef.current) - panRef.current.y;
       const delta = event.deltaY > 0 ? -0.2 : 0.2;
-      const nextScale = Math.min(5, Math.max(0.2, scaleRef.current + delta));
+      const nextScale = Math.min(10, Math.max(0.2, scaleRef.current + delta));
       scaleRef.current = nextScale;
       pendingScaleRef.current = nextScale;
       const nextPan = {

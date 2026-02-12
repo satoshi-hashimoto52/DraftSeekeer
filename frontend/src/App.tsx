@@ -2979,6 +2979,7 @@ export default function App() {
                   );
                 }}
                   onSelectAnnotation={handleSelectAnnotation}
+                  onClearSelectedAnnotation={() => setSelectedAnnotationId(null)}
                   pendingManualBBox={pendingManualBBox}
                   shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
                 onDebugCoords={showDebug ? setCoordDebug : undefined}
@@ -3000,6 +3001,12 @@ export default function App() {
                     }}
                   >
                     編集中（ドラッグで調整）
+                    <div style={{ marginTop: 4, fontSize: 10, opacity: 0.85 }}>
+                      内側: 移動 / 辺: リサイズ
+                    </div>
+                    <div style={{ marginTop: 2, fontSize: 10, opacity: 0.85 }}>
+                      編集完了はEsc
+                    </div>
                   </div>
                 )}
               </div>
