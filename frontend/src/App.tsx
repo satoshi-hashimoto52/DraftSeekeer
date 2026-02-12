@@ -4321,7 +4321,7 @@ export default function App() {
                       gridTemplateColumns: "18px 1fr auto 36px",
                       alignItems: "center",
                       gap: 12,
-                      minHeight: 52,
+                      minHeight: 70,
                     }}
                     onClick={() => handleSelectAnnotation(a)}
                   >
@@ -4340,9 +4340,9 @@ export default function App() {
                       <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                         <span
                           style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: "50%",
+                            width: 16,
+                            height: 16,
+                            borderRadius: 2,
                             background: colorMap[a.class_name] || "#333",
                             display: "inline-block",
                           }}
@@ -4388,15 +4388,23 @@ export default function App() {
                         )}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
-                        bbox: ({Math.round(a.bbox.x)}, {Math.round(a.bbox.y)}, {Math.round(a.bbox.w)}, {Math.round(a.bbox.h)})
+                        BBox: ({Math.round(a.bbox.x)}, {Math.round(a.bbox.y)}, {Math.round(a.bbox.w)}, {Math.round(a.bbox.h)})
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          fontSize: 11,
+                          color: "var(--muted)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        <span>CONF: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}</span>
+                        <span>TIME: {a.created_at ? new Date(a.created_at).toLocaleTimeString() : ""}</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", fontVariantNumeric: "tabular-nums", justifySelf: "end" }}>
-                      {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
-                      <div style={{ marginTop: 2 }}>
-                        {a.created_at ? new Date(a.created_at).toLocaleTimeString() : ""}
-                      </div>
-                    </div>
+                    <div style={{ textAlign: "right", justifySelf: "end" }} />
                     <button
                       type="button"
                       aria-label="delete"

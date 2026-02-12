@@ -127,6 +127,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     start: { x: number; y: number } | null;
     target: "candidate" | "annotation" | null;
   }>({ active: false, origin: null, start: null, target: null });
+  const [blinkActive, setBlinkActive] = useState(false);
+  const [blinkTick, setBlinkTick] = useState(0);
   const [manualPreview, setManualPreview] = useState<{
     start: { x: number; y: number };
     current: { x: number; y: number };
@@ -167,6 +169,19 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     scaleRef.current = 1;
     setScale(1);
   }, [imageUrl]);
+
+  useEffect(() => {
+    if (!blinkActive) return;
+    let raf = 0;
+    const loop = () => {
+      setBlinkTick((t) => (t + 1) % 1000000);
+      raf = window.requestAnimationFrame(loop);
+    };
+    raf = window.requestAnimationFrame(loop);
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [blinkActive]);
 
   const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
   const getCssScale = () => {
@@ -397,6 +412,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const selectedAnn = selectedAnnotationId
         ? annotations.find((a) => a.id === selectedAnnotationId) || null
         : null;
+      const blinkAlpha =
+        blinkActive && selectedAnn
+          ? 0.15 + 0.85 * (0.5 + 0.5 * Math.sin(blinkTick * 0.45))
+          : 1;
 
       if (showAnnotations) {
         annotations.forEach((a) => {
@@ -413,7 +432,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             color,
             lineWidth,
             dashed,
-            1,
+            isSelected ? blinkAlpha : 1,
             0.1
           );
         if (!isDragging && a.segPolygon) {
@@ -421,12 +440,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             a.segPolygon,
             color,
             isSelected ? baseLine * 2.6 : baseLine * 2.0,
-            1
+            isSelected ? blinkAlpha : 1
           );
-        }
-        if (isSelected && !editMode) {
-          const size = Math.max(4, Math.round(baseLine * 2.2));
-          drawCornerMarkers(a.bbox, color, size);
         }
         if (!isDragging && isHighlighted) {
           drawLabelSized(a.bbox.x, a.bbox.y, a.class_name, color, 1, 1.6);
@@ -753,7 +768,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               origin: { ...(selectedAnn?.bbox || selected!.bbox) },
               target: selectedAnn ? "annotation" : "candidate",
             };
-            if (selectedAnn) onAnnotationEditStart?.();
+            if (selectedAnn) {
+              setBlinkActive(true);
+              onAnnotationEditStart?.();
+            }
             draggingRef.current = true;
             return;
           }
@@ -775,6 +793,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               origin: { ...hitAnn.ann.bbox },
               target: "annotation",
             };
+            setBlinkActive(true);
             onAnnotationEditStart?.();
             draggingRef.current = true;
             return;
@@ -806,6 +825,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             start: coords,
             target: "annotation",
           };
+          setBlinkActive(true);
           onAnnotationEditStart?.();
           suppressNextClickRef.current = true;
           draggingRef.current = true;
@@ -995,6 +1015,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (moveDragRef.current.active) {
       if (moveDragRef.current.target === "annotation") {
+        setBlinkActive(false);
         onAnnotationEditEnd?.();
       }
       moveDragRef.current = { active: false, origin: null, start: null, target: null };
@@ -1005,6 +1026,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (resizeDragRef.current.active) {
       if (resizeDragRef.current.target === "annotation") {
+        setBlinkActive(false);
         onAnnotationEditEnd?.();
       }
       resizeDragRef.current = { active: false, handle: null, origin: null, target: null };
