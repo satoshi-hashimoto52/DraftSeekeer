@@ -1012,6 +1012,7 @@ export default function App() {
   const handleClickPoint = async (x: number, y: number) => {
     if (isCreatingManualBBox) return;
     if (manualClassMissing) return;
+    if (annotationEditActiveRef.current) return;
     if (!imageId || !project) return;
     setError(null);
     setNotice(null);
