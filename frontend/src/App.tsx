@@ -195,6 +195,22 @@ export default function App() {
   } | null>(null);
   const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
+  const didAutoRestoreRef = useRef(false);
+  type AppViewState = { view: "home" } | { view: "project"; projectName: string };
+  const VIEW_STATE_KEY = "draftseeker:viewState:v1";
+  const [viewState, setViewState] = useState<AppViewState>(() => {
+    try {
+      const raw = localStorage.getItem(VIEW_STATE_KEY);
+      if (!raw) return { view: "home" };
+      const parsed = JSON.parse(raw) as AppViewState;
+      if (parsed && parsed.view === "project" && typeof (parsed as any).projectName === "string") {
+        return { view: "project", projectName: (parsed as any).projectName };
+      }
+      return { view: "home" };
+    } catch {
+      return { view: "home" };
+    }
+  });
   const asChildren = (nodes: React.ReactNode[]) => React.Children.toArray(nodes);
 
   const dismissHints = () => {
@@ -588,6 +604,26 @@ export default function App() {
     };
   }, [project]);
 
+  useEffect(() => {
+    if (didAutoRestoreRef.current) return;
+    if (projectList.length === 0) return;
+    if (viewState.view === "home") {
+      didAutoRestoreRef.current = true;
+      return;
+    }
+    if (datasetId === viewState.projectName) {
+      didAutoRestoreRef.current = true;
+      return;
+    }
+    if (!projectList.some((p) => p.project_name === viewState.projectName)) {
+      setViewState({ view: "home" });
+      didAutoRestoreRef.current = true;
+      return;
+    }
+    didAutoRestoreRef.current = true;
+    void handleOpenProject(viewState.projectName);
+  }, [projectList, datasetId, viewState]);
+
 
   const handleFolderImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!datasetId) {
@@ -729,6 +765,7 @@ export default function App() {
     setAutoPanelOpen(false);
     setShowSplitSettings(false);
     setShowExportDrawer(false);
+    setViewState({ view: "project", projectName });
     try {
       const storedTemplate = templateByDataset[projectName];
       if (storedTemplate) {
@@ -782,6 +819,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     setBusy(false);
+    setViewState({ view: "home" });
     setDatasetId(null);
     setDatasetInfo(null);
     setDatasetSelectedName(null);
@@ -1599,6 +1637,14 @@ export default function App() {
       // ignore save errors for now
     });
   }, [annotations, datasetId, datasetSelectedName]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_STATE_KEY, JSON.stringify(viewState));
+    } catch {
+      // ignore
+    }
+  }, [viewState]);
 
   useEffect(() => {
     if (!notice) return;
@@ -2876,7 +2922,7 @@ export default function App() {
                 style={{
                   position: "absolute",
                   inset: 0,
-                  background: "rgba(255,255,255,0.55)",
+                  background: "rgba(140,140,140,0.25)",
                   backdropFilter: "blur(1px)",
                   zIndex: 2,
                   display: "flex",
@@ -2889,7 +2935,8 @@ export default function App() {
                   pointerEvents: "auto",
                 }}
               >
-                全自動 実行中… {autoProgress}%
+                全自動アノテーション {autoMethod === "combined" ? "Fusion Mode" : "Template Mode"} 実行中…{" "}
+                {autoProgress}%
               </div>
             )}
             <div style={{ marginBottom: 8 }}>
@@ -3850,7 +3897,7 @@ export default function App() {
                     {autoAdvancedOpen && (
                       <div className="autoAdvanced" style={{ display: "grid", gap: 8 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <div style={{ fontSize: 12, fontWeight: 600 }}>詳細設定</div>
+                          <div style={{ fontSize: 12, fontWeight: 600 }} />
                           {autoDirty && autoBaseline && (
                             <button
                               type="button"
@@ -3876,15 +3923,15 @@ export default function App() {
                           {[
                             {
                               key: "combined",
-                              label: "合成スコア（二値化 + match + 黒線一致率 + NMS）",
-                              help: "速度寄り。二値化線画の一致率も加味して判定。",
+                              label: "Fusion Mode（画像解析型）",
+                              help: "二値化 + match + 黒線一致率 + NMS で判定。",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
                             {
                               key: "scaled_templates",
-                              label: "scaled_templates",
-                              help: "精度寄り。タイル/ROIでテンプレ一致度のみ判定。",
+                              label: "Template Mode（テンプレ探索型）",
+                              help: "タイル/ROI内の matchTemplate スコアで判定。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
@@ -4335,6 +4382,8 @@ export default function App() {
           <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
             <input
               type="text"
+              id="project-name-input"
+              name="project_name"
               placeholder="project_name"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
