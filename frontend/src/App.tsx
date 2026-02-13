@@ -2735,7 +2735,7 @@ export default function App() {
             gridTemplateColumns: "260px 1fr 400px",
             gap: 16,
             padding: 16,
-            flex: 1,
+            height: "95vh",
             minHeight: 0,
           }}
         >
@@ -3043,7 +3043,7 @@ export default function App() {
           <div
             className="rightPanel panelShell"
             style={{
-              padding: 16,
+              padding: "16px 16px 6px",
               minHeight: 0,
               overflowY: "auto",
               display: "flex",
@@ -3882,7 +3882,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="sectionCard muted" style={{ marginTop: 12 }}>
+            <div className="sectionCard muted">
                 <button
                   type="button"
                   onClick={() => setAutoPanelOpen((prev) => !prev)}
@@ -4128,6 +4128,8 @@ export default function App() {
                               key: "combined",
                               label: "Fusion Mode（画像解析型）",
                               help: "二値化 + match + 黒線一致率 + NMS で判定。",
+                              detail:
+                                "Fusion Mode: 二値化画像に対してスケールドテンプレートの正規化相関（TM_CCORR_NORMED）を走査し、match_score に加えて黒画素一致率（match_ratio >= 0.69）をゲート条件として候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
@@ -4135,6 +4137,8 @@ export default function App() {
                               key: "scaled_templates",
                               label: "Template Mode（テンプレ探索型）",
                               help: "タイル/ROI内の matchTemplate スコアで判定。",
+                              detail:
+                                "Template Mode: タイル単位でエッジ/二値反転テンプレートに対し TM_CCOEFF_NORMED を適用し、edge_score を final_score として閾値で直接選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
@@ -4158,6 +4162,7 @@ export default function App() {
                                   flexWrap: "wrap",
                                   boxSizing: "border-box",
                                 }}
+                                title={item.detail}
                               >
                                 <input
                                   type="radio"
@@ -4301,8 +4306,6 @@ export default function App() {
                   </div>
                 )}
             </div>
-            <div style={{ marginBottom: 16 }} />
-
             <div className="sectionCard confirmedSection" style={{ paddingTop: 4 }}>
               <div className="sectionTitle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>確定アノテーション</span>
