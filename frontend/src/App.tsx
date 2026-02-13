@@ -66,6 +66,7 @@ export default function App() {
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [showDebug, setShowDebug] = useState<boolean>(false);
   const [showClassColors, setShowClassColors] = useState<boolean>(true);
+  const [showCommonSettings, setShowCommonSettings] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
   const [showSplitSettings, setShowSplitSettings] = useState<boolean>(false);
@@ -797,6 +798,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     setBusy(true);
+    setShowCommonSettings(false);
     setShowAdvanced(false);
     setShowDebug(false);
     setAutoAdvancedOpen(false);
@@ -1961,6 +1963,17 @@ export default function App() {
           color: var(--text) !important;
           box-shadow: none !important;
         }
+        .btnDebug {
+          background: #fff7ed !important;
+          border-color: #fdba74 !important;
+          color: #9a3412 !important;
+          box-shadow: none !important;
+        }
+        .btnDebug.isOpen {
+          background: #ffe8cc !important;
+          border-color: #f59e0b !important;
+          color: #92400e !important;
+        }
         .btnSpecial {
           background: linear-gradient(120deg, #6a5cff, #2b74ff) !important;
           color: #fff !important;
@@ -3063,407 +3076,6 @@ export default function App() {
                 {autoProgress}%
               </div>
             )}
-            <div style={{ marginBottom: 8 }}>
-            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((prev) => !prev)}
-                className="btn btnGhost"
-                style={{
-                  flex: 1,
-                  height: 32,
-                  background: showAdvanced ? "var(--panel2)" : "transparent",
-                  borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
-                  color: showAdvanced ? "var(--primary)" : "inherit",
-                }}
-              >
-                {showAdvanced ? "▼ Advanced settings" : "▶︎ Advanced settings"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDebug((prev) => !prev)}
-                className="btn btnGhost"
-                style={{
-                  width: 80,
-                  height: 32,
-                  background: showDebug ? "var(--panel2)" : "transparent",
-                  borderColor: showDebug ? "var(--primary)" : "var(--border)",
-                  color: showDebug ? "var(--primary)" : "inherit",
-                }}
-              >
-                {showDebug ? "▼ Debug" : "▶︎ Debug"}
-              </button>
-            </div>
-            {showAdvanced && (
-              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>検出パラメータ</div>
-                  {advancedDirty && advancedBaseline && (
-                    <button
-                      type="button"
-                      className="btn btnGhost"
-                      style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                      onClick={() => {
-                        setRoiSize(advancedBaseline.roiSize);
-                        setTopk(advancedBaseline.topk);
-                        setScaleMin(advancedBaseline.scaleMin);
-                        setScaleMax(advancedBaseline.scaleMax);
-                        setScaleSteps(advancedBaseline.scaleSteps);
-                        setExcludeEnabled(advancedBaseline.excludeEnabled);
-                        setExcludeMode(advancedBaseline.excludeMode);
-                        setExcludeCenter(advancedBaseline.excludeCenter);
-                        setExcludeIouThreshold(advancedBaseline.excludeIouThreshold);
-                        setRefineContour(advancedBaseline.refineContour);
-                      }}
-                    >
-                      Reset
-                    </button>
-                  )}
-                </div>
-                <div className="formRow" style={{ marginBottom: 6, alignItems: "start" }}>
-                  <span style={{ fontSize: 12, paddingTop: 4 }}>スケール</span>
-                  <div className="controlStack">
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                      <NumericInputWithButtons
-                        value={scaleMin}
-                        onChange={(v) => typeof v === "number" && setScaleMin(v)}
-                        min={0.1}
-                        step={0.1}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="scale min"
-                        placeholder="推奨 0.4–0.8"
-                        className="controlWrap"
-                        inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
-                        buttonClassName="stepBtn"
-                      />
-                      <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                      <NumericInputWithButtons
-                        value={scaleMax}
-                        onChange={(v) => typeof v === "number" && setScaleMax(v)}
-                        min={0.1}
-                        step={0.1}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="scale max"
-                        placeholder="推奨 1.2–2.0"
-                        className="controlWrap"
-                        inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
-                        buttonClassName="stepBtn"
-                      />
-                      <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
-                    </div>
-                    <div className="hintText">
-                      <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
-                      <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
-                      {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
-                        <span className="badge badgeDanger">注意</span>
-                      )}
-                      {(scaleMinDanger || scaleMaxDanger) && (
-                        <span className="badge badgeDanger">Danger</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="formRow" style={{ marginBottom: 8 }}>
-                  <span style={{ fontSize: 12 }}>分割</span>
-                  <div className="controlWrap" title="±1">
-                    <NumericInputWithButtons
-                      value={scaleSteps}
-                      onChange={(v) => typeof v === "number" && setScaleSteps(v)}
-                      min={1}
-                      step={1}
-                      height={32}
-                      inputWidth={84}
-                      ariaLabel="scale steps"
-                      placeholder="推奨 6–12"
-                      className="controlWrap"
-                      inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
-                      buttonClassName="stepBtn"
-                    />
-                    <span className="badge">推奨 6–12</span>
-                    <span className="badge badgeWarn">危険 &gt;20</span>
-                    {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
-                    {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
-                  </div>
-                </div>
-                <div className="formRow" style={{ marginBottom: 6 }}>
-                  <span style={{ fontSize: 12 }}>上位件数</span>
-                  <div className="controlWrap" title="±1">
-                    <NumericInputWithButtons
-                      value={topk}
-                      onChange={(v) => typeof v === "number" && setTopk(v)}
-                      min={1}
-                      max={3}
-                      step={1}
-                      height={32}
-                      inputWidth={84}
-                      ariaLabel="topk"
-                      placeholder="推奨 1–5"
-                      className="controlWrap"
-                      inputClassName={`numInput ${topkDanger ? "dangerInput" : topkWarn ? "warnInput" : ""}`}
-                      buttonClassName="stepBtn"
-                    />
-                  </div>
-                </div>
-                <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={excludeEnabled}
-                    onChange={(e) => setExcludeEnabled(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12 }}>確定BBoxを除外</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={excludeCenter}
-                    disabled={!excludeEnabled}
-                    onChange={(e) => setExcludeCenter(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12 }}>中心点で除外</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, minWidth: 64 }}>除外モード</span>
-                  <select
-                    value={excludeMode}
-                    disabled={!excludeEnabled}
-                    onChange={(e) =>
-                      setExcludeMode(e.target.value as "same_class" | "any_class")
-                    }
-                    style={{ height: 28 }}
-                  >
-                    <option value="same_class">same_class</option>
-                    <option value="any_class">any_class</option>
-                  </select>
-                </label>
-                <div className="formRow" style={{ marginBottom: 8 }}>
-                  <span style={{ fontSize: 12 }}>IoU</span>
-                  <div className="controlWrap" title="±0.05">
-                    <NumericInputWithButtons
-                      value={excludeIouThreshold}
-                      onChange={(v) => typeof v === "number" && setExcludeIouThreshold(v)}
-                      min={0.4}
-                      max={0.8}
-                      step={0.05}
-                      height={32}
-                      inputWidth={84}
-                      disabled={!excludeEnabled}
-                      ariaLabel="exclude iou"
-                      placeholder="推奨 0.4–0.8"
-                      className="controlWrap"
-                      inputClassName="numInput"
-                      buttonClassName="stepBtn"
-                    />
-                    <span className="badge">推奨 0.4–0.8</span>
-                  </div>
-                </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={refineContour}
-                    onChange={(e) => setRefineContour(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
-                </label>
-              </div>
-            )}
-            {showDebug && (detectDebug || coordDebug) && (
-              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
-                {detectDebug && (
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
-                )}
-                {detectDebug?.clicked_image_xy && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                    click: {detectDebug.clicked_image_xy.x.toFixed(2)} ,{" "}
-                    {detectDebug.clicked_image_xy.y.toFixed(2)}
-                  </div>
-                )}
-                {detectDebug?.roi_bbox && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                    roi: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) → (
-                    {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
-                  </div>
-                )}
-                {detectDebug?.outer_bbox && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                    outer: {detectDebug.outer_bbox.x}, {detectDebug.outer_bbox.y},{" "}
-                    {detectDebug.outer_bbox.w}×{detectDebug.outer_bbox.h}
-                  </div>
-                )}
-                {detectDebug?.tight_bbox && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                    tight: {detectDebug.tight_bbox.x}, {detectDebug.tight_bbox.y},{" "}
-                    {detectDebug.tight_bbox.w}×{detectDebug.tight_bbox.h}
-                  </div>
-                )}
-                {detectDebug?.roi_click_xy && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                    roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
-                  </div>
-                )}
-                {detectDebug?.match_score !== undefined && detectDebug?.match_offset_in_roi && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                    match score: {detectDebug.match_score.toFixed(4)} / offset:{" "}
-                    {detectDebug.match_offset_in_roi.x.toFixed(1)}, {detectDebug.match_offset_in_roi.y.toFixed(1)}
-                  </div>
-                )}
-                {detectDebug?.match_mode && (
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                    match mode: {detectDebug.match_mode}
-                  </div>
-                )}
-                {coordDebug && (
-                  <div style={{ marginTop: detectDebug ? 10 : 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                      screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                      image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                      zoom: {coordDebug.zoom.toFixed(3)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                      pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                      dpr: {coordDebug.dpr.toFixed(2)}
-                    </div>
-                    {coordDebug.cssScale && (
-                      <div style={{ fontSize: 11, color: "#666" }}>
-                        cssScale: {coordDebug.cssScale.sx.toFixed(3)}, {coordDebug.cssScale.sy.toFixed(3)}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-                  {(detectDebug?.roi_preview_marked_base64 || detectDebug?.roi_preview_base64) && (
-                    <img
-                      src={`data:image/png;base64,${
-                        detectDebug?.roi_preview_marked_base64 ||
-                        detectDebug?.roi_preview_base64 ||
-                        ""
-                      }`}
-                      alt="roi preview"
-                      style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
-                    />
-                  )}
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 6,
-                      alignItems: "stretch",
-                    }}
-                  >
-                    {detectDebug?.roi_edge_preview_base64 && (
-                      <div
-                        style={{
-                          width: "100%",
-                          aspectRatio: "1 / 1",
-                          border: "1px solid #e3e3e3",
-                          borderRadius: 4,
-                          overflow: "hidden",
-                        }}
-                      >
-                        <img
-                          src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
-                          alt="roi edges"
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            display: "block",
-                          }}
-                        />
-                      </div>
-                    )}
-                    {templatePreviewBase64 && (
-                      <div
-                        style={{
-                          width: "100%",
-                          aspectRatio: "1 / 1",
-                          border: "1px solid #e3e3e3",
-                          borderRadius: 4,
-                          overflow: "hidden",
-                          position: "relative",
-                        }}
-                      >
-                        <img
-                          src={`data:image/png;base64,${
-                            templatePreviewBase64 || ""
-                          }`}
-                          alt="template edges"
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            display: "block",
-                          }}
-                        />
-                        {selectedCandidate?.class_name && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 4,
-                              left: 4,
-                              padding: "2px 6px",
-                              borderRadius: 6,
-                              background: "rgba(0,0,0,0.65)",
-                              color: "#fff",
-                              fontSize: 10,
-                            }}
-                          >
-                            {selectedCandidate.class_name}
-                          </div>
-                        )}
-                        {typeof selectedCandidate?.score === "number" && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 4,
-                              right: 4,
-                              padding: "2px 6px",
-                              borderRadius: 6,
-                              background: "rgba(0,0,0,0.65)",
-                              color: "#fff",
-                              fontSize: 10,
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            {selectedCandidate.score.toFixed(3)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {!templatePreviewBase64 && (
-                      <div
-                        style={{
-                          width: "100%",
-                          aspectRatio: "1 / 1",
-                          border: "1px dashed #e3e3e3",
-                          borderRadius: 4,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 11,
-                          color: "#888",
-                          background: "#fafafa",
-                        }}
-                      >
-                        テンプレ未取得
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
             {pendingManualBBox && (
               <div
                 style={{
@@ -3541,7 +3153,32 @@ export default function App() {
               </div>
             )}
             <div className="sectionCard">
-              <div className="sectionTitle">検出 共通設定</div>
+              <button
+                type="button"
+                onClick={() => setShowCommonSettings((prev) => !prev)}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  color: "#0b3954",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  gap: 6,
+                  padding: 0,
+                }}
+              >
+                <span style={{ fontSize: 12, color: "#546e7a" }}>
+                  {showCommonSettings ? "▼" : "▶"}
+                </span>
+                <span>検出 共通設定</span>
+              </button>
+              {showCommonSettings && (
+              <>
               <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }}>
                 <div
                   role="button"
@@ -3674,24 +3311,14 @@ export default function App() {
               </div>
               {Object.keys(colorMap).length > 0 && (
                 <div style={{ marginBottom: 4 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 8,
-                    }}
+                  <button
+                    type="button"
+                    onClick={() => setShowClassColors((prev) => !prev)}
+                    className="btn btnGhost"
+                    style={{ width: "auto", height: 32, marginBottom: 8 }}
                   >
-                    <div style={{ fontWeight: 600, fontSize: 11 }}>クラス別カラー</div>
-                    <button
-                      type="button"
-                      onClick={() => setShowClassColors((prev) => !prev)}
-                      className="btn btnGhost"
-                      style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                    >
-                      {showClassColors ? "▼" : "▶︎"}
-                    </button>
-                  </div>
+                    {showClassColors ? "▼ クラス別カラー" : "▶︎ クラス別カラー"}
+                  </button>
                   {showClassColors && (
                     <div
                       style={{
@@ -3739,6 +3366,414 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              )}
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((prev) => !prev)}
+                  className="btn btnGhost"
+                  style={{
+                    width: "100%",
+                    height: 32,
+                    background: showAdvanced ? "var(--panel2)" : "transparent",
+                    borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
+                    color: showAdvanced ? "var(--primary)" : "inherit",
+                  }}
+                >
+                  {showAdvanced ? "▼ Advanced settings" : "▶︎ Advanced settings"}
+                </button>
+              </div>
+              {showAdvanced && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>検出パラメータ</div>
+                    {advancedDirty && advancedBaseline && (
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                        onClick={() => {
+                          setRoiSize(advancedBaseline.roiSize);
+                          setTopk(advancedBaseline.topk);
+                          setScaleMin(advancedBaseline.scaleMin);
+                          setScaleMax(advancedBaseline.scaleMax);
+                          setScaleSteps(advancedBaseline.scaleSteps);
+                          setExcludeEnabled(advancedBaseline.excludeEnabled);
+                          setExcludeMode(advancedBaseline.excludeMode);
+                          setExcludeCenter(advancedBaseline.excludeCenter);
+                          setExcludeIouThreshold(advancedBaseline.excludeIouThreshold);
+                          setRefineContour(advancedBaseline.refineContour);
+                        }}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                  <div className="formRow" style={{ marginBottom: 6, alignItems: "start" }}>
+                    <span style={{ fontSize: 12, paddingTop: 4 }}>スケール</span>
+                    <div className="controlStack">
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
+                        <NumericInputWithButtons
+                          value={scaleMin}
+                          onChange={(v) => typeof v === "number" && setScaleMin(v)}
+                          min={0.1}
+                          step={0.1}
+                          height={32}
+                          inputWidth={84}
+                          ariaLabel="scale min"
+                          placeholder="推奨 0.4–0.8"
+                          className="controlWrap"
+                          inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
+                          buttonClassName="stepBtn"
+                        />
+                        <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
+                        <NumericInputWithButtons
+                          value={scaleMax}
+                          onChange={(v) => typeof v === "number" && setScaleMax(v)}
+                          min={0.1}
+                          step={0.1}
+                          height={32}
+                          inputWidth={84}
+                          ariaLabel="scale max"
+                          placeholder="推奨 1.2–2.0"
+                          className="controlWrap"
+                          inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
+                          buttonClassName="stepBtn"
+                        />
+                        <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                      </div>
+                      <div className="hintText">
+                        <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
+                        <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
+                        {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
+                          <span className="badge badgeDanger">注意</span>
+                        )}
+                        {(scaleMinDanger || scaleMaxDanger) && (
+                          <span className="badge badgeDanger">Danger</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="formRow" style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 12 }}>分割</span>
+                    <div className="controlWrap" title="±1">
+                      <NumericInputWithButtons
+                        value={scaleSteps}
+                        onChange={(v) => typeof v === "number" && setScaleSteps(v)}
+                        min={1}
+                        step={1}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="scale steps"
+                        placeholder="推奨 6–12"
+                        className="controlWrap"
+                        inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
+                        buttonClassName="stepBtn"
+                      />
+                      <span className="badge">推奨 6–12</span>
+                      <span className="badge badgeWarn">危険 &gt;20</span>
+                      {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
+                      {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
+                    </div>
+                  </div>
+                  <div className="formRow" style={{ marginBottom: 6 }}>
+                    <span style={{ fontSize: 12 }}>上位件数</span>
+                    <div className="controlWrap" title="±1">
+                      <NumericInputWithButtons
+                        value={topk}
+                        onChange={(v) => typeof v === "number" && setTopk(v)}
+                        min={1}
+                        max={3}
+                        step={1}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="topk"
+                        placeholder="推奨 1–5"
+                        className="controlWrap"
+                        inputClassName={`numInput ${topkDanger ? "dangerInput" : topkWarn ? "warnInput" : ""}`}
+                        buttonClassName="stepBtn"
+                      />
+                    </div>
+                  </div>
+                  <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={excludeEnabled}
+                      onChange={(e) => setExcludeEnabled(e.target.checked)}
+                    />
+                    <span style={{ fontSize: 12 }}>確定BBoxを除外</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={excludeCenter}
+                      disabled={!excludeEnabled}
+                      onChange={(e) => setExcludeCenter(e.target.checked)}
+                    />
+                    <span style={{ fontSize: 12 }}>中心点で除外</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, minWidth: 64 }}>除外モード</span>
+                    <select
+                      value={excludeMode}
+                      disabled={!excludeEnabled}
+                      onChange={(e) =>
+                        setExcludeMode(e.target.value as "same_class" | "any_class")
+                      }
+                      style={{ height: 28 }}
+                    >
+                      <option value="same_class">same_class</option>
+                      <option value="any_class">any_class</option>
+                    </select>
+                  </label>
+                  <div className="formRow" style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 12 }}>IoU</span>
+                    <div className="controlWrap" title="±0.05">
+                      <NumericInputWithButtons
+                        value={excludeIouThreshold}
+                        onChange={(v) => typeof v === "number" && setExcludeIouThreshold(v)}
+                        min={0.4}
+                        max={0.8}
+                        step={0.05}
+                        height={32}
+                        inputWidth={84}
+                        disabled={!excludeEnabled}
+                        ariaLabel="exclude iou"
+                        placeholder="推奨 0.4–0.8"
+                        className="controlWrap"
+                        inputClassName="numInput"
+                        buttonClassName="stepBtn"
+                      />
+                      <span className="badge">推奨 0.4–0.8</span>
+                    </div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={refineContour}
+                      onChange={(e) => setRefineContour(e.target.checked)}
+                    />
+                    <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
+                  </label>
+                </div>
+              )}
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowDebug((prev) => !prev)}
+                  className={`btn btnDebug ${showDebug ? "isOpen" : ""}`}
+                  style={{
+                    width: "auto",
+                    height: 32,
+                  }}
+                >
+                  {showDebug ? "▼ Debug" : "▶︎ Debug"}
+                </button>
+                {showDebug && (detectDebug || coordDebug) && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      background: "#fff7ed",
+                      border: "1px solid #fdba74",
+                      borderRadius: 8,
+                      padding: 10,
+                    }}
+                  >
+                    {detectDebug && (
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
+                    )}
+                    {detectDebug?.clicked_image_xy && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                        click: {detectDebug.clicked_image_xy.x.toFixed(2)} ,{" "}
+                        {detectDebug.clicked_image_xy.y.toFixed(2)}
+                      </div>
+                    )}
+                    {detectDebug?.roi_bbox && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                        roi: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) → (
+                        {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
+                      </div>
+                    )}
+                    {detectDebug?.outer_bbox && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                        outer: {detectDebug.outer_bbox.x}, {detectDebug.outer_bbox.y},{" "}
+                        {detectDebug.outer_bbox.w}×{detectDebug.outer_bbox.h}
+                      </div>
+                    )}
+                    {detectDebug?.tight_bbox && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                        tight: {detectDebug.tight_bbox.x}, {detectDebug.tight_bbox.y},{" "}
+                        {detectDebug.tight_bbox.w}×{detectDebug.tight_bbox.h}
+                      </div>
+                    )}
+                    {detectDebug?.roi_click_xy && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                        roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
+                      </div>
+                    )}
+                    {detectDebug?.match_score !== undefined && detectDebug?.match_offset_in_roi && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                        match score: {detectDebug.match_score.toFixed(4)} / offset:{" "}
+                        {detectDebug.match_offset_in_roi.x.toFixed(1)}, {detectDebug.match_offset_in_roi.y.toFixed(1)}
+                      </div>
+                    )}
+                    {detectDebug?.match_mode && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                        match mode: {detectDebug.match_mode}
+                      </div>
+                    )}
+                    {coordDebug && (
+                      <div style={{ marginTop: detectDebug ? 10 : 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                          screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                          image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                          zoom: {coordDebug.zoom.toFixed(3)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                          pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
+                          dpr: {coordDebug.dpr.toFixed(2)}
+                        </div>
+                        {coordDebug.cssScale && (
+                          <div style={{ fontSize: 11, color: "#666" }}>
+                            cssScale: {coordDebug.cssScale.sx.toFixed(3)}, {coordDebug.cssScale.sy.toFixed(3)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                      {(detectDebug?.roi_preview_marked_base64 || detectDebug?.roi_preview_base64) && (
+                        <img
+                          src={`data:image/png;base64,${
+                            detectDebug?.roi_preview_marked_base64 ||
+                            detectDebug?.roi_preview_base64 ||
+                            ""
+                          }`}
+                          alt="roi preview"
+                          style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
+                        />
+                      )}
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: 6,
+                          alignItems: "stretch",
+                        }}
+                      >
+                        {detectDebug?.roi_edge_preview_base64 && (
+                          <div
+                            style={{
+                              width: "100%",
+                              aspectRatio: "1 / 1",
+                              border: "1px solid #e3e3e3",
+                              borderRadius: 4,
+                              overflow: "hidden",
+                            }}
+                          >
+                            <img
+                              src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
+                              alt="roi edges"
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "contain",
+                                display: "block",
+                              }}
+                            />
+                          </div>
+                        )}
+                        {templatePreviewBase64 && (
+                          <div
+                            style={{
+                              width: "100%",
+                              aspectRatio: "1 / 1",
+                              border: "1px solid #e3e3e3",
+                              borderRadius: 4,
+                              overflow: "hidden",
+                              position: "relative",
+                            }}
+                          >
+                            <img
+                              src={`data:image/png;base64,${
+                                templatePreviewBase64 || ""
+                              }`}
+                              alt="template edges"
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "contain",
+                                display: "block",
+                              }}
+                            />
+                            {selectedCandidate?.class_name && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  top: 4,
+                                  left: 4,
+                                  padding: "2px 6px",
+                                  borderRadius: 6,
+                                  background: "rgba(0,0,0,0.65)",
+                                  color: "#fff",
+                                  fontSize: 10,
+                                }}
+                              >
+                                {selectedCandidate.class_name}
+                              </div>
+                            )}
+                            {typeof selectedCandidate?.score === "number" && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  top: 4,
+                                  right: 4,
+                                  padding: "2px 6px",
+                                  borderRadius: 6,
+                                  background: "rgba(0,0,0,0.65)",
+                                  color: "#fff",
+                                  fontSize: 10,
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                {selectedCandidate.score.toFixed(3)}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {!templatePreviewBase64 && (
+                          <div
+                            style={{
+                              width: "100%",
+                              aspectRatio: "1 / 1",
+                              border: "1px dashed #e3e3e3",
+                              borderRadius: 4,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 11,
+                              color: "#888",
+                              background: "#fafafa",
+                            }}
+                          >
+                            テンプレ未取得
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              </>
               )}
             </div>
 
@@ -3858,17 +3893,18 @@ export default function App() {
                     border: "none",
                     background: "transparent",
                     cursor: "pointer",
-                    color: "#0b3954",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: 0,
-                  }}
-                >
-                  <span>全自動アノテーション</span>
+                  color: "#0b3954",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  gap: 6,
+                  padding: 0,
+                }}
+              >
                   <span style={{ fontSize: 12, color: "#546e7a" }}>
                     {autoPanelOpen ? "▼" : "▶"}
                   </span>
+                  <span>全自動アノテーション</span>
                 </button>
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>

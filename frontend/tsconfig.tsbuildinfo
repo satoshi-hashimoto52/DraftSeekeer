@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/components/candidatelist.tsx","./src/components/imagecanvas.tsx","./src/components/numericinputwithbuttons.tsx","./src/components/toggles.tsx","./src/utils/color.ts","./src/utils/polygon.ts"],"version":"5.9.3"}
