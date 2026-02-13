@@ -3153,6 +3153,111 @@ export default function App() {
               </div>
             )}
             <div className="sectionCard">
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                  <button
+                    type="button"
+                    onClick={handleConfirmCandidate}
+                    disabled={!selectedCandidate || manualClassMissing}
+                    onMouseEnter={() => setHoverAction("confirm")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("confirm")}
+                    onMouseUp={() => setActiveAction(null)}
+                    className="btn btnPrimary"
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      fontWeight: 700,
+                      opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
+                      transform: activeAction === "confirm" ? "translateY(1px)" : "none",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>確定</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Enter)</span>
+                    </span>
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                  <button
+                    type="button"
+                    onClick={handleNextCandidate}
+                    disabled={candidates.length === 0}
+                    onMouseEnter={() => setHoverAction("next")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("next")}
+                    onMouseUp={() => setActiveAction(null)}
+                    className="btn btnSecondary"
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      fontWeight: 700,
+                      opacity: candidates.length === 0 ? 0.45 : 1,
+                      transform: activeAction === "next" ? "translateY(1px)" : "none",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>次</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(N)</span>
+                    </span>
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                  <button
+                    type="button"
+                    onClick={handleRejectCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("discard")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("discard")}
+                    onMouseUp={() => setActiveAction(null)}
+                    className="btn btnDanger"
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      fontWeight: 700,
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>破棄</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Del)</span>
+                    </span>
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                  <button
+                    type="button"
+                    onClick={handleSegCandidate}
+                    disabled={!selectedCandidate}
+                    onMouseEnter={() => setHoverAction("sam")}
+                    onMouseLeave={() => setHoverAction(null)}
+                    onMouseDown={() => setActiveAction("sam")}
+                    onMouseUp={() => setActiveAction(null)}
+                    className="btn btnSpecial"
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      fontWeight: 700,
+                      opacity: !selectedCandidate ? 0.45 : 1,
+                      transform: activeAction === "sam" ? "translateY(1px)" : "none",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                      <span>SAM</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(S)</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="sectionCard">
               <button
                 type="button"
                 onClick={() => setShowCommonSettings((prev) => !prev)}
@@ -3777,111 +3882,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="sectionCard">
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-                  <button
-                    type="button"
-                    onClick={handleConfirmCandidate}
-                    disabled={!selectedCandidate || manualClassMissing}
-                    onMouseEnter={() => setHoverAction("confirm")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("confirm")}
-                    onMouseUp={() => setActiveAction(null)}
-                    className="btn btnPrimary"
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      fontWeight: 700,
-                      opacity: !selectedCandidate || manualClassMissing ? 0.45 : 1,
-                      transform: activeAction === "confirm" ? "translateY(1px)" : "none",
-                    }}
-                  >
-                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-                      <span>確定</span>
-                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Enter)</span>
-                    </span>
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-                  <button
-                    type="button"
-                    onClick={handleNextCandidate}
-                    disabled={candidates.length === 0}
-                    onMouseEnter={() => setHoverAction("next")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("next")}
-                    onMouseUp={() => setActiveAction(null)}
-                    className="btn btnSecondary"
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      fontWeight: 700,
-                      opacity: candidates.length === 0 ? 0.45 : 1,
-                      transform: activeAction === "next" ? "translateY(1px)" : "none",
-                    }}
-                  >
-                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-                      <span>次</span>
-                      <span style={{ fontSize: 10, fontWeight: 600 }}>(N)</span>
-                    </span>
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-                  <button
-                    type="button"
-                    onClick={handleRejectCandidate}
-                    disabled={!selectedCandidate}
-                    onMouseEnter={() => setHoverAction("discard")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("discard")}
-                    onMouseUp={() => setActiveAction(null)}
-                    className="btn btnDanger"
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      fontWeight: 700,
-                      opacity: !selectedCandidate ? 0.45 : 1,
-                      transform: activeAction === "discard" ? "translateY(1px)" : "none",
-                    }}
-                  >
-                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-                      <span>破棄</span>
-                      <span style={{ fontSize: 10, fontWeight: 600 }}>(Del)</span>
-                    </span>
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
-                  <button
-                    type="button"
-                    onClick={handleSegCandidate}
-                    disabled={!selectedCandidate}
-                    onMouseEnter={() => setHoverAction("sam")}
-                    onMouseLeave={() => setHoverAction(null)}
-                    onMouseDown={() => setActiveAction("sam")}
-                    onMouseUp={() => setActiveAction(null)}
-                    className="btn btnSpecial"
-                    style={{
-                      width: "100%",
-                      height: 36,
-                      fontWeight: 700,
-                      opacity: !selectedCandidate ? 0.45 : 1,
-                      transform: activeAction === "sam" ? "translateY(1px)" : "none",
-                    }}
-                  >
-                    <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-                      <span>SAM</span>
-                      <span style={{ fontSize: 10, fontWeight: 600 }}>(S)</span>
-                    </span>
-                  </button>
-                </div>
-              </div>
-              <div className="sectionCard muted" style={{ marginTop: 12 }}>
+            <div className="sectionCard muted" style={{ marginTop: 12 }}>
                 <button
                   type="button"
                   onClick={() => setAutoPanelOpen((prev) => !prev)}
@@ -4288,7 +4289,6 @@ export default function App() {
                     )}
                   </div>
                 )}
-              </div>
             </div>
             <div style={{ marginBottom: 16 }} />
 
