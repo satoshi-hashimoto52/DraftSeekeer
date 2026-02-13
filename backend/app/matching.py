@@ -37,6 +37,38 @@ class MatchResult:
     outer_bbox: Tuple[int, int, int, int]  # template outer bbox in original image coords
     tight_bbox: Tuple[int, int, int, int]  # same as bbox; kept for debug symmetry
     mode: str  # "edge" or "bin"
+    shape_ratio: float = 0.0
+
+
+def _trim_template_margin(template: np.ndarray) -> np.ndarray:
+    """Trim zero-value outer margins from a processed template image."""
+    if template is None or template.size == 0:
+        return template
+    ys, xs = np.where(template > 0)
+    if ys.size == 0 or xs.size == 0:
+        return template
+    y0, y1 = ys.min(), ys.max() + 1
+    x0, x1 = xs.min(), xs.max() + 1
+    trimmed = template[y0:y1, x0:x1]
+    return trimmed if trimmed.size > 0 else template
+
+
+def _foreground_match_ratio(template_proc: np.ndarray, patch_proc: np.ndarray) -> float:
+    """Compute overlap ratio on template foreground pixels."""
+    if (
+        template_proc is None
+        or patch_proc is None
+        or template_proc.size == 0
+        or patch_proc.size == 0
+        or template_proc.shape != patch_proc.shape
+    ):
+        return 0.0
+    fg = template_proc > 0
+    fg_count = int(np.count_nonzero(fg))
+    if fg_count <= 0:
+        return 0.0
+    matched = int(np.count_nonzero(patch_proc[fg] > 0))
+    return float(matched / fg_count)
 
 
 def _clip_roi(
@@ -93,6 +125,7 @@ def match_templates(
     scale_min: float,
     scale_max: float,
     scale_steps: int,
+    trim_template_margin: bool = False,
 ) -> List[MatchResult]:
     if image_bgr is None:
         return []
@@ -113,6 +146,8 @@ def match_templates(
             for scale, scaled in _iter_scaled_templates(
                 tpl.image_proc_edge, scale_min, scale_max, scale_steps
             ):
+                if trim_template_margin:
+                    scaled = _trim_template_margin(scaled)
                 th, tw = scaled.shape[:2]
                 if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
                     continue
@@ -122,13 +157,15 @@ def match_templates(
                 _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
                 tight_x = x0 + max_loc[0]
                 tight_y = y0 + max_loc[1]
+                patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+                shape_ratio = _foreground_match_ratio(scaled, patch)
                 tx, ty, tw_tight, th_tight = tpl.tight_bbox
                 outer_x = int(round(tight_x - (tx * scale)))
                 outer_y = int(round(tight_y - (ty * scale)))
                 outer_w = int(round(tpl.outer_bbox[2] * scale))
                 outer_h = int(round(tpl.outer_bbox[3] * scale))
-                tight_w = max(1, int(round(tw_tight * scale)))
-                tight_h = max(1, int(round(th_tight * scale)))
+                tight_w = tw
+                tight_h = th
                 results.append(
                     MatchResult(
                         class_name=class_name,
@@ -139,6 +176,7 @@ def match_templates(
                         outer_bbox=(outer_x, outer_y, outer_w, outer_h),
                         tight_bbox=(tight_x, tight_y, tight_w, tight_h),
                         mode="edge",
+                        shape_ratio=shape_ratio,
                     )
                 )
 
@@ -154,6 +192,8 @@ def match_templates(
             for scale, scaled in _iter_scaled_templates(
                 tpl.image_proc_bin, scale_min, scale_max, scale_steps
             ):
+                if trim_template_margin:
+                    scaled = _trim_template_margin(scaled)
                 th, tw = scaled.shape[:2]
                 if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
                     continue
@@ -163,13 +203,15 @@ def match_templates(
                 _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
                 tight_x = x0 + max_loc[0]
                 tight_y = y0 + max_loc[1]
+                patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+                shape_ratio = _foreground_match_ratio(scaled, patch)
                 tx, ty, tw_tight, th_tight = tpl.tight_bbox
                 outer_x = int(round(tight_x - (tx * scale)))
                 outer_y = int(round(tight_y - (ty * scale)))
                 outer_w = int(round(tpl.outer_bbox[2] * scale))
                 outer_h = int(round(tpl.outer_bbox[3] * scale))
-                tight_w = max(1, int(round(tw_tight * scale)))
-                tight_h = max(1, int(round(th_tight * scale)))
+                tight_w = tw
+                tight_h = th
                 results.append(
                     MatchResult(
                         class_name=class_name,
@@ -180,6 +222,7 @@ def match_templates(
                         outer_bbox=(outer_x, outer_y, outer_w, outer_h),
                         tight_bbox=(tight_x, tight_y, tight_w, tight_h),
                         mode="bin",
+                        shape_ratio=shape_ratio,
                     )
                 )
     results.sort(key=lambda r: r.score, reverse=True)

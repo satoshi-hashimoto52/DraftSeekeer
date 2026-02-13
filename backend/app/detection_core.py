@@ -72,6 +72,7 @@ def _match_tile(
         scale_min=scale_min,
         scale_max=scale_max,
         scale_steps=scale_steps,
+        trim_template_margin=True,
     )
     if max_per_tile > 0:
         matches = matches[:max_per_tile]
@@ -83,7 +84,7 @@ def _match_tile(
             Candidate(
                 class_name=m.class_name,
                 bbox=(bx + x0, by + y0, bw, bh),
-                edge_score=float(m.score),
+                edge_score=float(0.6 * m.score + 0.4 * m.shape_ratio),
                 template_name=m.template_name,
             )
         )
@@ -278,7 +279,8 @@ def annotate_all_manual(
 
     tile_size = max(64, int(roi_size))
     stride = max(1, int(stride if stride is not None else tile_size * 0.25))
-    max_per_tile = 50
+    # Keep more candidates per tile to reduce early misses before global dedup.
+    max_per_tile = 120
 
     candidates: List[Candidate] = []
     for x0, y0, x1, y1 in _iter_tiles(width, height, tile_size, stride):

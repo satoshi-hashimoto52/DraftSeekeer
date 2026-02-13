@@ -1595,7 +1595,61 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 kept.append(cand)
         return kept
 
-    confirmed = _dedup_any_overlap(confirmed)
+    def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+        ax, ay, aw, ah = a
+        bx, by, bw, bh = b
+        return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by
+
+    def _dedup_overlap_clusters(cands: list) -> list:
+        if not cands:
+            return cands
+        ambiguity_margin = 0.01
+        visited = [False] * len(cands)
+        kept = []
+        for start in range(len(cands)):
+            if visited[start]:
+                continue
+            stack = [start]
+            visited[start] = True
+            component: list[int] = []
+            while stack:
+                i = stack.pop()
+                component.append(i)
+                ibox = cands[i]["bbox"]
+                for j in range(len(cands)):
+                    if visited[j]:
+                        continue
+                    if _boxes_overlap(ibox, cands[j]["bbox"]):
+                        visited[j] = True
+                        stack.append(j)
+            ranked = sorted(
+                component,
+                key=lambda idx: float(cands[idx].get("final_score", 0.0)),
+                reverse=True,
+            )
+            if len(ranked) >= 2:
+                top1 = cands[ranked[0]]
+                top2 = cands[ranked[1]]
+                s1 = float(top1.get("final_score", 0.0))
+                s2 = float(top2.get("final_score", 0.0))
+                if top1.get("class_name") != top2.get("class_name") and (s1 - s2) < ambiguity_margin:
+                    b1 = top1.get("bbox", (0, 0, 0, 0))
+                    b2 = top2.get("bbox", (0, 0, 0, 0))
+                    a1 = max(0, int(b1[2])) * max(0, int(b1[3]))
+                    a2 = max(0, int(b2[2])) * max(0, int(b2[3]))
+                    best_idx = ranked[0] if a1 >= a2 else ranked[1]
+                else:
+                    best_idx = ranked[0]
+            else:
+                best_idx = ranked[0]
+            kept.append(cands[best_idx])
+        kept.sort(key=lambda c: c.get("final_score", 0.0), reverse=True)
+        return kept
+
+    if method == "scaled_templates":
+        confirmed = _dedup_overlap_clusters(confirmed)
+    else:
+        confirmed = _dedup_any_overlap(confirmed)
 
     # Exclude any overlap with existing annotations for the same image
     existing_ann = []
@@ -1636,7 +1690,10 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             }
             for c in confirmed
         ]
-        confirmed = _dedup_any_overlap(confirmed)
+        if method == "scaled_templates":
+            confirmed = _dedup_overlap_clusters(confirmed)
+        else:
+            confirmed = _dedup_any_overlap(confirmed)
 
     added_count = len(confirmed)
     rejected_count = int(result.get("total_candidates", 0) - added_count)

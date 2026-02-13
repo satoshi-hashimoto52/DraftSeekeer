@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedCandidateId, annotations, selectedAnnotationId, colorMap, showCandidates, showAnnotations, editablePolygon, editMode, showVertices, selectedVertexIndex, highlightAnnotationId, onSelectVertex, onUpdateEditablePolygon, onVertexDragStart, onClickPoint, onCreateManualBBox, onManualCreateStateChange, onResizeSelectedBBox, onResizeSelectedAnnotation, onSelectAnnotation, onClearSelectedAnnotation, shouldIgnoreCanvasClick, onAnnotationEditStart, onAnnotationEditEnd, pendingManualBBox, onDebugCoords, debugOverlay, }, ref) {
+export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedCandidateId, annotations, selectedAnnotationId, colorMap, showCandidates, showAnnotations, editablePolygon, editMode, showVertices, selectedVertexIndex, highlightAnnotationId, onSelectVertex, onUpdateEditablePolygon, onVertexDragStart, onClickPoint, onCreateManualBBox, onManualCreateStateChange, onResizeSelectedBBox, onResizeSelectedAnnotation, onSelectAnnotation, onClearSelectedAnnotation, shouldIgnoreCanvasClick, onAnnotationEditStart, onAnnotationEditEnd, pendingManualBBox, onDebugCoords, debugOverlay, debugRoiSize, }, ref) {
     const canvasRef = useRef(null);
     const imgRef = useRef(null);
     const panRef = useRef({ x: 0, y: 0 });
@@ -204,13 +204,12 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 const labelH = 16;
                 const bx = Math.max(0, x);
                 const by = Math.max(0, y - labelH - 2);
-                ctx.fillStyle = "#ffffff";
-                ctx.globalAlpha = alpha * 0.9;
+                ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+                ctx.globalAlpha = alpha;
                 ctx.fillRect(bx, by, labelW, labelH);
                 ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
+                ctx.lineWidth = 0.8;
                 ctx.strokeRect(bx, by, labelW, labelH);
-                ctx.globalAlpha = alpha;
                 ctx.fillStyle = color;
                 ctx.fillText(text, bx + paddingX, by + 12);
                 ctx.restore();
@@ -226,13 +225,12 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 const labelH = Math.round(16 * scaleFactor);
                 const bx = Math.max(0, x);
                 const by = Math.max(0, y - labelH - 2);
-                ctx.fillStyle = "#ffffff";
-                ctx.globalAlpha = alpha * 0.9;
+                ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+                ctx.globalAlpha = alpha;
                 ctx.fillRect(bx, by, labelW, labelH);
                 ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
+                ctx.lineWidth = 0.8;
                 ctx.strokeRect(bx, by, labelW, labelH);
-                ctx.globalAlpha = alpha;
                 ctx.fillStyle = color;
                 ctx.fillText(text, bx + paddingX, by + Math.round(12 * scaleFactor));
                 ctx.restore();
@@ -303,9 +301,10 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                         drawPolygon(c.segPolygon, color, isSelected ? baseLine * 1.6 : baseLine * 1.1, isSelected ? 0.95 : 0.6);
                     }
                     const isManual = c.source === "manual";
-                    const labelText = c.class_name || (isManual ? "manual" : "");
-                    if (!isDragging && labelText) {
-                        drawLabel(c.bbox.x, c.bbox.y, labelText, color, isSelected ? 0.95 : 0.6);
+                    const classLabel = c.class_name || (isManual ? "manual" : "");
+                    if (isSelected && classLabel) {
+                        const selectedLabel = typeof c.score === "number" ? `${classLabel} (${c.score.toFixed(3)})` : classLabel;
+                        drawLabel(c.bbox.x, c.bbox.y, selectedLabel, color, isSelected ? 0.95 : 0.6);
                     }
                 });
             }
@@ -381,8 +380,24 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                     ctx.stroke();
                     ctx.restore();
                 };
-                if (debugOverlay.roi_bbox) {
-                    const { x1, y1, x2, y2 } = debugOverlay.roi_bbox;
+                const dynamicRoiBbox = typeof debugRoiSize === "number" && debugOverlay.clicked_image_xy && imgRef.current
+                    ? (() => {
+                        const half = debugRoiSize / 2;
+                        const img = imgRef.current;
+                        const click = debugOverlay.clicked_image_xy;
+                        if (!img || !click)
+                            return null;
+                        return {
+                            x1: Math.max(0, Math.round(click.x - half)),
+                            y1: Math.max(0, Math.round(click.y - half)),
+                            x2: Math.min(img.width, Math.round(click.x + half)),
+                            y2: Math.min(img.height, Math.round(click.y + half)),
+                        };
+                    })()
+                    : null;
+                const roiBbox = dynamicRoiBbox || debugOverlay.roi_bbox;
+                if (roiBbox) {
+                    const { x1, y1, x2, y2 } = roiBbox;
                     drawBox(x1, y1, x2 - x1, y2 - y1, "#00bfa5", baseLine * 1.6, true, 0.9, 0);
                 }
                 if (debugOverlay.outer_bbox) {
@@ -446,6 +461,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
         manualPreview,
         scale,
         debugOverlay,
+        debugRoiSize,
         debugPoints,
     ]);
     const schedulePanZoomUpdate = () => {

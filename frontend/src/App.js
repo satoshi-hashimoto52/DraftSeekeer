@@ -96,6 +96,8 @@ export default function App() {
     const [showAnnotations, setShowAnnotations] = useState(true);
     const canvasRef = useRef(null);
     const [lastClick, setLastClick] = useState(null);
+    const [followupScanReady, setFollowupScanReady] = useState(false);
+    const followupScanPointRef = useRef(null);
     const [detectDebug, setDetectDebug] = useState(null);
     const [segEditMode, setSegEditMode] = useState(false);
     const [showSegVertices, setShowSegVertices] = useState(true);
@@ -127,6 +129,7 @@ export default function App() {
     const [autoRunning, setAutoRunning] = useState(false);
     const [autoResult, setAutoResult] = useState(null);
     const [autoProgress, setAutoProgress] = useState(0);
+    const prevRoiSizeRef = useRef(DEFAULT_ROI_SIZE);
     const [lastAutoAddedIds, setLastAutoAddedIds] = useState([]);
     const autoProgressTimerRef = useRef(null);
     const [checkedAnnotationIds, setCheckedAnnotationIds] = useState([]);
@@ -634,6 +637,8 @@ export default function App() {
         setPendingManualClass("");
         setIsCreatingManualBBox(false);
         setLastClick(null);
+        setFollowupScanReady(false);
+        followupScanPointRef.current = null;
         setDetectDebug(null);
         setCoordDebug(null);
         setSegEditMode(false);
@@ -922,7 +927,27 @@ export default function App() {
         }
     };
     const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-    const handleClickPoint = async (x, y) => {
+    const computeNextScanPoint = (fromPoint) => {
+        if (!imageSize)
+            return null;
+        const step = Math.max(1, Math.round(roiSize));
+        const half = step / 2;
+        const maxX = imageSize.w - 1;
+        const maxY = imageSize.h - 1;
+        let nextX = fromPoint.x + step;
+        let nextY = fromPoint.y;
+        if (nextX > maxX) {
+            nextX = half;
+            nextY += step;
+        }
+        if (nextY > maxY)
+            return null;
+        return {
+            x: clamp(nextX, 0, maxX),
+            y: clamp(nextY, 0, maxY),
+        };
+    };
+    const handleClickPoint = async (x, y, opts) => {
         if (isCreatingManualBBox)
             return;
         if (manualClassMissing)
@@ -931,6 +956,10 @@ export default function App() {
             return;
         if (!imageId || !project)
             return;
+        if (!opts?.fromFollowup) {
+            setFollowupScanReady(false);
+            followupScanPointRef.current = null;
+        }
         setError(null);
         setNotice(null);
         setBusy(true);
@@ -972,6 +1001,9 @@ export default function App() {
             const nextCandidates = toCandidates(res);
             setCandidates(nextCandidates);
             setSelectedCandidateId(nextCandidates.length > 0 ? nextCandidates[0].id : null);
+            const nextPoint = computeNextScanPoint({ x: sendX, y: sendY });
+            followupScanPointRef.current = nextPoint;
+            setFollowupScanReady(Boolean(nextPoint));
             setColorMap((prev) => {
                 const next = { ...prev };
                 nextCandidates.forEach((r) => {
@@ -1030,6 +1062,13 @@ export default function App() {
             },
         ]);
         setNotice(`${selectedCandidate.class_name} を確定しました`);
+        const basePoint = lastClick || {
+            x: selectedCandidate.bbox.x + selectedCandidate.bbox.w / 2,
+            y: selectedCandidate.bbox.y + selectedCandidate.bbox.h / 2,
+        };
+        const nextPoint = computeNextScanPoint(basePoint);
+        followupScanPointRef.current = nextPoint;
+        setFollowupScanReady(Boolean(nextPoint));
         if (candidates.length > 0) {
             const index = candidates.findIndex((c) => c.id === selectedCandidate.id);
             if (index >= 0) {
@@ -1095,13 +1134,26 @@ export default function App() {
     };
     useEffect(() => {
         const handleShortcut = (event) => {
-            if (!selectedCandidate)
-                return;
             const target = event.target;
             const tag = target?.tagName?.toLowerCase();
             if (tag === "input" || tag === "textarea" || tag === "select")
                 return;
             const key = event.key;
+            if (key === "f" || key === "F") {
+                if (!followupScanReady || busy)
+                    return;
+                const point = followupScanPointRef.current;
+                if (!point)
+                    return;
+                event.preventDefault();
+                canvasRef.current?.panTo(point.x, point.y);
+                setFollowupScanReady(false);
+                followupScanPointRef.current = null;
+                void handleClickPoint(point.x, point.y, { fromFollowup: true });
+                return;
+            }
+            if (!selectedCandidate)
+                return;
             if (key === "Enter") {
                 event.preventDefault();
                 if (!manualClassMissing)
@@ -1130,7 +1182,7 @@ export default function App() {
         };
         window.addEventListener("keydown", handleShortcut);
         return () => window.removeEventListener("keydown", handleShortcut);
-    }, [selectedCandidate, manualClassMissing]);
+    }, [selectedCandidate, manualClassMissing, followupScanReady, busy]);
     useEffect(() => {
         const handleKey = (event) => {
             const target = event.target;
@@ -1192,6 +1244,20 @@ export default function App() {
         window.addEventListener("keydown", handleKey);
         return () => window.removeEventListener("keydown", handleKey);
     }, [annotations, selectedAnnotationId, selectedCandidateId, pendingManualBBox]);
+    useEffect(() => {
+        if (prevRoiSizeRef.current === roiSize)
+            return;
+        prevRoiSizeRef.current = roiSize;
+        if (!showDebug || busy)
+            return;
+        const click = detectDebug?.clicked_image_xy || lastClick;
+        if (!click)
+            return;
+        const timer = window.setTimeout(() => {
+            void handleClickPoint(click.x, click.y);
+        }, 80);
+        return () => window.clearTimeout(timer);
+    }, [roiSize, showDebug, busy, detectDebug, lastClick]);
     const pickUniqueColor = (existing) => {
         const used = new Set(Object.values(existing));
         for (let i = 0; i < 20; i += 1) {
@@ -2375,7 +2441,7 @@ export default function App() {
                                                 setAnnotationUndoStack((prev) => [...prev, session.before]);
                                                 setAnnotationRedoStack([]);
                                                 setAnnotations((prev) => prev.map((a) => a.id === session.activeId ? { ...a, source: "manual" } : a));
-                                            }, onSelectAnnotation: handleSelectAnnotation, onClearSelectedAnnotation: () => setSelectedAnnotationId(null), pendingManualBBox: pendingManualBBox, shouldIgnoreCanvasClick: () => isCreatingManualBBox || !!pendingManualBBox, onDebugCoords: showDebug ? setCoordDebug : undefined, debugOverlay: showDebug ? detectDebug || null : null }), selectedAnnotationId && (_jsxs("div", { style: {
+                                            }, onSelectAnnotation: handleSelectAnnotation, onClearSelectedAnnotation: () => setSelectedAnnotationId(null), pendingManualBBox: pendingManualBBox, shouldIgnoreCanvasClick: () => isCreatingManualBBox || !!pendingManualBBox, onDebugCoords: showDebug ? setCoordDebug : undefined, debugOverlay: showDebug ? detectDebug || null : null, debugRoiSize: showDebug ? roiSize : undefined }), selectedAnnotationId && (_jsxs("div", { style: {
                                                 position: "absolute",
                                                 right: 12,
                                                 top: 12,
