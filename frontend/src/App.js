@@ -2742,7 +2742,15 @@ export default function App() {
                                                     background: "#fff",
                                                     fontSize: 11,
                                                     cursor: "pointer",
-                                                }, children: autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く" }), autoAdvancedOpen && (_jsxs("div", { className: "autoAdvanced", style: { display: "grid", gap: 8 }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [_jsx("div", { style: { fontSize: 12, fontWeight: 600 } }), autoDirty && autoBaseline && (_jsx("button", { type: "button", className: "btn btnGhost", style: { height: 24, padding: "0 8px", fontSize: 10 }, onClick: () => {
+                                                }, children: autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く" }), autoAdvancedOpen && (_jsxs("div", { className: "autoAdvanced", style: {
+                                                    display: "grid",
+                                                    gap: 8,
+                                                    marginTop: 2,
+                                                    padding: 10,
+                                                    borderRadius: 8,
+                                                    background: "#eef3ff",
+                                                    border: "1px solid #c8d6ff",
+                                                }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [_jsx("div", { style: { fontSize: 12, fontWeight: 600 } }), autoDirty && autoBaseline && (_jsx("button", { type: "button", className: "btn btnGhost", style: { height: 24, padding: "0 8px", fontSize: 10 }, onClick: () => {
                                                                     setAutoThreshold(autoBaseline.autoThreshold);
                                                                     setAutoMethod(autoBaseline.autoMethod);
                                                                     setAutoClassFilter(autoBaseline.autoClassFilter);

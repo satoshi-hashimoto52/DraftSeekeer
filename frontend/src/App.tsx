@@ -4087,7 +4087,18 @@ export default function App() {
                       {autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く"}
                     </button>
                     {autoAdvancedOpen && (
-                      <div className="autoAdvanced" style={{ display: "grid", gap: 8 }}>
+                      <div
+                        className="autoAdvanced"
+                        style={{
+                          display: "grid",
+                          gap: 8,
+                          marginTop: 2,
+                          padding: 10,
+                          borderRadius: 8,
+                          background: "#eef3ff",
+                          border: "1px solid #c8d6ff",
+                        }}
+                      >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                           <div style={{ fontSize: 12, fontWeight: 600 }} />
                           {autoDirty && autoBaseline && (
