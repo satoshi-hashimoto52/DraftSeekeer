@@ -2588,10 +2588,20 @@ export default function App() {
                                                         })) }))] })), _jsx("div", { style: { marginTop: 8 }, children: _jsx("button", { type: "button", onClick: () => setShowAdvanced((prev) => !prev), className: "btn btnGhost", style: {
                                                         width: "100%",
                                                         height: 32,
+                                                        textAlign: "left",
+                                                        display: "flex",
+                                                        justifyContent: "flex-start",
+                                                        alignItems: "center",
                                                         background: showAdvanced ? "var(--panel2)" : "transparent",
                                                         borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
                                                         color: showAdvanced ? "var(--primary)" : "inherit",
-                                                    }, children: showAdvanced ? "▼ Advanced settings" : "▶︎ Advanced settings" }) }), showAdvanced && (_jsxs("div", { style: { marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }, children: [_jsx("div", { style: { fontSize: 12, fontWeight: 600 }, children: "\u691C\u51FA\u30D1\u30E9\u30E1\u30FC\u30BF" }), advancedDirty && advancedBaseline && (_jsx("button", { type: "button", className: "btn btnGhost", style: { height: 24, padding: "0 8px", fontSize: 10 }, onClick: () => {
+                                                    }, children: showAdvanced ? "▼ 詳細設定" : "▶︎ 詳細設定" }) }), showAdvanced && (_jsxs("div", { style: {
+                                                    marginTop: 8,
+                                                    padding: 10,
+                                                    borderRadius: 8,
+                                                    background: "#eef3ff",
+                                                    border: "1px solid #c8d6ff",
+                                                }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }, children: [_jsx("div", { style: { fontSize: 12, fontWeight: 600 }, children: "\u691C\u51FA\u30D1\u30E9\u30E1\u30FC\u30BF" }), advancedDirty && advancedBaseline && (_jsx("button", { type: "button", className: "btn btnGhost", style: { height: 24, padding: "0 8px", fontSize: 10 }, onClick: () => {
                                                                     setRoiSize(advancedBaseline.roiSize);
                                                                     setTopk(advancedBaseline.topk);
                                                                     setScaleMin(advancedBaseline.scaleMin);

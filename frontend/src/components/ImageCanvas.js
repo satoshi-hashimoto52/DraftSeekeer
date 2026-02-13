@@ -297,7 +297,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 candidates.forEach((c) => {
                     const isSelected = c.id === selectedCandidateId;
                     const color = colorMap[c.class_name] || "#ff2b2b";
-                    const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 0.8;
+                    const lineWidth = (isSelected ? baseLine * 2.2 : baseLine * 1.0) + 1;
                     drawBox(c.bbox.x, c.bbox.y, c.bbox.w, c.bbox.h, color, lineWidth, !isSelected, isSelected ? 0.95 : 0.6, 0);
                     if (!isDragging && c.segPolygon) {
                         drawPolygon(c.segPolygon, color, isSelected ? baseLine * 1.6 : baseLine * 1.1, isSelected ? 0.95 : 0.6);
@@ -306,10 +306,6 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                     const labelText = c.class_name || (isManual ? "manual" : "");
                     if (!isDragging && labelText) {
                         drawLabel(c.bbox.x, c.bbox.y, labelText, color, isSelected ? 0.95 : 0.6);
-                    }
-                    if (isSelected) {
-                        const size = Math.max(4, Math.round(baseLine * 2.2));
-                        drawCornerMarkers(c.bbox, color, size);
                     }
                 });
             }
@@ -325,7 +321,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                     const isSelected = a.id === selectedAnnotationId;
                     const isHighlighted = a.id === highlightAnnotationId;
                     const color = colorMap[a.class_name] || "#ff2b2b";
-                    const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 1.2;
+                    const lineWidth = (isSelected ? baseLine * 2.2 : baseLine * 1.3) + 1;
                     const dashed = isSelected && (editMode || editSessionRef.current.active);
                     drawBox(a.bbox.x, a.bbox.y, a.bbox.w, a.bbox.h, color, lineWidth, dashed, isSelected ? blinkAlpha : 1, isSelected ? blinkFill : 0.1);
                     if (!isDragging && a.segPolygon) {

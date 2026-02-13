@@ -3480,16 +3480,28 @@ export default function App() {
                   style={{
                     width: "100%",
                     height: 32,
+                    textAlign: "left",
+                    display: "flex",
+                    justifyContent: "flex-start",
+                    alignItems: "center",
                     background: showAdvanced ? "var(--panel2)" : "transparent",
                     borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
                     color: showAdvanced ? "var(--primary)" : "inherit",
                   }}
                 >
-                  {showAdvanced ? "▼ Advanced settings" : "▶︎ Advanced settings"}
+                  {showAdvanced ? "▼ 詳細設定" : "▶︎ 詳細設定"}
                 </button>
               </div>
               {showAdvanced && (
-                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: 10,
+                    borderRadius: 8,
+                    background: "#eef3ff",
+                    border: "1px solid #c8d6ff",
+                  }}
+                >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>検出パラメータ</div>
                     {advancedDirty && advancedBaseline && (

@@ -446,7 +446,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         candidates.forEach((c) => {
           const isSelected = c.id === selectedCandidateId;
           const color = colorMap[c.class_name] || "#ff2b2b";
-          const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 0.8;
+          const lineWidth = (isSelected ? baseLine * 2.2 : baseLine * 1.0) + 1;
           drawBox(
             c.bbox.x,
             c.bbox.y,
@@ -471,10 +471,6 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         if (!isDragging && labelText) {
           drawLabel(c.bbox.x, c.bbox.y, labelText, color, isSelected ? 0.95 : 0.6);
         }
-        if (isSelected) {
-          const size = Math.max(4, Math.round(baseLine * 2.2));
-          drawCornerMarkers(c.bbox, color, size);
-        }
       });
       }
 
@@ -491,7 +487,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           const isSelected = a.id === selectedAnnotationId;
           const isHighlighted = a.id === highlightAnnotationId;
           const color = colorMap[a.class_name] || "#ff2b2b";
-          const lineWidth = isSelected ? baseLine * 2.0 : baseLine * 1.2;
+          const lineWidth = (isSelected ? baseLine * 2.2 : baseLine * 1.3) + 1;
           const dashed = isSelected && (editMode || editSessionRef.current.active);
           drawBox(
             a.bbox.x,
