@@ -4211,9 +4211,9 @@ export default function App() {
                             {
                               key: "scaled_templates",
                               label: "Template Mode（テンプレ探索型）",
-                              help: "タイル/ROI内の matchTemplate スコアで判定。",
+                              help: "線画エッジの2段評価（matchTemplate→Chamfer）で判定。",
                               detail:
-                                "Template Mode: タイル単位でエッジ/二値反転テンプレートに対し TM_CCOEFF_NORMED を適用し、edge_score を final_score として閾値で直接選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
+                                "Template Mode: 透過PNGテンプレートを alpha mask / edge / 回転(0/90/180) / 勾配方向ヒストグラムで事前キャッシュし、ROI側も二値→エッジで前処理。第1段はエッジ画像の matchTemplate（可能時mask付き）で候補抽出、第2段はTopKのみ距離変換Chamferで再ランキングします。最終スコアが近接する場合（差が小さい場合）はROI窓とテンプレの角度ヒストグラム類似度でタイブレークし、斜め成分の差を識別します。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },

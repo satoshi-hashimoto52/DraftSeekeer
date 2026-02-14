@@ -73,6 +73,7 @@ def _match_tile(
         scale_max=scale_max,
         scale_steps=scale_steps,
         trim_template_margin=True,
+        line_art_enhanced=True,
     )
     if max_per_tile > 0:
         matches = matches[:max_per_tile]

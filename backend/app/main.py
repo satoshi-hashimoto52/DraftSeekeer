@@ -1090,6 +1090,7 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
         scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
         scale_steps=5,
+        line_art_enhanced=True,
     )
     confirmed = []
     if payload.confirmed_annotations:
@@ -1236,6 +1237,7 @@ def detect_full(payload: DetectFullRequest) -> DetectFullResponse:
                 scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
                 scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
+                line_art_enhanced=True,
             )
             for match in tile_matches:
                 matches.append(
