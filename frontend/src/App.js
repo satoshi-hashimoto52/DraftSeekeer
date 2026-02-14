@@ -141,8 +141,14 @@ export default function App() {
     const templatePreviewCacheRef = useRef(new Map());
     const didAutoRestoreRef = useRef(false);
     const VIEW_STATE_KEY = "draftseeker:viewState:v1";
+    const FIRST_BOOT_SESSION_KEY = "draftseeker:firstBootDone:v1";
     const [viewState, setViewState] = useState(() => {
         try {
+            const firstBootDone = sessionStorage.getItem(FIRST_BOOT_SESSION_KEY) === "1";
+            if (!firstBootDone) {
+                sessionStorage.setItem(FIRST_BOOT_SESSION_KEY, "1");
+                return { view: "home" };
+            }
             const raw = localStorage.getItem(VIEW_STATE_KEY);
             if (!raw)
                 return { view: "home" };
@@ -409,23 +415,6 @@ export default function App() {
     const autoThresholdWarn = autoThreshold < 0.6 || autoThreshold > 0.85;
     const strideDanger = typeof autoStride === "number" && (autoStride < 16 || autoStride > 256);
     const strideWarn = typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
-    const handleBrowseExportDir = async () => {
-        try {
-            if ("showDirectoryPicker" in window) {
-                // @ts-expect-error - File System Access API (browser dependent)
-                const handle = await window.showDirectoryPicker();
-                if (handle?.name) {
-                    setExportOutputDir(handle.name);
-                    setExportDirHistory((prev) => prev.includes(handle.name) ? prev : [handle.name, ...prev].slice(0, 8));
-                }
-                return;
-            }
-            exportDirInputRef.current?.click();
-        }
-        catch {
-            // ignore cancel
-        }
-    };
     const handleExportDirPicked = (event) => {
         const files = Array.from(event.target.files || []);
         if (files.length === 0)
@@ -524,7 +513,7 @@ export default function App() {
             if (!mounted)
                 return;
             setProjects(list);
-            if (!project && list.length > 0) {
+            if (!project && list.length > 0 && viewState.view === "home") {
                 setProject(list[0]);
             }
         })
@@ -554,7 +543,7 @@ export default function App() {
             mounted = false;
             document.body.style.overflow = "";
         };
-    }, [project]);
+    }, [project, viewState.view]);
     useEffect(() => {
         if (didAutoRestoreRef.current)
             return;
@@ -688,12 +677,11 @@ export default function App() {
             });
         }
         setProject(nextProject);
+        setShowCommonSettings(true);
         try {
             const list = await fetchTemplates();
-            const selected = list.find((p) => p.name === nextProject) || list[0];
-            const classes = selected
-                ? selected.classes.map((c) => c.class_name)
-                : [];
+            const selected = list.find((p) => p.name === nextProject);
+            const classes = selected?.classes.map((c) => c.class_name) || [];
             setClassOptions(classes);
             const nextColors = buildColorMapFromClasses(classes);
             setColorMap(nextColors);
@@ -726,9 +714,24 @@ export default function App() {
             ? prev
             : { view: "project", projectName });
         try {
-            const storedTemplate = templateByDataset[projectName];
-            if (storedTemplate) {
-                setProject(storedTemplate);
+            let templateMap = templateByDataset;
+            try {
+                const raw = localStorage.getItem("draftseeker.templateByDataset");
+                const parsed = raw ? JSON.parse(raw) : {};
+                if (parsed && typeof parsed === "object") {
+                    templateMap = parsed;
+                }
+            }
+            catch {
+                // ignore
+            }
+            const hasStoredTemplate = Object.prototype.hasOwnProperty.call(templateMap, projectName);
+            const storedTemplate = templateMap[projectName];
+            if (hasStoredTemplate) {
+                setProject(storedTemplate || "");
+                if (storedTemplate) {
+                    setShowCommonSettings(true);
+                }
             }
             const info = await fetchDataset(projectName);
             setDatasetId(projectName);
@@ -806,6 +809,16 @@ export default function App() {
             if (newProjectFiles && newProjectFiles.length > 0) {
                 await importDataset({ project_name: name, files: Array.from(newProjectFiles) });
             }
+            setTemplateByDataset((prev) => {
+                const next = { ...prev, [name]: "" };
+                try {
+                    localStorage.setItem("draftseeker.templateByDataset", JSON.stringify(next));
+                }
+                catch {
+                    // ignore
+                }
+                return next;
+            });
             setNewProjectName("");
             setNewProjectFiles(null);
             await refreshProjectList();
@@ -2156,7 +2169,7 @@ export default function App() {
                                             padding: "0 10px",
                                         }, children: "Project Home\u3078\u623B\u308B" })), datasetId && (_jsxs(_Fragment, { children: [_jsx("button", { type: "button", onClick: () => {
                                                     if (!exportOutputDir.trim()) {
-                                                        setExportOutputDir("~/Downloads");
+                                                        setExportOutputDir("");
                                                     }
                                                     setExportResult(null);
                                                     setShowExportDrawer(true);
@@ -2179,9 +2192,9 @@ export default function App() {
                                                             fontSize: 11,
                                                             opacity: projectChangeUnlocked ? 1 : 0.6,
                                                             cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
-                                                        }, children: [projects.length === 0 && (_jsx("option", { value: "", children: "(none)" }, "project-none")), asChildren(projects.map((p, idx) => (_jsx("option", { value: p, children: p }, `${p}-${idx}`))))] }), _jsx("button", { type: "button", className: "btn btnGhost", style: { height: 22, padding: "0 8px", fontSize: 10 }, onClick: () => {
-                                                            if (projects.length <= 1) {
-                                                                setNotice("現在は1種類のため変更不要です");
+                                                        }, children: [_jsx("option", { value: "", children: "未設定" }, "project-unset"), asChildren(projects.map((p, idx) => (_jsx("option", { value: p, children: p }, `${p}-${idx}`))))] }), _jsx("button", { type: "button", className: "btn btnGhost", style: { height: 22, padding: "0 8px", fontSize: 10 }, onClick: () => {
+                                                            if (projects.length === 0) {
+                                                                setNotice("テンプレートがありません");
                                                                 return;
                                                             }
                                                             setProjectChangeUnlocked(true);
@@ -2244,13 +2257,15 @@ export default function App() {
                                                     width: "100%",
                                                     height: 32,
                                                     marginBottom: 8,
-                                                }, children: "Split settings" }), showSplitSettings && (_jsxs("div", { className: "sectionBody", children: [_jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }, children: [_jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "Train" }), _jsx("input", { type: "number", min: 0, value: splitTrain, onChange: (e) => setSplitTrain(Number(e.target.value)), className: "inputCompact", style: { height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" } })] }), _jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "Val" }), _jsx("input", { type: "number", min: 0, value: splitVal, onChange: (e) => setSplitVal(Number(e.target.value)), className: "inputCompact", style: { height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" } })] }), _jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "Test" }), _jsx("input", { type: "number", min: 0, value: splitTest, onChange: (e) => setSplitTest(Number(e.target.value)), className: "inputCompact", style: { height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" } })] })] }), _jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 8 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "Seed" }), _jsx("input", { type: "number", value: splitSeed, onChange: (e) => setSplitSeed(Number(e.target.value)), className: "inputMid", style: { height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" } })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 8 }, children: [_jsx("input", { type: "checkbox", checked: includeNegatives, onChange: (e) => setIncludeNegatives(e.target.checked) }), _jsx("span", { style: { fontSize: 12 }, children: "\u672A\u30A2\u30CE\u30C6\uFF08\u30CD\u30AC\u30C6\u30A3\u30D6\uFF09\u3092\u542B\u3081\u308B" })] })] }))] }), _jsxs("div", { className: "sectionCard", children: [_jsx("div", { className: "sectionTitle", children: "Dataset type" }), _jsxs("div", { className: "sectionBody", children: [_jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }, children: [_jsx("input", { type: "radio", name: "datasetType", checked: datasetType === "bbox", onChange: () => setDatasetType("bbox") }), _jsx("span", { style: { fontSize: 12 }, children: "bbox (YOLO)" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, color: "#999" }, children: [_jsx("input", { type: "radio", name: "datasetType", checked: datasetType === "seg", disabled: true }), _jsx("span", { style: { fontSize: 12 }, children: "seg (disabled)" })] })] })] }), _jsxs("div", { className: "sectionCard", children: [_jsx("div", { className: "sectionTitle", children: "Output directory" }), _jsxs("div", { className: "sectionBody", style: { display: "grid", gap: 8 }, children: [_jsxs("div", { style: { display: "flex", gap: 8 }, children: [_jsx("input", { ref: exportDirInputRef, type: "file", multiple: true, ...{
+                                                }, children: "Split settings" }), showSplitSettings && (_jsxs("div", { className: "sectionBody", children: [_jsxs("div", { style: {
+                                                            display: "grid",
+                                                            gridTemplateColumns: "repeat(3, 50px)",
+                                                            justifyContent: "start",
+                                                            gap: 10,
+                                                        }, children: [_jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, width: 50 }, children: [_jsx("span", { style: { fontSize: 13, color: "#666", textAlign: "center" }, children: "Train" }), _jsx("input", { type: "number", min: 0, value: splitTrain, onChange: (e) => setSplitTrain(Number(e.target.value)), className: "inputCompact", style: { width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 } })] }), _jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, width: 50 }, children: [_jsx("span", { style: { fontSize: 13, color: "#666", textAlign: "center" }, children: "Val" }), _jsx("input", { type: "number", min: 0, value: splitVal, onChange: (e) => setSplitVal(Number(e.target.value)), className: "inputCompact", style: { width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 } })] }), _jsxs("label", { style: { display: "flex", flexDirection: "column", gap: 4, width: 50 }, children: [_jsx("span", { style: { fontSize: 13, color: "#666", textAlign: "center" }, children: "Test" }), _jsx("input", { type: "number", min: 0, value: splitTest, onChange: (e) => setSplitTest(Number(e.target.value)), className: "inputCompact", style: { width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 } })] })] }), _jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center", marginTop: 10 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "Seed" }), _jsx("input", { type: "number", value: splitSeed, onChange: (e) => setSplitSeed(Number(e.target.value)), className: "inputMid", style: { width: 70, height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", fontSize: 15 } })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 8 }, children: [_jsx("input", { type: "checkbox", checked: includeNegatives, onChange: (e) => setIncludeNegatives(e.target.checked) }), _jsx("span", { style: { fontSize: 12 }, children: "\u672A\u30A2\u30CE\u30C6\uFF08\u30CD\u30AC\u30C6\u30A3\u30D6\uFF09\u3092\u542B\u3081\u308B" })] })] }))] }), _jsxs("div", { className: "sectionCard", children: [_jsx("div", { className: "sectionTitle", children: "Dataset type" }), _jsxs("div", { className: "sectionBody", children: [_jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }, children: [_jsx("input", { type: "radio", name: "datasetType", checked: datasetType === "bbox", onChange: () => setDatasetType("bbox") }), _jsx("span", { style: { fontSize: 12 }, children: "bbox (YOLO)" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, color: "#999" }, children: [_jsx("input", { type: "radio", name: "datasetType", checked: datasetType === "seg", disabled: true }), _jsx("span", { style: { fontSize: 12 }, children: "seg (disabled)" })] })] })] }), _jsxs("div", { className: "sectionCard", children: [_jsx("div", { className: "sectionTitle", children: "Output directory" }), _jsxs("div", { className: "sectionBody", style: { display: "grid", gap: 8 }, children: [_jsxs("div", { style: { display: "flex", gap: 8 }, children: [_jsx("input", { ref: exportDirInputRef, type: "file", multiple: true, ...{
                                                                     webkitdirectory: "true",
                                                                     directory: "true",
-                                                                }, onChange: handleExportDirPicked, style: { display: "none" } }), _jsx("input", { type: "text", placeholder: "/Users/you/exports", value: exportOutputDir, onChange: (e) => setExportOutputDir(e.target.value), style: { height: 32, padding: "0 8px", flex: 1 } }), _jsx("button", { type: "button", onClick: handleBrowseExportDir, className: "btn btnSecondary", style: {
-                                                                    height: 32,
-                                                                    padding: "0 10px",
-                                                                }, children: "Browse..." })] }), exportDirHistory.length > 0 && (_jsxs("div", { style: { marginTop: 8, display: "flex", alignItems: "center", gap: 8 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "\u5C65\u6B74" }), _jsxs("select", { value: "", onChange: (e) => {
+                                                                }, onChange: handleExportDirPicked, style: { display: "none" } }), _jsx("input", { type: "text", placeholder: "/Users/you/exports", value: exportOutputDir, onChange: (e) => setExportOutputDir(e.target.value), style: { height: 32, padding: "0 8px", flex: 1 } })] }), exportDirHistory.length > 0 && (_jsxs("div", { style: { marginTop: 8, display: "flex", alignItems: "center", gap: 8 }, children: [_jsx("span", { style: { fontSize: 11, color: "#666" }, children: "\u5C65\u6B74" }), _jsxs("select", { value: "", onChange: (e) => {
                                                                     if (e.target.value) {
                                                                         setExportOutputDir(e.target.value);
                                                                     }
@@ -2840,7 +2855,7 @@ export default function App() {
                                                                 key: "combined",
                                                                 label: "Fusion Mode（画像解析型）",
                                                                 help: "二値化 + match + 黒線一致率 + NMS で判定。",
-                                                                detail: "Fusion Mode: 二値化画像に対してスケールドテンプレートの正規化相関（TM_CCORR_NORMED）を走査し、match_score に加えて黒画素一致率（match_ratio >= 0.69）をゲート条件として候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
+                                                                detail: "Fusion Mode: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
                                                                 accent: "#1976d2",
                                                                 bg: "#e3f2fd",
                                                             },
@@ -2848,7 +2863,7 @@ export default function App() {
                                                                 key: "scaled_templates",
                                                                 label: "Template Mode（テンプレ探索型）",
                                                                 help: "タイル/ROI内の matchTemplate スコアで判定。",
-                                                                detail: "Template Mode: タイル単位でエッジ/二値反転テンプレートに対し TM_CCOEFF_NORMED を適用し、edge_score を final_score として閾値で直接選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
+                                                                detail: "Template Mode: タイル単位でエッジ優先（未検出時は二値反転）テンプレートに TM_CCOEFF_NORMED を適用し、score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を算出して閾値選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
                                                                 accent: "#546e7a",
                                                                 bg: "#eceff1",
                                                             },
@@ -2981,7 +2996,7 @@ export default function App() {
                                                         applySegSimplify();
                                                     }
                                                     setSegEditMode(next);
-                                                } }), _jsx("span", { style: { fontSize: 12 }, children: "\u7DE8\u96C6\u30E2\u30FC\u30C9ON/OFF" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }, children: [_jsx("input", { type: "checkbox", checked: showSegVertices, onChange: (e) => setShowSegVertices(e.target.checked), disabled: !segEditMode }), _jsx("span", { style: { fontSize: 12 }, children: "\u9802\u70B9\u3092\u8868\u793A" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }, children: [_jsx("span", { style: { fontSize: 12, minWidth: 70 }, children: "\u7C21\u7565\u5316" }), _jsx("input", { type: "range", min: 1, max: 10, step: 1, value: segSimplifyEps, onChange: (e) => setSegSimplifyEps(Number(e.target.value)), disabled: !segEditMode }), _jsx("span", { style: { fontSize: 12 }, children: segSimplifyEps })] }), _jsxs("div", { style: { display: "flex", gap: 8 }, children: [_jsx("button", { type: "button", onClick: handleSegUndo, disabled: !segEditMode || segUndoStack.length === 0, style: { padding: "6px 10px", fontSize: 12, cursor: "pointer" }, children: "Undo" }), _jsx("button", { type: "button", onClick: handleSegReset, disabled: !segEditMode || !selectedAnnotation.originalSegPolygon, style: { padding: "6px 10px", fontSize: 12, cursor: "pointer" }, children: "Reset" })] })] })), _jsx("div", { style: { marginBottom: 18 } })] })] })) : (_jsxs("div", { style: { padding: 24 }, children: [_jsx("div", { style: { fontSize: 18, fontWeight: 700, marginBottom: 12 }, children: "Project Home" }), _jsxs("div", { style: { display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }, children: [_jsx("input", { type: "text", id: "project-name-input", name: "project_name", placeholder: "project_name", value: newProjectName, onChange: (e) => setNewProjectName(e.target.value), style: { height: 36, padding: "0 10px", minWidth: 240 } }), _jsx("button", { type: "button", onClick: handleCreateProject, style: {
+                                                } }), _jsx("span", { style: { fontSize: 12 }, children: "\u7DE8\u96C6\u30E2\u30FC\u30C9ON/OFF" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }, children: [_jsx("input", { type: "checkbox", checked: showSegVertices, onChange: (e) => setShowSegVertices(e.target.checked), disabled: !segEditMode }), _jsx("span", { style: { fontSize: 12 }, children: "\u9802\u70B9\u3092\u8868\u793A" })] }), _jsxs("label", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }, children: [_jsx("span", { style: { fontSize: 12, minWidth: 70 }, children: "\u7C21\u7565\u5316" }), _jsx("input", { type: "range", min: 1, max: 10, step: 1, value: segSimplifyEps, onChange: (e) => setSegSimplifyEps(Number(e.target.value)), disabled: !segEditMode }), _jsx("span", { style: { fontSize: 12 }, children: segSimplifyEps })] }), _jsxs("div", { style: { display: "flex", gap: 8 }, children: [_jsx("button", { type: "button", onClick: handleSegUndo, disabled: !segEditMode || segUndoStack.length === 0, style: { padding: "6px 10px", fontSize: 12, cursor: "pointer" }, children: "Undo" }), _jsx("button", { type: "button", onClick: handleSegReset, disabled: !segEditMode || !selectedAnnotation.originalSegPolygon, style: { padding: "6px 10px", fontSize: 12, cursor: "pointer" }, children: "Reset" })] })] })), _jsx("div", { style: { marginBottom: 18 } })] })] })) : (_jsxs("div", { style: { padding: 24 }, children: [_jsx("div", { style: { fontSize: 18, fontWeight: 700, marginBottom: 12 }, children: "Project Home" }), _jsxs("div", { style: { display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }, children: [_jsx("input", { type: "text", id: "project-name-input", name: "project_name", placeholder: "project_name", value: newProjectName, onChange: (e) => setNewProjectName(e.target.value), style: { height: 36, padding: "0 10px", minWidth: 240, fontSize: 16 } }), _jsx("button", { type: "button", onClick: handleCreateProject, style: {
                                     height: 36,
                                     padding: "0 12px",
                                     borderRadius: 8,

@@ -205,8 +205,14 @@ export default function App() {
     | { view: "home" }
     | { view: "project"; projectName: string; lastImageKey?: string };
   const VIEW_STATE_KEY = "draftseeker:viewState:v1";
+  const FIRST_BOOT_SESSION_KEY = "draftseeker:firstBootDone:v1";
   const [viewState, setViewState] = useState<AppViewState>(() => {
     try {
+      const firstBootDone = sessionStorage.getItem(FIRST_BOOT_SESSION_KEY) === "1";
+      if (!firstBootDone) {
+        sessionStorage.setItem(FIRST_BOOT_SESSION_KEY, "1");
+        return { view: "home" };
+      }
       const raw = localStorage.getItem(VIEW_STATE_KEY);
       if (!raw) return { view: "home" };
       const parsed = JSON.parse(raw) as AppViewState;
@@ -496,25 +502,6 @@ export default function App() {
   const strideWarn =
     typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
 
-  const handleBrowseExportDir = async () => {
-    try {
-      if ("showDirectoryPicker" in window) {
-        // @ts-expect-error - File System Access API (browser dependent)
-        const handle = await window.showDirectoryPicker();
-        if (handle?.name) {
-          setExportOutputDir(handle.name);
-          setExportDirHistory((prev) =>
-            prev.includes(handle.name) ? prev : [handle.name, ...prev].slice(0, 8)
-          );
-        }
-        return;
-      }
-      exportDirInputRef.current?.click();
-    } catch {
-      // ignore cancel
-    }
-  };
-
   const handleExportDirPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
@@ -616,7 +603,7 @@ export default function App() {
       .then((list: string[]) => {
         if (!mounted) return;
         setProjects(list);
-        if (!project && list.length > 0) {
+        if (!project && list.length > 0 && viewState.view === "home") {
           setProject(list[0]);
         }
       })
@@ -643,7 +630,7 @@ export default function App() {
       mounted = false;
       document.body.style.overflow = "";
     };
-  }, [project]);
+  }, [project, viewState.view]);
 
   useEffect(() => {
     if (didAutoRestoreRef.current) return;
@@ -777,12 +764,12 @@ export default function App() {
       });
     }
     setProject(nextProject);
+    setShowCommonSettings(true);
     try {
       const list = await fetchTemplates();
-      const selected = list.find((p: ProjectTemplates) => p.name === nextProject) || list[0];
-      const classes = selected
-        ? selected.classes.map((c: { class_name: string; count: number }) => c.class_name)
-        : [];
+      const selected = list.find((p: ProjectTemplates) => p.name === nextProject);
+      const classes =
+        selected?.classes.map((c: { class_name: string; count: number }) => c.class_name) || [];
       setClassOptions(classes);
       const nextColors = buildColorMapFromClasses(classes);
       setColorMap(nextColors);
@@ -816,9 +803,23 @@ export default function App() {
         : { view: "project", projectName }
     );
     try {
-      const storedTemplate = templateByDataset[projectName];
-      if (storedTemplate) {
-        setProject(storedTemplate);
+      let templateMap = templateByDataset;
+      try {
+        const raw = localStorage.getItem("draftseeker.templateByDataset");
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === "object") {
+          templateMap = parsed as Record<string, string>;
+        }
+      } catch {
+        // ignore
+      }
+      const hasStoredTemplate = Object.prototype.hasOwnProperty.call(templateMap, projectName);
+      const storedTemplate = templateMap[projectName];
+      if (hasStoredTemplate) {
+        setProject(storedTemplate || "");
+        if (storedTemplate) {
+          setShowCommonSettings(true);
+        }
       }
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
@@ -894,6 +895,15 @@ export default function App() {
       if (newProjectFiles && newProjectFiles.length > 0) {
         await importDataset({ project_name: name, files: Array.from(newProjectFiles) });
       }
+      setTemplateByDataset((prev) => {
+        const next = { ...prev, [name]: "" };
+        try {
+          localStorage.setItem("draftseeker.templateByDataset", JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
       setNewProjectName("");
       setNewProjectFiles(null);
       await refreshProjectList();
@@ -2283,7 +2293,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     if (!exportOutputDir.trim()) {
-                      setExportOutputDir("~/Downloads");
+                      setExportOutputDir("");
                     }
                     setExportResult(null);
                     setShowExportDrawer(true);
@@ -2322,11 +2332,9 @@ export default function App() {
                       cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
                     }}
                   >
-                    {projects.length === 0 && (
-                      <option key="project-none" value="">
-                        (none)
-                      </option>
-                    )}
+                    <option key="project-unset" value="">
+                      未設定
+                    </option>
                     {asChildren(
                       projects.map((p, idx) => (
                         <option key={`${p}-${idx}`} value={p}>
@@ -2340,8 +2348,8 @@ export default function App() {
                     className="btn btnGhost"
                     style={{ height: 22, padding: "0 8px", fontSize: 10 }}
                     onClick={() => {
-                      if (projects.length <= 1) {
-                        setNotice("現在は1種類のため変更不要です");
+                      if (projects.length === 0) {
+                        setNotice("テンプレートがありません");
                         return;
                       }
                       setProjectChangeUnlocked(true);
@@ -2500,49 +2508,55 @@ export default function App() {
                 </button>
                 {showSplitSettings && (
                   <div className="sectionBody">
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>Train</span>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(3, 50px)",
+                        gap: 10,
+                      }}
+                    >
+                      <label style={{ display: "grid", gap: 4, width: 50 }}>
+                        <span style={{ fontSize: 13, color: "#666", textAlign: "center" }}>Train</span>
                         <input
                           type="number"
                           min={0}
                           value={splitTrain}
                           onChange={(e) => setSplitTrain(Number(e.target.value))}
                           className="inputCompact"
-                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
+                          style={{ width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 }}
                         />
                       </label>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>Val</span>
+                      <label style={{ display: "grid", gap: 4, width: 50 }}>
+                        <span style={{ fontSize: 13, color: "#666", textAlign: "center" }}>Val</span>
                         <input
                           type="number"
                           min={0}
                           value={splitVal}
                           onChange={(e) => setSplitVal(Number(e.target.value))}
                           className="inputCompact"
-                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
+                          style={{ width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 }}
                         />
                       </label>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>Test</span>
+                      <label style={{ display: "grid", gap: 4, width: 50 }}>
+                        <span style={{ fontSize: 13, color: "#666", textAlign: "center" }}>Test</span>
                         <input
                           type="number"
                           min={0}
                           value={splitTest}
                           onChange={(e) => setSplitTest(Number(e.target.value))}
                           className="inputCompact"
-                          style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
+                          style={{ width: 50, height: 30, padding: "0 6px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", background: "#fff", fontSize: 15 }}
                         />
                       </label>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
                       <span style={{ fontSize: 11, color: "#666" }}>Seed</span>
                       <input
                         type="number"
                         value={splitSeed}
                         onChange={(e) => setSplitSeed(Number(e.target.value))}
                         className="inputMid"
-                        style={{ height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)" }}
+                        style={{ width: 70, height: 32, padding: "0 8px", borderRadius: 8, border: "1px solid var(--border)", textAlign: "right", fontSize: 15 }}
                       />
                     </div>
                     <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
@@ -2598,17 +2612,6 @@ export default function App() {
                     onChange={(e) => setExportOutputDir(e.target.value)}
                     style={{ height: 32, padding: "0 8px", flex: 1 }}
                   />
-                  <button
-                    type="button"
-                    onClick={handleBrowseExportDir}
-                    className="btn btnSecondary"
-                    style={{
-                      height: 32,
-                      padding: "0 10px",
-                    }}
-                  >
-                    Browse...
-                  </button>
                 </div>
                 {exportDirHistory.length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
@@ -4204,7 +4207,7 @@ export default function App() {
                               label: "Fusion Mode（画像解析型）",
                               help: "二値化 + match + 黒線一致率 + NMS で判定。",
                               detail:
-                                "Fusion Mode: 二値化画像に対してスケールドテンプレートの正規化相関（TM_CCORR_NORMED）を走査し、match_score に加えて黒画素一致率（match_ratio >= 0.69）をゲート条件として候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
+                                "Fusion Mode: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
@@ -4213,7 +4216,7 @@ export default function App() {
                               label: "Template Mode（テンプレ探索型）",
                               help: "タイル/ROI内の matchTemplate スコアで判定。",
                               detail:
-                                "Template Mode: タイル単位でエッジ/二値反転テンプレートに対し TM_CCOEFF_NORMED を適用し、edge_score を final_score として閾値で直接選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
+                                "Template Mode: タイル単位でエッジ優先（未検出時は二値反転）テンプレートに TM_CCOEFF_NORMED を適用し、score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を算出して閾値選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
@@ -4675,7 +4678,7 @@ export default function App() {
               placeholder="project_name"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
-              style={{ height: 36, padding: "0 10px", minWidth: 240 }}
+              style={{ height: 36, padding: "0 10px", minWidth: 240, fontSize: 16 }}
             />
             <button
               type="button"
