@@ -40,6 +40,16 @@ class MatchResult:
     shape_ratio: float = 0.0
 
 
+@dataclass(frozen=True)
+class PreparedScaledTemplate:
+    class_name: str
+    template_name: str
+    scale: float
+    scaled: np.ndarray
+    tight_bbox: Tuple[int, int, int, int]
+    outer_bbox: Tuple[int, int, int, int]
+
+
 def _trim_template_margin(template: np.ndarray) -> np.ndarray:
     """Trim zero-value outer margins from a processed template image."""
     if template is None or template.size == 0:
@@ -116,6 +126,63 @@ def _iter_scaled_templates(
         yield float(scale), resized
 
 
+def prepare_scaled_templates(
+    templates: Dict[str, List[TemplateImage]],
+    scale_min: float,
+    scale_max: float,
+    scale_steps: int,
+    trim_template_margin: bool = False,
+) -> Tuple[Dict[str, List[PreparedScaledTemplate]], Dict[str, List[PreparedScaledTemplate]]]:
+    """Precompute scaled templates for edge/bin modes once per request."""
+    edge_prepared: Dict[str, List[PreparedScaledTemplate]] = {}
+    bin_prepared: Dict[str, List[PreparedScaledTemplate]] = {}
+    for class_name, template_list in templates.items():
+        edge_items: List[PreparedScaledTemplate] = []
+        bin_items: List[PreparedScaledTemplate] = []
+        for tpl in template_list:
+            for scale, scaled_edge in _iter_scaled_templates(
+                tpl.image_proc_edge, scale_min, scale_max, scale_steps
+            ):
+                if trim_template_margin:
+                    scaled_edge = _trim_template_margin(scaled_edge)
+                if scaled_edge is None or scaled_edge.size == 0:
+                    continue
+                if np.count_nonzero(scaled_edge) < max(10, int(scaled_edge.size * 0.002)):
+                    continue
+                edge_items.append(
+                    PreparedScaledTemplate(
+                        class_name=class_name,
+                        template_name=tpl.template_name,
+                        scale=scale,
+                        scaled=scaled_edge,
+                        tight_bbox=tpl.tight_bbox,
+                        outer_bbox=tpl.outer_bbox,
+                    )
+                )
+            for scale, scaled_bin in _iter_scaled_templates(
+                tpl.image_proc_bin, scale_min, scale_max, scale_steps
+            ):
+                if trim_template_margin:
+                    scaled_bin = _trim_template_margin(scaled_bin)
+                if scaled_bin is None or scaled_bin.size == 0:
+                    continue
+                if np.count_nonzero(scaled_bin) < max(10, int(scaled_bin.size * 0.002)):
+                    continue
+                bin_items.append(
+                    PreparedScaledTemplate(
+                        class_name=class_name,
+                        template_name=tpl.template_name,
+                        scale=scale,
+                        scaled=scaled_bin,
+                        tight_bbox=tpl.tight_bbox,
+                        outer_bbox=tpl.outer_bbox,
+                    )
+                )
+        edge_prepared[class_name] = edge_items
+        bin_prepared[class_name] = bin_items
+    return edge_prepared, bin_prepared
+
+
 def match_templates(
     image_bgr: np.ndarray,
     x: float,
@@ -126,6 +193,9 @@ def match_templates(
     scale_max: float,
     scale_steps: int,
     trim_template_margin: bool = False,
+    min_raw_score: float | None = None,
+    prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None,
+    prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None,
 ) -> List[MatchResult]:
     if image_bgr is None:
         return []
@@ -140,45 +210,156 @@ def match_templates(
     roi_proc = roi_edge
 
     results: List[MatchResult] = []
-
-    for class_name, template_list in templates.items():
-        for tpl in template_list:
-            for scale, scaled in _iter_scaled_templates(
-                tpl.image_proc_edge, scale_min, scale_max, scale_steps
-            ):
-                if trim_template_margin:
-                    scaled = _trim_template_margin(scaled)
-                th, tw = scaled.shape[:2]
-                if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
-                    continue
-                if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
-                    continue
-                res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
-                _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
-                tight_x = x0 + max_loc[0]
-                tight_y = y0 + max_loc[1]
-                patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
-                shape_ratio = _foreground_match_ratio(scaled, patch)
-                tx, ty, tw_tight, th_tight = tpl.tight_bbox
-                outer_x = int(round(tight_x - (tx * scale)))
-                outer_y = int(round(tight_y - (ty * scale)))
-                outer_w = int(round(tpl.outer_bbox[2] * scale))
-                outer_h = int(round(tpl.outer_bbox[3] * scale))
-                tight_w = tw
-                tight_h = th
-                results.append(
-                    MatchResult(
-                        class_name=class_name,
-                        template_name=tpl.template_name,
-                        score=float(max_val),
-                        scale=scale,
-                        bbox=(tight_x, tight_y, tight_w, tight_h),
-                        outer_bbox=(outer_x, outer_y, outer_w, outer_h),
-                        tight_bbox=(tight_x, tight_y, tight_w, tight_h),
-                        mode="edge",
-                        shape_ratio=shape_ratio,
+    # Fast path: original per-call scaling path (kept to avoid regression).
+    if prepared_edge is None and prepared_bin is None:
+        for class_name, template_list in templates.items():
+            for tpl in template_list:
+                for scale, scaled in _iter_scaled_templates(
+                    tpl.image_proc_edge, scale_min, scale_max, scale_steps
+                ):
+                    if trim_template_margin:
+                        scaled = _trim_template_margin(scaled)
+                    th, tw = scaled.shape[:2]
+                    if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
+                        continue
+                    if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                        continue
+                    res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
+                    _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+                    if min_raw_score is not None and float(max_val) < float(min_raw_score):
+                        continue
+                    tight_x = x0 + max_loc[0]
+                    tight_y = y0 + max_loc[1]
+                    patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+                    shape_ratio = _foreground_match_ratio(scaled, patch)
+                    tx, ty, _tw_tight, _th_tight = tpl.tight_bbox
+                    outer_x = int(round(tight_x - (tx * scale)))
+                    outer_y = int(round(tight_y - (ty * scale)))
+                    outer_w = int(round(tpl.outer_bbox[2] * scale))
+                    outer_h = int(round(tpl.outer_bbox[3] * scale))
+                    tight_w = tw
+                    tight_h = th
+                    results.append(
+                        MatchResult(
+                            class_name=class_name,
+                            template_name=tpl.template_name,
+                            score=float(max_val),
+                            scale=scale,
+                            bbox=(tight_x, tight_y, tight_w, tight_h),
+                            outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                            tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                            mode="edge",
+                            shape_ratio=shape_ratio,
+                        )
                     )
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        if results:
+            return results
+
+        roi_proc = roi_bin
+        results = []
+        for class_name, template_list in templates.items():
+            for tpl in template_list:
+                for scale, scaled in _iter_scaled_templates(
+                    tpl.image_proc_bin, scale_min, scale_max, scale_steps
+                ):
+                    if trim_template_margin:
+                        scaled = _trim_template_margin(scaled)
+                    th, tw = scaled.shape[:2]
+                    if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
+                        continue
+                    if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                        continue
+                    res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
+                    _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+                    if min_raw_score is not None and float(max_val) < float(min_raw_score):
+                        continue
+                    tight_x = x0 + max_loc[0]
+                    tight_y = y0 + max_loc[1]
+                    patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+                    shape_ratio = _foreground_match_ratio(scaled, patch)
+                    tx, ty, _tw_tight, _th_tight = tpl.tight_bbox
+                    outer_x = int(round(tight_x - (tx * scale)))
+                    outer_y = int(round(tight_y - (ty * scale)))
+                    outer_w = int(round(tpl.outer_bbox[2] * scale))
+                    outer_h = int(round(tpl.outer_bbox[3] * scale))
+                    tight_w = tw
+                    tight_h = th
+                    results.append(
+                        MatchResult(
+                            class_name=class_name,
+                            template_name=tpl.template_name,
+                            score=float(max_val),
+                            scale=scale,
+                            bbox=(tight_x, tight_y, tight_w, tight_h),
+                            outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                            tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                            mode="bin",
+                            shape_ratio=shape_ratio,
+                        )
+                    )
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
+    edge_source = prepared_edge if prepared_edge is not None else {}
+    for class_name, template_list in templates.items():
+        prepared_list = edge_source.get(class_name, [])
+        use_prepared = len(prepared_list) > 0
+        if prepared_list:
+            iter_items = prepared_list
+        else:
+            iter_items = [
+                PreparedScaledTemplate(
+                    class_name=class_name,
+                    template_name=tpl.template_name,
+                    scale=scale,
+                    scaled=_trim_template_margin(scaled) if trim_template_margin else scaled,
+                    tight_bbox=tpl.tight_bbox,
+                    outer_bbox=tpl.outer_bbox,
                 )
+                for tpl in template_list
+                for scale, scaled in _iter_scaled_templates(
+                    tpl.image_proc_edge, scale_min, scale_max, scale_steps
+                )
+            ]
+        for item in iter_items:
+            scaled = item.scaled
+            if scaled is None or scaled.size == 0:
+                continue
+            th, tw = scaled.shape[:2]
+            if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
+                continue
+            if (not use_prepared) and np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                continue
+            res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
+            _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+            if min_raw_score is not None and float(max_val) < float(min_raw_score):
+                continue
+            tight_x = x0 + max_loc[0]
+            tight_y = y0 + max_loc[1]
+            patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+            shape_ratio = _foreground_match_ratio(scaled, patch)
+            tx, ty, _tw_tight, _th_tight = item.tight_bbox
+            outer_x = int(round(tight_x - (tx * item.scale)))
+            outer_y = int(round(tight_y - (ty * item.scale)))
+            outer_w = int(round(item.outer_bbox[2] * item.scale))
+            outer_h = int(round(item.outer_bbox[3] * item.scale))
+            tight_w = tw
+            tight_h = th
+            results.append(
+                MatchResult(
+                    class_name=class_name,
+                    template_name=item.template_name,
+                    score=float(max_val),
+                    scale=item.scale,
+                    bbox=(tight_x, tight_y, tight_w, tight_h),
+                    outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                    tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                    mode="edge",
+                    shape_ratio=shape_ratio,
+                )
+            )
 
     results.sort(key=lambda r: r.score, reverse=True)
     if results:
@@ -187,44 +368,64 @@ def match_templates(
     # fallback to binary-inverted matching if edge matching yields nothing
     roi_proc = roi_bin
     results = []
+    bin_source = prepared_bin if prepared_bin is not None else {}
     for class_name, template_list in templates.items():
-        for tpl in template_list:
-            for scale, scaled in _iter_scaled_templates(
-                tpl.image_proc_bin, scale_min, scale_max, scale_steps
-            ):
-                if trim_template_margin:
-                    scaled = _trim_template_margin(scaled)
-                th, tw = scaled.shape[:2]
-                if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
-                    continue
-                if np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
-                    continue
-                res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
-                _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
-                tight_x = x0 + max_loc[0]
-                tight_y = y0 + max_loc[1]
-                patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
-                shape_ratio = _foreground_match_ratio(scaled, patch)
-                tx, ty, tw_tight, th_tight = tpl.tight_bbox
-                outer_x = int(round(tight_x - (tx * scale)))
-                outer_y = int(round(tight_y - (ty * scale)))
-                outer_w = int(round(tpl.outer_bbox[2] * scale))
-                outer_h = int(round(tpl.outer_bbox[3] * scale))
-                tight_w = tw
-                tight_h = th
-                results.append(
-                    MatchResult(
-                        class_name=class_name,
-                        template_name=tpl.template_name,
-                        score=float(max_val),
-                        scale=scale,
-                        bbox=(tight_x, tight_y, tight_w, tight_h),
-                        outer_bbox=(outer_x, outer_y, outer_w, outer_h),
-                        tight_bbox=(tight_x, tight_y, tight_w, tight_h),
-                        mode="bin",
-                        shape_ratio=shape_ratio,
-                    )
+        prepared_list = bin_source.get(class_name, [])
+        use_prepared = len(prepared_list) > 0
+        if prepared_list:
+            iter_items = prepared_list
+        else:
+            iter_items = [
+                PreparedScaledTemplate(
+                    class_name=class_name,
+                    template_name=tpl.template_name,
+                    scale=scale,
+                    scaled=_trim_template_margin(scaled) if trim_template_margin else scaled,
+                    tight_bbox=tpl.tight_bbox,
+                    outer_bbox=tpl.outer_bbox,
                 )
+                for tpl in template_list
+                for scale, scaled in _iter_scaled_templates(
+                    tpl.image_proc_bin, scale_min, scale_max, scale_steps
+                )
+            ]
+        for item in iter_items:
+            scaled = item.scaled
+            if scaled is None or scaled.size == 0:
+                continue
+            th, tw = scaled.shape[:2]
+            if th > roi_proc.shape[0] or tw > roi_proc.shape[1]:
+                continue
+            if (not use_prepared) and np.count_nonzero(scaled) < max(10, int(scaled.size * 0.002)):
+                continue
+            res = cv2.matchTemplate(roi_proc, scaled, cv2.TM_CCOEFF_NORMED)
+            _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+            if min_raw_score is not None and float(max_val) < float(min_raw_score):
+                continue
+            tight_x = x0 + max_loc[0]
+            tight_y = y0 + max_loc[1]
+            patch = roi_proc[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+            shape_ratio = _foreground_match_ratio(scaled, patch)
+            tx, ty, _tw_tight, _th_tight = item.tight_bbox
+            outer_x = int(round(tight_x - (tx * item.scale)))
+            outer_y = int(round(tight_y - (ty * item.scale)))
+            outer_w = int(round(item.outer_bbox[2] * item.scale))
+            outer_h = int(round(item.outer_bbox[3] * item.scale))
+            tight_w = tw
+            tight_h = th
+            results.append(
+                MatchResult(
+                    class_name=class_name,
+                    template_name=item.template_name,
+                    score=float(max_val),
+                    scale=item.scale,
+                    bbox=(tight_x, tight_y, tight_w, tight_h),
+                    outer_bbox=(outer_x, outer_y, outer_w, outer_h),
+                    tight_bbox=(tight_x, tight_y, tight_w, tight_h),
+                    mode="bin",
+                    shape_ratio=shape_ratio,
+                )
+            )
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 

@@ -42,6 +42,25 @@ export default function NumericInputWithButtons({
   inputClassName,
   buttonClassName,
 }: Props) {
+  const holdTimerRef = React.useRef<number | null>(null);
+  const holdIntervalRef = React.useRef<number | null>(null);
+  const valueRef = React.useRef<NumericValue>(value);
+
+  React.useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  const stopHold = React.useCallback(() => {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (holdIntervalRef.current !== null) {
+      window.clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+  }, []);
+
   const decimals = (() => {
     const stepStr = String(step);
     if (!stepStr.includes(".")) return 0;
@@ -72,10 +91,26 @@ export default function NumericInputWithButtons({
   };
 
   const applyDelta = (dir: -1 | 1) => {
-    const base = value === "" ? (typeof min === "number" ? min : 0) : value;
+    const currentValue = valueRef.current;
+    const base = currentValue === "" ? (typeof min === "number" ? min : 0) : currentValue;
     const next = clamp(normalize(base + step * dir), min, max);
     onChange(next);
   };
+
+  const startHold = (dir: -1 | 1) => {
+    if (disabled) return;
+    stopHold();
+    applyDelta(dir);
+    holdTimerRef.current = window.setTimeout(() => {
+      holdIntervalRef.current = window.setInterval(() => {
+        applyDelta(dir);
+      }, 70);
+    }, 320);
+  };
+
+  React.useEffect(() => {
+    return () => stopHold();
+  }, [stopHold]);
 
   return (
     <div className={className} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
@@ -107,7 +142,6 @@ export default function NumericInputWithButtons({
       />
       <button
         type="button"
-        onClick={() => applyDelta(-1)}
         disabled={disabled}
         style={{
           width: height,
@@ -123,20 +157,37 @@ export default function NumericInputWithButtons({
         className={buttonClassName}
         onMouseDown={(e) => {
           if (disabled) return;
+          e.preventDefault();
+          startHold(-1);
           (e.currentTarget.style.background = "#f1f5f9");
         }}
         onMouseUp={(e) => {
+          stopHold();
           e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
         }}
         onMouseLeave={(e) => {
+          stopHold();
           e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+        }}
+        onTouchStart={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          startHold(-1);
+        }}
+        onTouchEnd={() => stopHold()}
+        onTouchCancel={() => stopHold()}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            applyDelta(-1);
+          }
         }}
       >
         −
       </button>
       <button
         type="button"
-        onClick={() => applyDelta(1)}
         disabled={disabled}
         style={{
           width: height,
@@ -152,13 +203,31 @@ export default function NumericInputWithButtons({
         className={buttonClassName}
         onMouseDown={(e) => {
           if (disabled) return;
+          e.preventDefault();
+          startHold(1);
           (e.currentTarget.style.background = "#f1f5f9");
         }}
         onMouseUp={(e) => {
+          stopHold();
           e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
         }}
         onMouseLeave={(e) => {
+          stopHold();
           e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+        }}
+        onTouchStart={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          startHold(1);
+        }}
+        onTouchEnd={() => stopHold()}
+        onTouchCancel={() => stopHold()}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            applyDelta(1);
+          }
         }}
       >
         +

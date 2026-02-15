@@ -14,7 +14,11 @@ from typing import Dict, Iterable, List, Tuple
 import cv2
 import numpy as np
 
-from .matching import MatchResult, match_templates
+from .matching import (
+    MatchResult,
+    PreparedScaledTemplate,
+    match_templates,
+)
 from .templates import TemplateImage
 from .annotation_exporter import export_annotations
 
@@ -58,11 +62,20 @@ def _match_tile(
     scale_steps: int,
     max_per_tile: int,
     roi_size: int,
+    final_threshold: float | None = None,
+    prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None,
+    prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None,
 ) -> List[Candidate]:
     h, w = tile.shape[:2]
     cx = w // 2
     cy = h // 2
     roi_size = max(1, int(roi_size))
+    # final_score = 0.6 * score + 0.4 * shape_ratio, shape_ratio <= 1.0
+    # If score is below this bound, the final score can never reach threshold.
+    min_raw_score = None
+    if final_threshold is not None:
+        min_raw_score = max(0.0, min(1.0, (float(final_threshold) - 0.4) / 0.6))
+
     matches: List[MatchResult] = match_templates(
         image_bgr=tile,
         x=cx,
@@ -73,18 +86,24 @@ def _match_tile(
         scale_max=scale_max,
         scale_steps=scale_steps,
         trim_template_margin=True,
+        min_raw_score=min_raw_score,
+        prepared_edge=prepared_edge,
+        prepared_bin=prepared_bin,
     )
     if max_per_tile > 0:
         matches = matches[:max_per_tile]
 
     candidates: List[Candidate] = []
     for m in matches:
+        final_score = float(0.6 * m.score + 0.4 * m.shape_ratio)
+        if final_threshold is not None and final_score < float(final_threshold):
+            continue
         bx, by, bw, bh = m.bbox
         candidates.append(
             Candidate(
                 class_name=m.class_name,
                 bbox=(bx + x0, by + y0, bw, bh),
-                edge_score=float(0.6 * m.score + 0.4 * m.shape_ratio),
+                edge_score=final_score,
                 template_name=m.template_name,
             )
         )
@@ -278,10 +297,9 @@ def annotate_all_manual(
     height, width = img.shape[:2]
 
     tile_size = max(64, int(roi_size))
-    stride = max(1, int(stride if stride is not None else tile_size * 0.25))
+    stride = max(1, int(stride if stride is not None else tile_size * 0.5))
     # Keep more candidates per tile to reduce early misses before global dedup.
     max_per_tile = 120
-
     candidates: List[Candidate] = []
     for x0, y0, x1, y1 in _iter_tiles(width, height, tile_size, stride):
         tile = img[y0:y1, x0:x1]
@@ -298,6 +316,7 @@ def annotate_all_manual(
                 scale_steps,
                 max_per_tile,
                 roi_size,
+                threshold,
             )
         )
 

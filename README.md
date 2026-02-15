@@ -1,31 +1,70 @@
 # DraftSeeker
 
-本書はコードから仕様を抽出して記載しています。
-動作確認・実運用テストは別途実施してください。
+本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
 
-CAD 図面画像のアノテーション支援ツールです。テンプレート照合で候補を出し、必要時のみ SAM で seg を生成し、YOLO / dataset 形式で出力します。
+DraftSeeker は、図面画像に対してテンプレート照合と SAM 補助を使ってアノテーション作成を支援するローカル実行ツールです。主用途は、テンプレートベースの半自動/全自動アノテーションと、YOLO 形式データセット出力です。
 
-## 5分で起動（macOS / ローカル）
+## 5分で起動
 
-Backend:
+### 1. 必要環境
+- macOS (Apple Silicon を想定した実装あり)
+- Python 3.10+ (`python3`)
+- Node.js 18+
+- SAM 利用時: `torch`, `segment-anything`, SAM checkpoint
+
+### 2. Backend 起動
 ```bash
-cd /Users/hashimoto/vscode/_project/DraftSeeker/backend
-/Users/hashimoto/vscode/_project/draft_seeker/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Frontend:
+### 3. Frontend 起動
 ```bash
-cd /Users/hashimoto/vscode/_project/DraftSeeker/frontend
-npm run dev -- --host 127.0.0.1 --port 5173
+cd frontend
+npm install
+npm run dev
 ```
 
-アクセス:
-- http://127.0.0.1:5173/
+- Frontend: `http://127.0.0.1:5173`
+- Backend: `http://127.0.0.1:8000`
 
-## 主要ドキュメント
+### 4. Quick Start
 
-- `docs/overview.md` : 全体構成 / 検出設計
-- `docs/api.md` : API 仕様（実装準拠）
-- `docs/runbook.md` : 運用・トラブル
-- `backend/docs/README.md` : バックエンド開発者向け
-- `frontend/docs/README.md` : フロント開発者向け
+>Backend 起動
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+>Frontend 起動
+```bash
+cd frontend
+npm install
+pm run dev -- --host 127.0.0.1 --port 5173
+```
+---
+
+## 全体構成
+- `backend/app/`: FastAPI と検出・保存・エクスポート処理
+- `frontend/src/`: React/Vite UI (`App.tsx` + `components/ImageCanvas.tsx`)
+- `data/datasets/`: プロジェクト単位の画像・アノテーション
+- `data/templates/`: テンプレート画像
+- `data/runs/`: YOLOテキスト出力など
+- `models/`: SAM checkpoint 配置先候補
+
+## 想定ユースケース
+- プロジェクト作成 → 画像取り込み
+- テンプレートプロジェクト選択
+- クリック検出で候補を確認し確定
+- 必要に応じて SAM 補助セグメンテーション
+- `Export dataset` で BBox/Seg データセットを出力
+
+## 制限事項・未検証事項
+- SAM checkpoint の既定パスが `backend/app/config.py` に固定値で埋め込まれています。環境差分は `SAM_CHECKPOINT` 環境変数で上書きしてください。
+- `backend/app/main.py` の `/export/dataset/seg` 実装には未定義変数参照があり、500になる可能性があります。
+- OpenAPI の実行時検証は依存ライブラリ導入済み環境でのみ可能です。
+- CORS は `allow_origins=["*"]` で許可されていますが、500系エラー時にはブラウザが CORS エラーとして見せることがあります。

@@ -1284,7 +1284,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   }, [imageUrl, setPanOffset, setScale]);
 
   return (
-    <div style={{ width: "100%" }}>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
       <canvas
         ref={canvasRef}
         onMouseDown={imageUrl ? handleMouseDown : undefined}
@@ -1297,7 +1307,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           setCursorStyle(imageUrl ? "crosshair" : "default");
         }}
         style={{
-          width: "100%",
+          width: "auto",
+          height: "auto",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          display: "block",
           border: "1px solid #ddd",
           background: "#fafafa",
           cursor: cursorStyle,

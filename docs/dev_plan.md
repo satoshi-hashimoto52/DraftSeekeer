@@ -1,101 +1,50 @@
-# Development Plan (AI Coding)
+# Development Plan
 
-## 実装する前に合意すべき点
-- どの機能を「次のスプリントの範囲」にするか（P0/P1/P2の基準）
-- API互換性（既存クライアントを壊すかどうか）
-- テンプレ/データの運用ルール（`data/` をGit管理しない方針）
-- CORS を `*` のままにするか制限するか
-- SAM 推論を常時利用するかオンデマンドか
+本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
 
-## 目的
-- 仕様書とAPI仕様書を基に、安定的に機能追加/改善できる開発計画を整理する。
-- UI/Backend の変更範囲とテスト方針を明確化する。
+## 現在の設計制約
+- `App.tsx` が巨大で、状態・UI・操作ロジックが単一ファイルに集中。
+- backend も `main.py` 集約が強く、機能別分割が不十分。
+- テンプレは起動時キャッシュで、ホットリロードなし。
+- 出力系APIの一部に実装不整合（seg export 500リスク）。
 
-## 変更候補一覧
-### 機能
-- 候補検出の TopK/重複除外の改善
-- Dataset 一覧の情報拡充（画像サイズ・ステータス）
-- Export の進捗/エラー表示強化
-- Seg 編集の UX 改善（Undo/Redo の見える化）
+## スケール自動推定の拡張余地
+- 現状は `scale_min/max/steps` を固定入力。
+- 候補:
+  1. テンプレサイズ分布と画像解像度から初期スケール範囲を推定
+  2. クリック周辺の線密度から local scale を補正
+  3. クラス別に推奨スケール設定を保持
 
-### 品質
-- API レスポンスの型整合性の強化
-- デバッグ情報の整理（必要時のみ返す）
-- 画像/テンプレ前処理の差分確認用ログ
+## MPS (Metal Performance Shaders) 利用余地
+- 現状利用:
+  - SAM 推論時のみ `mps/cpu` 切替 (`sam_device.py`)
+- 余地:
+  - template matching のGPU化（現状 OpenCV CPU依存）
+  - バッチ化したROI推論
 
-### 運用
-- CORS 制限と環境変数化
-- SAM checkpoint の設定方法の統一
-- data/ 配下のバックアップ/削除ルール明文化
+## template 数増加時の課題
+- スケール×テンプレ×タイルの積で計算量が増大。
+- 現状は `prepare_scaled_templates` など前処理はあるが、画像全体探索では依然コストが高い。
+- 候補:
+  1. クラス/テンプレ事前フィルタ
+  2. coarse-to-fine探索
+  3. ROI候補生成の前段導入
 
-## 優先度
-### P0
-- API/Frontend の型不整合を解消
-- 重要な例外パスを明示（400/404/422）
+## 高速化ポイント
+- Backend
+  - `annotate_all_manual` の stride/roi 設計最適化
+  - テンプレ前処理キャッシュのプロジェクト単位保持
+  - 並列処理（タイル並列）
+- Frontend
+  - `App.tsx` 分割（store/hooks/components）
+  - 大量アノテ表示時の仮想化
 
-### P1
-- デバッグ/可視化の整理
-- Dataset/テンプレ運用ルールの改善
+## 近傍の優先タスク
+1. `/export/dataset/seg` の未定義変数修正
+2. API スキーマと frontend 型の差分解消（debug fields）
+3. `App.tsx` を機能単位に分離
+4. 自動アノテ結果の評価指標（速度・再現率）を定量化
 
-### P2
-- Seg 編集 UX 改善
-- Export の詳細ログ追加
-
-## 各タスクの受け入れ条件（Given/When/Then）
-### P0-1: API/Frontend 型整合性
-- Given: `docs/api.md` のスキーマ定義
-- When: `/detect/point` の debug 付きレスポンスを取得
-- Then: frontend の型でエラーなく描画できる
-
-### P0-2: エラーハンドリング強化
-- Given: 400/404/422 の仕様
-- When: 不正入力を送信
-- Then: UI がエラー内容を表示する
-
-### P1-1: デバッグ情報の整理
-- Given: debug toggle がオン
-- When: `/detect/point` を実行
-- Then: ROI/テンプレ/マッチ結果が UI に表示される
-
-### P1-2: Dataset/テンプレ運用
-- Given: data/templates, data/datasets
-- When: import/delete を実行
-- Then: meta.json と実ファイルが一致する
-
-### P2-1: Seg UX
-- Given: segEditMode
-- When: Undo/Redo を操作
-- Then: polygon が期待通りに復元される
-
-### P2-2: Export ログ
-- Given: export 実行
-- When: 出力先が無効
-- Then: UI に理由が表示される
-
-## 影響範囲
-- Backend: `backend/app/main.py`, `backend/app/schemas.py`, `backend/app/matching.py`
-- Frontend: `frontend/src/App.tsx`, `frontend/src/api.ts`, `frontend/src/components/ImageCanvas.tsx`
-- Docs: `docs/api.md`, `docs/overview.md`, `docs/runbook.md`
-
-## テスト方針
-- Unit:
-  - `matching.py` の bbox 計算
-  - `filters.py` の除外ロジック
-  - `export_yolo.py` の正規化
-- Integration:
-  - `/detect/point` → `/annotations/save` → `/annotations/load`
-  - `/dataset/import` → `/dataset/select`
-- E2E:
-  - UI でクリック検出 → 候補確定 → export までの一連
-
-## ロールバック方針
-- Git tag で安定版を保持
-- 破壊的変更はブランチ分離
-- UI/Backend のバージョンを揃えられない場合は直前版へ戻す
-
-## 【要確認】
-- `roi_match_preview_base64` が debug に含まれるが schema 未定義
-  - 確認箇所: `backend/app/main.py: detect_point` の debug 生成
-  - 対応: schemas.py に追加するかレスポンスから削除
-- `exclude_same_class_only` が schemas にあるが main で未使用
-  - 確認箇所: `detect_point` / `detect_full`
+## 未実装/未検証
+- 自動スケール推定は未実装。
+- MPS を template matching に使う実装は未着手。

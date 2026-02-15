@@ -192,6 +192,7 @@ export default function App() {
     added: number;
     rejected: number;
     threshold: number;
+    elapsedMs: number;
   } | null>(null);
   const [autoProgress, setAutoProgress] = useState<number>(0);
   const prevRoiSizeRef = useRef<number>(DEFAULT_ROI_SIZE);
@@ -1628,6 +1629,7 @@ export default function App() {
         return prev + 5;
       });
     }, 400);
+    const startedAt = performance.now();
     try {
       const clipped = Math.max(0, Math.min(1, autoThreshold));
       const strideValue = autoStride && autoStride > 0 ? autoStride : undefined;
@@ -1649,6 +1651,7 @@ export default function App() {
         added: res.added_count,
         rejected: res.rejected_count,
         threshold: res.threshold,
+        elapsedMs: Math.max(0, performance.now() - startedAt),
       });
       if (res.created_annotations && res.created_annotations.length > 0) {
         const createdAt = new Date().toISOString();
@@ -1991,7 +1994,8 @@ export default function App() {
       className="appRoot"
       style={{
         fontFamily: "\"IBM Plex Sans\", system-ui, sans-serif",
-        height: "100vh",
+        minHeight: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -2925,8 +2929,9 @@ export default function App() {
             gridTemplateColumns: "260px 1fr 400px",
             gap: 16,
             padding: 16,
-            height: "95vh",
+            flex: "1 1 auto",
             minHeight: 0,
+            overflow: "hidden",
           }}
         >
           <div
@@ -3091,8 +3096,8 @@ export default function App() {
             {error && (
               <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
             )}
-            <div style={{ position: "sticky", top: 0 }}>
-              <div style={{ position: "relative" }}>
+            <div style={{ flex: "1 1 auto", minHeight: 0 }}>
+              <div style={{ position: "relative", height: "100%", minHeight: 0 }}>
                 <ImageCanvas
                   ref={canvasRef}
                   imageUrl={imageUrl}
@@ -4112,7 +4117,7 @@ export default function App() {
                 </button>
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                    <div className="formRow">
+                    <div className="formRow" style={{ gridTemplateColumns: "152px 1fr" }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>全自動 閾値</div>
                         <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
@@ -4254,7 +4259,10 @@ export default function App() {
                       <div style={{ fontSize: 12, color: "#0b3954" }}>
                         <div>追加されたアノテーション数: {autoResult.added}</div>
                         <div>除外された候補数: {autoResult.rejected}</div>
-                        <div>使用した閾値: {autoResult.threshold.toFixed(2)}</div>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+                          <span>使用した閾値: {autoResult.threshold.toFixed(2)}</span>
+                          <span>処理時間: {(autoResult.elapsedMs / 1000).toFixed(2)}s</span>
+                        </div>
                         <button
                           type="button"
                           onClick={handleUndoAutoAnnotate}
@@ -4333,6 +4341,7 @@ export default function App() {
                               help: "二値化 + match + 黒線一致率 + NMS で判定。",
                               detail:
                                 "Fusion Mode: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
+                              recommend: "推奨 0.6~0.7",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
@@ -4341,7 +4350,8 @@ export default function App() {
                               label: "Template Mode（テンプレ探索型）",
                               help: "タイル/ROI内の matchTemplate スコアで判定。",
                               detail:
-                                "Template Mode: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.25）し、各タイル中心ROIでテンプレート照合を実行。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
+                                "Template Mode: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.5）し、各タイル中心ROIでテンプレート照合を実行。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
+                              recommend: "推奨 0.7~0.8",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
@@ -4377,6 +4387,18 @@ export default function App() {
                                   <span style={{ fontWeight: 700, color: item.accent }}>{item.label}</span>
                                   <span className="autoMethodHelp" style={{ color: "#666" }}>
                                     {item.help}
+                                  </span>
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      alignSelf: "flex-end",
+                                      marginTop: 2,
+                                      borderColor: "#a5d6a7",
+                                      background: "#e8f5e9",
+                                      color: "#2e7d32",
+                                    }}
+                                  >
+                                    {item.recommend}
                                   </span>
                                 </div>
                               </label>

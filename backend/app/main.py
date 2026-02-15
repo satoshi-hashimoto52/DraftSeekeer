@@ -1604,24 +1604,54 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         if not cands:
             return cands
         ambiguity_margin = 0.01
-        visited = [False] * len(cands)
+        n = len(cands)
+        parent = list(range(n))
+        rank = [0] * n
+
+        def _find(a: int) -> int:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        def _union(a: int, b: int) -> None:
+            ra = _find(a)
+            rb = _find(b)
+            if ra == rb:
+                return
+            if rank[ra] < rank[rb]:
+                parent[ra] = rb
+            elif rank[ra] > rank[rb]:
+                parent[rb] = ra
+            else:
+                parent[rb] = ra
+                rank[ra] += 1
+
+        boxes = []
+        for c in cands:
+            x, y, w, h = c["bbox"]
+            boxes.append((x, y, x + w, y + h))
+
+        # Sweep line on x-axis to avoid O(n^2) full pair checks.
+        order = sorted(range(n), key=lambda i: boxes[i][0])
+        active: list[int] = []
+        for i in order:
+            ix1, iy1, ix2, iy2 = boxes[i]
+            if active:
+                active = [j for j in active if boxes[j][2] > ix1]
+            for j in active:
+                jx1, jy1, jx2, jy2 = boxes[j]
+                if ix1 < jx2 and ix2 > jx1 and iy1 < jy2 and iy2 > jy1:
+                    _union(i, j)
+            active.append(i)
+
+        components: dict[int, list[int]] = {}
+        for i in range(n):
+            root = _find(i)
+            components.setdefault(root, []).append(i)
+
         kept = []
-        for start in range(len(cands)):
-            if visited[start]:
-                continue
-            stack = [start]
-            visited[start] = True
-            component: list[int] = []
-            while stack:
-                i = stack.pop()
-                component.append(i)
-                ibox = cands[i]["bbox"]
-                for j in range(len(cands)):
-                    if visited[j]:
-                        continue
-                    if _boxes_overlap(ibox, cands[j]["bbox"]):
-                        visited[j] = True
-                        stack.append(j)
+        for component in components.values():
             ranked = sorted(
                 component,
                 key=lambda idx: float(cands[idx].get("final_score", 0.0)),
@@ -1650,6 +1680,8 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         confirmed = _dedup_overlap_clusters(confirmed)
     else:
         confirmed = _dedup_any_overlap(confirmed)
+    # Use post-dedup count as the baseline for "rejected" in UI summary.
+    post_cluster_count = len(confirmed)
 
     # Exclude any overlap with existing annotations for the same image
     existing_ann = []
@@ -1696,7 +1728,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             confirmed = _dedup_any_overlap(confirmed)
 
     added_count = len(confirmed)
-    rejected_count = int(result.get("total_candidates", 0) - added_count)
+    rejected_count = max(0, int(post_cluster_count - added_count))
 
     # Save as annotations if project_name and image_key are provided
     if payload.project_name and payload.image_key:

@@ -1,92 +1,70 @@
-# Runbook
+# Runbook / Troubleshooting
 
-## 要約
-- Backend は FastAPI、Frontend は Vite/React で起動します。
-- Backend のカレントは `DraftSeeker/backend` が前提です。
-- Dataset/テンプレは `data/` 配下に保存されます。
-- 画像選択は `/dataset/select` を通じて `image_id` を生成します。
-- CORS は現在 `*` 許可です。
-- SAM は checkpoint と device 設定が必要です。
-- エラー時はまず backend ログを確認します。
-- 本書は Mac 想定です。
-- 未確認は【要確認】として明記します。
-- 詳細は [overview](overview.md) と [api](api.md) 参照。
+本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
 
-## 目次
-- [起動](#起動)
-- [設定](#設定)
-- [ログ/デバッグ](#ログデバッグ)
-- [検証手順](#検証手順)
-- [トラブルシュート](#トラブルシュート)
-- [よくある障害と切り分け](#よくある障害と切り分け)
+## 1. 起動できない
 
-## 起動
 ### Backend
-```bash
-cd /Users/hashimoto/vscode/_project/DraftSeeker/backend
-uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-【要確認】venv を使用する場合:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+- 症状: `uvicorn` 起動失敗 / import error
+- 確認:
+  1. `cd backend`
+  2. `.venv` を有効化
+  3. `pip install -r requirements.txt`
+  4. `uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
+- 典型:
+  - `ModuleNotFoundError: cv2` → `opencv-python` 未導入
+  - `segment-anything is not installed` → `segment-anything` 未導入
 
 ### Frontend
-```bash
-cd /Users/hashimoto/vscode/_project/DraftSeeker/frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
-```
+- 症状: `localhost:5173` が開かない
+- 確認:
+  1. `cd frontend`
+  2. `npm install`
+  3. `npm run dev`
 
-## 設定
-- `backend/app/config.py`
-  - `DATA_DIR` / `TEMPLATES_ROOT` / `DATASETS_DIR`
-  - `SAM_CHECKPOINT`, `SAM_MODEL_TYPE`
-- 環境変数:
-  - `SAM_CHECKPOINT` があればそちらを優先
-  - `SAM_MODEL_TYPE` でモデル指定
+## 2. CORS エラーが出る
+- 表示例: `No 'Access-Control-Allow-Origin' header ...`
+- 現行コードは CORS 全許可 (`main.py`) のため、実際は backend 500 をブラウザが CORS 風に見せるケースが多い。
+- 対応:
+  1. backendログで直前の例外を確認
+  2. `http://127.0.0.1:8000/docs` が開くか確認
+  3. API URL が `http://127.0.0.1:8000` か確認 (`frontend/src/api.ts`)
 
-## ログ/デバッグ
-- Backend の標準出力に例外が出ます。
-- `/detect/point` の debug 情報は UI に表示可能。
-- ROI preview がずれる場合は座標変換を疑う。
+## 3. Export先ディレクトリ問題
+- `output_dir must be absolute` が返る場合:
+  - 絶対パスを指定する
+- 書き込み不可の場合:
+  - 権限のある場所を指定
+- zip ダウンロード不可:
+  - `export_id` が `exports_index.json` に存在するか確認
 
-## 検証手順
-1. `/templates` でテンプレ一覧が返る
-2. `/dataset/projects` で dataset 一覧が返る
-3. `/dataset/select` で `image_id` が得られる
-4. `/detect/point` で候補が返る
-5. `/annotations/save` で保存できる
-6. `/annotations/load` で読み込める
+## 4. Mac M1/M2 + SAM が重い
+- 現行実装は `torch.backends.mps.is_available()` なら `mps` 使用。
+- 対応:
+  1. SAM を使わない操作では `segment/candidate` を呼ばない
+  2. SAM checkpoint/モデルサイズを見直す
+  3. ROIを大きくしすぎない
 
-## トラブルシュート
-### CORS
-- 症状: ブラウザで CORS エラー
-- 原因: `allow_origins` の制限
-- 対処: `backend/app/main.py` の CORS 設定を確認
+## 5. UIが重い
+- 主因:
+  - 高解像度画像 + 多量描画
+  - Auto Annotate の低閾値で候補急増
+- 対応:
+  1. `scale_steps` を下げる
+  2. `roi_size` と `stride` を適正化
+  3. Debug表示をOFFにする
 
-### テンプレが読まれない
-- 症状: `/templates` が空
-- 原因: `data/templates` パス不一致
-- 対処: `data/templates/<project>/<class>/*.png` を確認
+## 6. template 再読み込み時の注意
+- テンプレ変更は backend 起動時 `scan_templates` でキャッシュされる。
+- 変更反映手順:
+  1. テンプレ画像差し替え
+  2. backend再起動
+  3. frontend再読み込み
 
-### SAM が動かない
-- 症状: `/segment/candidate` がエラー
-- 原因: checkpoint 不在 or torch / segment-anything 未導入
-- 対処: `SAM_CHECKPOINT` を設定して再起動
+## 7. 既知の実装問題
+- `/export/dataset/seg` で未定義変数参照 (`table_rows`, `rel_out`) があり 500 の可能性。
+- 対処は `backend/app/main.py` の修正が必要。
 
-### /detect/point が 500
-- 症状: Pydantic の `int_from_float` エラー
-- 原因: `x/y` や `bbox` が float のまま int 型に入る
-- 対処: `schemas.py` の型を確認（現行は float）
-
-## よくある障害と切り分け
-- UI の描画が重い
-  - ROI を小さく、`scale_steps` を下げる
-- Export が失敗
-  - `output_dir` が絶対パスか確認
-- 画像が切り替わらない
-  - `/dataset/select` の `project_name` と `filename` を確認
+## 8. ログ確認ポイント
+- Backend: uvicorn コンソールの traceback が一次情報
+- Frontend: 開発者ツール Network で API ステータスと response body を確認
