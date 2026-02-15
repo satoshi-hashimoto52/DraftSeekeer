@@ -148,6 +148,17 @@ export default function App() {
   });
   const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
   const [lastImportPath, setLastImportPath] = useState<string | null>(null);
+  const [importPathByDataset, setImportPathByDataset] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem("draftseeker.importPathByDataset");
+      const parsed = raw ? JSON.parse(raw) : {};
+      return typeof parsed === "object" && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+  const [showHeaderSettings, setShowHeaderSettings] = useState<boolean>(false);
+  const headerSettingsRef = useRef<HTMLDivElement | null>(null);
   const [autoThreshold, setAutoThreshold] = useState<number>(0.7);
   const [autoClassFilter, setAutoClassFilter] = useState<string[]>([]);
   const [autoMethod, setAutoMethod] = useState<"combined" | "scaled_templates">("combined");
@@ -524,6 +535,24 @@ export default function App() {
   const totalImages = datasetInfo?.total_images ?? datasetInfo?.images?.length ?? 0;
   const annotatedImages = datasetInfo?.annotated_images ?? 0;
   const classesCount = classOptions.length;
+  const importedImageCount = datasetInfo?.images?.length ?? 0;
+  const importStatusText = importedImageCount > 0 ? `取込済 (${importedImageCount}枚)` : "未取込（画像なし）";
+  const splitValidationMessage = useMemo(() => {
+    const train = Number(splitTrain);
+    const val = Number(splitVal);
+    const test = Number(splitTest);
+    const validNumbers = [train, val, test].every((n) => Number.isFinite(n) && n >= 0);
+    if (!validNumbers) {
+      return "Train / Val / Test は 0 以上の数値で入力してください。";
+    }
+    if (train + val + test !== 10) {
+      return "Train + Val + Test の合計を 10 にしてください。";
+    }
+    if (!(train > val && val >= test)) {
+      return "Train > Val >= Test を満たしてください。";
+    }
+    return null;
+  }, [splitTrain, splitVal, splitTest]);
   const exportFolderName = useMemo(() => {
     const base = datasetInfo?.project_name || datasetId || "dataset";
     const d = new Date();
@@ -553,8 +582,11 @@ export default function App() {
     if (classesCount === 0 || totalAnnotations === 0) {
       errors.push("クラスが 0 件のためエクスポートできません");
     }
+    if (splitValidationMessage) {
+      errors.push(`Split settings: ${splitValidationMessage}`);
+    }
     return errors;
-  }, [classesCount, totalAnnotations]);
+  }, [classesCount, totalAnnotations, splitValidationMessage]);
   const canExport = exportErrors.length === 0;
 
   useEffect(() => {
@@ -653,6 +685,25 @@ export default function App() {
     void handleOpenProject(viewState.projectName);
   }, [projectList, datasetId, viewState]);
 
+  useEffect(() => {
+    if (!showHeaderSettings) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const node = headerSettingsRef.current;
+      if (!node) return;
+      if (!node.contains(event.target as Node)) {
+        setShowHeaderSettings(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [showHeaderSettings]);
+
+  useEffect(() => {
+    if (!datasetId) {
+      setShowHeaderSettings(false);
+    }
+  }, [datasetId]);
+
 
   const handleFolderImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!datasetId) {
@@ -668,7 +719,18 @@ export default function App() {
       const first = rawFiles[0];
       const rel = (first as File & { webkitRelativePath?: string }).webkitRelativePath || "";
       if (rel.includes("/")) {
-        setLastImportPath(rel.split("/")[0]);
+        const topDir = rel.split("/")[0];
+        setLastImportPath(topDir);
+        setImportPathByDataset((prev) => {
+          if (!datasetId) return prev;
+          const next = { ...prev, [datasetId]: topDir };
+          try {
+            localStorage.setItem("draftseeker.importPathByDataset", JSON.stringify(next));
+          } catch {
+            // ignore
+          }
+          return next;
+        });
       }
     }
     if (files.length === 0) return;
@@ -797,6 +859,7 @@ export default function App() {
     setAutoPanelOpen(false);
     setShowSplitSettings(false);
     setShowExportDrawer(false);
+    setLastImportPath(importPathByDataset[projectName] || null);
     setViewState((prev) =>
       prev.view === "project" && prev.projectName === projectName
         ? prev
@@ -869,9 +932,11 @@ export default function App() {
     setError(null);
     setNotice(null);
     setBusy(false);
+    setShowHeaderSettings(false);
     setViewState({ view: "home" });
     setDatasetId(null);
     setDatasetInfo(null);
+    setLastImportPath(null);
     setDatasetSelectedName(null);
     setImageStatusMap({});
     setImageId(null);
@@ -919,9 +984,21 @@ export default function App() {
     setNotice(null);
     try {
       await deleteDatasetProject(name);
+      setImportPathByDataset((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, name)) return prev;
+        const next = { ...prev };
+        delete next[name];
+        try {
+          localStorage.setItem("draftseeker.importPathByDataset", JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
       if (datasetId === name) {
         setDatasetId(null);
         setDatasetInfo(null);
+        setLastImportPath(null);
         setDatasetSelectedName(null);
         setImageId(null);
         setImageUrl(null);
@@ -1028,7 +1105,7 @@ export default function App() {
 
   const computeNextScanPoint = (fromPoint: { x: number; y: number }) => {
     if (!imageSize) return null;
-    const step = Math.max(1, Math.round(roiSize));
+    const step = Math.max(1, Math.round(roiSize * 0.5));
     const half = step / 2;
     const maxX = imageSize.w - 1;
     const maxY = imageSize.h - 1;
@@ -2288,120 +2365,162 @@ export default function App() {
                 </button>
             )}
             {datasetId && (
-              <>
+              <div ref={headerSettingsRef} style={{ position: "relative" }}>
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  {...({
+                    webkitdirectory: "true",
+                    directory: "true",
+                  } as React.InputHTMLAttributes<HTMLInputElement>)}
+                  onChange={handleFolderImport}
+                  style={{ display: "none" }}
+                  disabled={!datasetId}
+                />
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!exportOutputDir.trim()) {
-                      setExportOutputDir("");
-                    }
-                    setExportResult(null);
-                    setShowExportDrawer(true);
-                  }}
-                  className="btn btnSecondary"
+                  onClick={() => setShowHeaderSettings((prev) => !prev)}
                   style={{
-                    height: 30,
-                    padding: "0 10px",
+                    width: 44,
+                    height: 44,
+                    padding: 0,
+                    fontSize: 31,
+                    lineHeight: 1,
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    color: "#35506b",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
+                  aria-label="総合設定"
+                  title="総合設定"
                 >
-                  Export dataset
+                  ⚙
                 </button>
-                <label
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    height: 30,
-                    padding: "4px 6px",
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                    background: "var(--panel2)",
-                    opacity: 0.9,
-                  }}
-                >
-                  <span style={{ fontSize: 11 }}>テンプレート</span>
-                  <select
-                    value={project}
-                    onChange={(e) => handleProjectTemplateChange(e.target.value)}
-                    disabled={!projectChangeUnlocked}
+                {showHeaderSettings && (
+                  <div
                     style={{
-                      minWidth: 120,
-                      height: 22,
-                      fontSize: 11,
-                      opacity: projectChangeUnlocked ? 1 : 0.6,
-                      cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
+                      position: "absolute",
+                      top: 36,
+                      right: 0,
+                      width: 280,
+                      border: "1px solid var(--border)",
+                      borderRadius: 10,
+                      background: "var(--panel)",
+                      boxShadow: "0 10px 24px rgba(0,0,0,0.16)",
+                      padding: 10,
+                      display: "grid",
+                      gap: 10,
+                      zIndex: 40,
                     }}
                   >
-                    <option key="project-unset" value="">
-                      未設定
-                    </option>
-                    {asChildren(
-                      projects.map((p, idx) => (
-                        <option key={`${p}-${idx}`} value={p}>
-                          {p}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn btnGhost"
-                    style={{ height: 22, padding: "0 8px", fontSize: 10 }}
-                    onClick={() => {
-                      if (projects.length === 0) {
-                        setNotice("テンプレートがありません");
-                        return;
-                      }
-                      setProjectChangeUnlocked(true);
-                    }}
-                  >
-                    変更…
-                  </button>
-                </label>
-                <label
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    height: 30,
-                    padding: "4px 6px",
-                    border: "1px solid #e3e3e3",
-                    borderRadius: 8,
-                    background: "#fafafa",
-                  }}
-                >
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    multiple
-                    {...({
-                      webkitdirectory: "true",
-                      directory: "true",
-                    } as React.InputHTMLAttributes<HTMLInputElement>)}
-                    onChange={handleFolderImport}
-                    style={{ display: "none" }}
-                    disabled={!datasetId}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => folderInputRef.current?.click()}
-                    disabled={!datasetId}
-                    className="btn btnSecondary"
-                    style={{
-                      height: 22,
-                      padding: "0 8px",
-                      fontSize: 11,
-                      cursor: datasetId ? "pointer" : "not-allowed",
-                      opacity: datasetId ? 1 : 0.6,
-                    }}
-                  >
-                    画像取り込み
-                  </button>
-                  <span style={{ fontSize: 11, color: "#666" }}>
-                    {lastImportPath ? lastImportPath : "未取込"}
-                  </span>
-                </label>
-              </>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!exportOutputDir.trim()) {
+                          setExportOutputDir("");
+                        }
+                        setExportResult(null);
+                        setShowExportDrawer(true);
+                        setShowHeaderSettings(false);
+                      }}
+                      className="btn btnSecondary"
+                      style={{ height: 30, padding: "0 10px", justifyContent: "flex-start" }}
+                    >
+                      Export dataset
+                    </button>
+
+                    <div
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        padding: 8,
+                        display: "grid",
+                        gap: 6,
+                        background: "var(--panel2)",
+                      }}
+                    >
+                      <span style={{ fontSize: 11, color: "#566" }}>テンプレート</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <select
+                          value={project}
+                          onChange={(e) => handleProjectTemplateChange(e.target.value)}
+                          disabled={!projectChangeUnlocked}
+                          style={{
+                            minWidth: 0,
+                            flex: 1,
+                            height: 28,
+                            fontSize: 11,
+                            opacity: projectChangeUnlocked ? 1 : 0.6,
+                            cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
+                          }}
+                        >
+                          <option key="project-unset" value="">
+                            未設定
+                          </option>
+                          {asChildren(
+                            projects.map((p, idx) => (
+                              <option key={`${p}-${idx}`} value={p}>
+                                {p}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        <button
+                          type="button"
+                          className="btn btnGhost"
+                          style={{ height: 28, padding: "0 8px", fontSize: 10 }}
+                          onClick={() => {
+                            if (projects.length === 0) {
+                              setNotice("テンプレートがありません");
+                              return;
+                            }
+                            setProjectChangeUnlocked(true);
+                          }}
+                        >
+                          変更…
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e3e3e3",
+                        borderRadius: 8,
+                        padding: 8,
+                        display: "grid",
+                        gap: 6,
+                        background: "#fafafa",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => folderInputRef.current?.click()}
+                          disabled={!datasetId}
+                          className="btn btnSecondary"
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            fontSize: 11,
+                            cursor: datasetId ? "pointer" : "not-allowed",
+                            opacity: datasetId ? 1 : 0.6,
+                          }}
+                        >
+                          画像取り込み
+                        </button>
+                        <span style={{ fontSize: 11, color: "#666" }}>{importStatusText}</span>
+                      </div>
+                      <span style={{ fontSize: 10, color: "#8a8a8a" }}>
+                        取込元ディレクトリ: {lastImportPath || "-"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -2512,7 +2631,8 @@ export default function App() {
                       style={{
                         display: "grid",
                         gridTemplateColumns: "repeat(3, 50px)",
-                        gap: 10,
+                        gap: 16,
+                        alignItems: "start",
                       }}
                     >
                       <label style={{ display: "grid", gap: 4, width: 50 }}>
@@ -2549,6 +2669,11 @@ export default function App() {
                         />
                       </label>
                     </div>
+                    {splitValidationMessage && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: "#c62828", fontWeight: 600 }}>
+                        {splitValidationMessage}
+                      </div>
+                    )}
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
                       <span style={{ fontSize: 11, color: "#666" }}>Seed</span>
                       <input
@@ -4216,7 +4341,7 @@ export default function App() {
                               label: "Template Mode（テンプレ探索型）",
                               help: "タイル/ROI内の matchTemplate スコアで判定。",
                               detail:
-                                "Template Mode: タイル単位でエッジ優先（未検出時は二値反転）テンプレートに TM_CCOEFF_NORMED を適用し、score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を算出して閾値選別。scale/stride の探索密度で速度と精度を調整しやすく、高閾値では適合率重視の運用に向きます。",
+                                "Template Mode: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.25）し、各タイル中心ROIでテンプレート照合を実行。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
