@@ -11,6 +11,7 @@ import {
   fetchProjects,
   fetchTemplates,
   fetchTemplatePreview,
+  fetchTemplateClassPreviews,
   clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
@@ -211,6 +212,7 @@ export default function App() {
     cssScale?: { sx: number; sy: number };
   } | null>(null);
   const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
+  const [templateClassPreviews, setTemplateClassPreviews] = useState<Record<string, string | null>>({});
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
   const didAutoRestoreRef = useRef(false);
   type AppViewState =
@@ -1823,6 +1825,25 @@ export default function App() {
       cancelled = true;
     };
   }, [showDebug, selectedCandidateId, candidates, project]);
+
+  useEffect(() => {
+    if (!project || classOptions.length === 0) {
+      setTemplateClassPreviews({});
+      return;
+    }
+    let cancelled = false;
+    fetchTemplateClassPreviews(project)
+      .then((previews) => {
+        if (cancelled) return;
+        setTemplateClassPreviews(previews || {});
+      })
+      .catch(() => {
+        if (!cancelled) setTemplateClassPreviews({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, classOptions]);
 
   useEffect(() => {
     if (!selectedAnnotationId) return;
@@ -4119,7 +4140,7 @@ export default function App() {
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                     <div className="formRow" style={{ gridTemplateColumns: "152px 1fr" }}>
                       <div>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>全自動 閾値</div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>確信度 閾値</div>
                         <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
                           高いほど誤検出が減ります。低いほど拾いやすくなります。
                         </div>
@@ -4155,20 +4176,40 @@ export default function App() {
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>対象クラス</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>対象クラス</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn btnGhost"
+                            style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                            onClick={() => setAutoClassFilter([...classOptions])}
+                          >
+                            全選択
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btnGhost"
+                            style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                            onClick={() => setAutoClassFilter([])}
+                          >
+                            解除
+                          </button>
+                        </div>
+                      </div>
                       <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
-                        未チェックのクラスは対象外になります。
+                        カードをクリックして対象クラスを選択します。
                       </div>
                       <div
                         style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 6,
-                          marginTop: 6,
-                          maxHeight: 84,
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                          gap: 8,
+                          marginTop: 8,
+                          maxHeight: 190,
                           overflowY: "auto",
-                          padding: "4px 2px",
-                          borderRadius: 6,
+                          padding: 4,
+                          borderRadius: 8,
                           border: "1px solid #eceff1",
                           background: "#fcfcfc",
                         }}
@@ -4179,33 +4220,69 @@ export default function App() {
                         {asChildren(
                           classOptions.map((name, idx) => {
                             const checked = autoClassFilter.includes(name);
+                            const preview = templateClassPreviews[name];
                             return (
-                              <label
-                                key={`auto-class-${name}-${idx}`}
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 4,
-                                  fontSize: 11,
-                                  padding: "2px 8px",
-                                  border: "1px solid #d9e2ec",
-                                  borderRadius: 999,
-                                  background: checked ? "#e3f2fd" : "#fff",
-                                  flexWrap: "wrap",
+                              <button
+                                key={`auto-class-card-${name}-${idx}`}
+                                type="button"
+                                onClick={() => {
+                                  if (checked) {
+                                    setAutoClassFilter((prev) => prev.filter((c) => c !== name));
+                                  } else {
+                                    setAutoClassFilter((prev) => [...prev, name]);
+                                  }
                                 }}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "42px 1fr",
+                                  gap: 8,
+                                  alignItems: "center",
+                                  borderRadius: 8,
+                                  border: checked ? "1px solid #1a73e8" : "1px solid #d9e2ec",
+                                  background: checked ? "#eef6ff" : "#fff",
+                                  padding: 6,
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                }}
+                                title={name}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) => {
-                                    const next = e.target.checked
-                                      ? [...autoClassFilter, name]
-                                      : autoClassFilter.filter((c) => c !== name);
-                                    setAutoClassFilter(next);
+                                <div
+                                  style={{
+                                    width: 42,
+                                    height: 42,
+                                    borderRadius: 6,
+                                    overflow: "hidden",
+                                    border: "1px solid #e6e6e6",
+                                    background: "#f4f4f4",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
                                   }}
-                                />
-                                <span>{name}</span>
-                              </label>
+                                >
+                                  {preview ? (
+                                    <img
+                                      src={`data:image/png;base64,${preview}`}
+                                      alt={name}
+                                      style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        objectFit: "contain",
+                                        background: "#fff",
+                                      }}
+                                    />
+                                  ) : (
+                                    <span style={{ fontSize: 9, color: "#777" }}>No Img</span>
+                                  )}
+                                </div>
+                                <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: "#0b1f3a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {name}
+                                  </span>
+                                  <span style={{ fontSize: 10, color: checked ? "#1a73e8" : "#666" }}>
+                                    {checked ? "対象" : "対象外"}
+                                  </span>
+                                </div>
+                              </button>
                             );
                           })
                         )}
@@ -4384,21 +4461,24 @@ export default function App() {
                                   onChange={() => setAutoMethod(item.key as "combined" | "scaled_templates")}
                                 />
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                  <span style={{ fontWeight: 700, color: item.accent }}>{item.label}</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+                                    <span style={{ fontWeight: 700, color: item.accent, flex: 1, minWidth: 0 }}>
+                                      {item.label}
+                                    </span>
+                                    <span
+                                      className="badge"
+                                      style={{
+                                        marginLeft: "auto",
+                                        borderColor: "#a5d6a7",
+                                        background: "#e8f5e9",
+                                        color: "#2e7d32",
+                                      }}
+                                    >
+                                      {item.recommend}
+                                    </span>
+                                  </div>
                                   <span className="autoMethodHelp" style={{ color: "#666" }}>
                                     {item.help}
-                                  </span>
-                                  <span
-                                    className="badge"
-                                    style={{
-                                      alignSelf: "flex-end",
-                                      marginTop: 2,
-                                      borderColor: "#a5d6a7",
-                                      background: "#e8f5e9",
-                                      color: "#2e7d32",
-                                    }}
-                                  >
-                                    {item.recommend}
                                   </span>
                                 </div>
                               </label>

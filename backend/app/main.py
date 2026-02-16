@@ -100,6 +100,7 @@ templates_cache = scan_templates(TEMPLATES_ROOT)
 BBOX_PAD_DEFAULT_TOP = 0
 BBOX_PAD_DEFAULT_BOTTOM = 0
 BBOX_PAD_MAP: Dict[str, Dict[str, int]] = {}
+AUTO_MAX_TEMPLATES_PER_CLASS = 60
 
 
 def _get_project_class_names(project: str) -> List[str]:
@@ -112,6 +113,23 @@ def _get_project_class_names(project: str) -> List[str]:
     if project_templates:
         return sorted(project_templates.keys())
     return []
+
+
+def _cap_templates_per_class_random(
+    templates: Dict[str, List["TemplateImage"]],
+    max_per_class: int,
+) -> Dict[str, List["TemplateImage"]]:
+    if max_per_class <= 0:
+        return templates
+    capped: Dict[str, List["TemplateImage"]] = {}
+    for class_name, items in templates.items():
+        if len(items) <= max_per_class:
+            capped[class_name] = items
+            continue
+        picked = random.sample(items, max_per_class)
+        picked.sort(key=lambda t: t.template_name)
+        capped[class_name] = picked
+    return capped
 
 
 def _split_counts(total: int, ratios: List[int]) -> List[int]:
@@ -437,6 +455,31 @@ def get_template_preview(project: str, class_name: str, template_name: str) -> D
     if not ok:
         raise HTTPException(status_code=500, detail="failed to encode template")
     return {"base64": base64.b64encode(buffer.tobytes()).decode("ascii")}
+
+
+@app.get("/templates/{project}/class-previews")
+def get_template_class_previews(project: str) -> Dict[str, Dict[str, Optional[str]]]:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    previews: Dict[str, Optional[str]] = {}
+    for class_name, class_templates in project_templates.items():
+        if not class_templates:
+            previews[class_name] = None
+            continue
+        first_tpl = sorted(class_templates, key=lambda t: t.template_name)[0]
+        img = first_tpl.image_gray
+        if img is None or getattr(img, "size", 0) == 0:
+            previews[class_name] = None
+            continue
+        ok, buffer = cv2.imencode(".png", img)
+        if not ok:
+            previews[class_name] = None
+            continue
+        previews[class_name] = base64.b64encode(buffer.tobytes()).decode("ascii")
+
+    return {"previews": previews}
 
 
 @app.get("/dataset/projects", response_model=List[DatasetInfo])
@@ -1527,6 +1570,10 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             k: v for k, v in project_templates.items() if k in set(payload.class_filter)
         }
         project_templates = filtered
+    project_templates = _cap_templates_per_class_random(
+        project_templates,
+        AUTO_MAX_TEMPLATES_PER_CLASS,
+    )
 
     image_path = None
     tmp_path = None

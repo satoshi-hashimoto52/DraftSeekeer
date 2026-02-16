@@ -83,6 +83,18 @@ export async function fetchTemplatePreview(project, className, templateName) {
     }
     return (await res.json());
 }
+export async function fetchTemplateClassPreviews(project) {
+    const res = await fetch(`${API_BASE}/templates/${encodeURIComponent(project)}/class-previews`);
+    if (res.status === 404) {
+        return {};
+    }
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Template class previews fetch failed");
+    }
+    const payload = (await res.json());
+    return payload.previews || {};
+}
 export async function clearProjectAnnotations(project_name) {
     const res = await fetch(`${API_BASE}/annotations/clear`, {
         method: "POST",

@@ -96,6 +96,7 @@ export default function NumericInputWithButtons({ value, onChange, min, max, ste
                     fontSize: 16,
                     lineHeight: 1,
                     transition: "background 120ms ease, box-shadow 120ms ease",
+                    touchAction: "manipulation",
                 }, className: buttonClassName, onMouseDown: (e) => {
                     if (disabled)
                         return;
@@ -111,7 +112,6 @@ export default function NumericInputWithButtons({ value, onChange, min, max, ste
                 }, onTouchStart: (e) => {
                     if (disabled)
                         return;
-                    e.preventDefault();
                     startHold(-1);
                 }, onTouchEnd: () => stopHold(), onTouchCancel: () => stopHold(), onKeyDown: (e) => {
                     if (disabled)
@@ -130,6 +130,7 @@ export default function NumericInputWithButtons({ value, onChange, min, max, ste
                     fontSize: 16,
                     lineHeight: 1,
                     transition: "background 120ms ease, box-shadow 120ms ease",
+                    touchAction: "manipulation",
                 }, className: buttonClassName, onMouseDown: (e) => {
                     if (disabled)
                         return;
@@ -145,7 +146,6 @@ export default function NumericInputWithButtons({ value, onChange, min, max, ste
                 }, onTouchStart: (e) => {
                     if (disabled)
                         return;
-                    e.preventDefault();
                     startHold(1);
                 }, onTouchEnd: () => stopHold(), onTouchCancel: () => stopHold(), onKeyDown: (e) => {
                     if (disabled)

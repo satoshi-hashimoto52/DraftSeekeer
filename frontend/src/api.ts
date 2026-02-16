@@ -261,6 +261,21 @@ export async function fetchTemplatePreview(
   return (await res.json()) as { base64: string | null };
 }
 
+export async function fetchTemplateClassPreviews(
+  project: string
+): Promise<Record<string, string | null>> {
+  const res = await fetch(`${API_BASE}/templates/${encodeURIComponent(project)}/class-previews`);
+  if (res.status === 404) {
+    return {};
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Template class previews fetch failed");
+  }
+  const payload = (await res.json()) as { previews?: Record<string, string | null> };
+  return payload.previews || {};
+}
+
 export async function clearProjectAnnotations(project_name: string): Promise<{ ok: boolean; deleted: number }> {
   const res = await fetch(`${API_BASE}/annotations/clear`, {
     method: "POST",

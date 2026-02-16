@@ -153,6 +153,7 @@ export default function NumericInputWithButtons({
           fontSize: 16,
           lineHeight: 1,
           transition: "background 120ms ease, box-shadow 120ms ease",
+          touchAction: "manipulation",
         }}
         className={buttonClassName}
         onMouseDown={(e) => {
@@ -171,7 +172,6 @@ export default function NumericInputWithButtons({
         }}
         onTouchStart={(e) => {
           if (disabled) return;
-          e.preventDefault();
           startHold(-1);
         }}
         onTouchEnd={() => stopHold()}
@@ -199,6 +199,7 @@ export default function NumericInputWithButtons({
           fontSize: 16,
           lineHeight: 1,
           transition: "background 120ms ease, box-shadow 120ms ease",
+          touchAction: "manipulation",
         }}
         className={buttonClassName}
         onMouseDown={(e) => {
@@ -217,7 +218,6 @@ export default function NumericInputWithButtons({
         }}
         onTouchStart={(e) => {
           if (disabled) return;
-          e.preventDefault();
           startHold(1);
         }}
         onTouchEnd={() => stopHold()}
