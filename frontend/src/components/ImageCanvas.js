@@ -191,7 +191,8 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * scale * panOffset.x, dpr * scale * panOffset.y);
             ctx.drawImage(img, 0, 0);
-            const isDragging = draggingRef.current;
+            // Keep labels visible while panning with Space/middle-drag.
+            const isDragging = draggingRef.current && !panDragRef.current.active;
             const baseLine = Math.max(0.35, Math.min(canvas.width, canvas.height) * 0.0007);
             const drawLabel = (x, y, text, color, alpha = 1) => {
                 ctx.save();
@@ -204,7 +205,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 const labelH = 16;
                 const bx = Math.max(0, x);
                 const by = Math.max(0, y - labelH - 2);
-                ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+                ctx.fillStyle = "rgba(20, 24, 32, 0.40)";
                 ctx.globalAlpha = alpha;
                 ctx.fillRect(bx, by, labelW, labelH);
                 ctx.strokeStyle = color;
@@ -225,7 +226,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 const labelH = Math.round(16 * scaleFactor);
                 const bx = Math.max(0, x);
                 const by = Math.max(0, y - labelH - 2);
-                ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+                ctx.fillStyle = "rgba(20, 24, 32, 0.40)";
                 ctx.globalAlpha = alpha;
                 ctx.fillRect(bx, by, labelW, labelH);
                 ctx.strokeStyle = color;

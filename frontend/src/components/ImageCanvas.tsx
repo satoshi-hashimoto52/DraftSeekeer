@@ -307,9 +307,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       );
       ctx.drawImage(img, 0, 0);
 
-      const isDragging = draggingRef.current;
+      // Keep labels visible while panning with Space/middle-drag.
+      const isDragging = draggingRef.current && !panDragRef.current.active;
       const baseLine = Math.max(0.35, Math.min(canvas.width, canvas.height) * 0.0007);
-      const drawLabel = (x: number, y: number, text: string, color: string, alpha = 1) => {
+      const drawLabel = (
+        x: number,
+        y: number,
+        text: string,
+        color: string,
+        alpha = 1,
+        bgFill = "rgba(20, 24, 32, 0.40)"
+      ) => {
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.font = "12px \"IBM Plex Sans\", system-ui, sans-serif";
@@ -320,7 +328,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const labelH = 16;
         const bx = Math.max(0, x);
         const by = Math.max(0, y - labelH - 2);
-        ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+        ctx.fillStyle = bgFill;
         ctx.globalAlpha = alpha;
         ctx.fillRect(bx, by, labelW, labelH);
         ctx.strokeStyle = color;
@@ -349,7 +357,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const labelH = Math.round(16 * scaleFactor);
         const bx = Math.max(0, x);
         const by = Math.max(0, y - labelH - 2);
-        ctx.fillStyle = "rgba(20, 24, 32, 0.72)";
+        ctx.fillStyle = "rgba(20, 24, 32, 0.40)";
         ctx.globalAlpha = alpha;
         ctx.fillRect(bx, by, labelW, labelH);
         ctx.strokeStyle = color;
@@ -471,7 +479,14 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         if (isSelected && classLabel) {
           const selectedLabel =
             typeof c.score === "number" ? `${classLabel} (${c.score.toFixed(3)})` : classLabel;
-          drawLabel(c.bbox.x, c.bbox.y, selectedLabel, color, isSelected ? 0.95 : 0.6);
+          drawLabel(
+            c.bbox.x,
+            c.bbox.y,
+            selectedLabel,
+            color,
+            isSelected ? 0.95 : 0.6,
+            "rgba(20, 24, 32, 0.40)"
+          );
         }
       });
       }
