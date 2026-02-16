@@ -36,8 +36,8 @@ import { clampToImage, simplifyPolygon } from "./utils/polygon";
 const DEFAULT_ROI_SIZE = 200;
 const DEFAULT_TOPK = 3;
 const DEFAULT_SCALE_MIN = 0.5;
-const DEFAULT_SCALE_MAX = 1.5;
-const DEFAULT_SCALE_STEPS = 12;
+const DEFAULT_SCALE_MAX = 1.7;
+const DEFAULT_SCALE_STEPS = 8;
 
 export default function App() {
   const headerScrollRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +67,7 @@ export default function App() {
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [showDebug, setShowDebug] = useState<boolean>(false);
   const [showClassColors, setShowClassColors] = useState<boolean>(true);
+  const [classCardFilter, setClassCardFilter] = useState<"all" | "enabled">("all");
   const [showCommonSettings, setShowCommonSettings] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
@@ -1328,6 +1329,12 @@ export default function App() {
         void handleClickPoint(point.x, point.y, { fromFollowup: true });
         return;
       }
+      if (key === "n" || key === "N") {
+        // Allow recovery even when selectedCandidate is temporarily null.
+        event.preventDefault();
+        handleNextCandidate();
+        return;
+      }
       if (!selectedCandidate) return;
       if (key === "Enter") {
         event.preventDefault();
@@ -1337,11 +1344,6 @@ export default function App() {
       if (key === "Backspace" || key === "Delete") {
         event.preventDefault();
         handleRejectCandidate();
-        return;
-      }
-      if (key === "n" || key === "N") {
-        event.preventDefault();
-        handleNextCandidate();
         return;
       }
       if (key === "s" || key === "S") {
@@ -3631,7 +3633,7 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              {Object.keys(colorMap).length > 0 && (
+              {classOptions.length > 0 && (
                 <div style={{ marginBottom: 4 }}>
                   <button
                     type="button"
@@ -3644,44 +3646,134 @@ export default function App() {
                   {showClassColors && (
                     <div
                       style={{
-                        display: "flex",
-                        flexWrap: "wrap",
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
                         gap: 8,
-                        maxHeight: 84,
+                        maxHeight: 380,
                         overflowY: "auto",
-                        padding: "4px 2px",
-                        borderRadius: 6,
+                        padding: 6,
+                        borderRadius: 8,
                         border: "1px solid #eceff1",
                         background: "#fcfcfc",
                       }}
                     >
+                      <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btnGhost"
+                          style={{ height: 24, padding: "0 10px", fontSize: 10 }}
+                          onClick={() => {
+                            const allEnabled =
+                              classOptions.length > 0 &&
+                              classOptions.every((name) => autoClassFilter.includes(name));
+                            setAutoClassFilter(allEnabled ? [] : [...classOptions]);
+                          }}
+                        >
+                          全検出 {classOptions.length > 0 && classOptions.every((name) => autoClassFilter.includes(name)) ? "OFF" : "ON"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btnGhost"
+                          style={{
+                            height: 24,
+                            padding: "0 10px",
+                            fontSize: 10,
+                            borderColor: classCardFilter === "enabled" ? "var(--primary)" : "var(--border)",
+                            color: classCardFilter === "enabled" ? "var(--primary)" : "inherit",
+                          }}
+                          onClick={() =>
+                            setClassCardFilter((prev) => (prev === "all" ? "enabled" : "all"))
+                          }
+                        >
+                          表示 {classCardFilter === "all" ? "全件" : "検出のみ"}
+                        </button>
+                      </div>
                       {asChildren(
-                        Object.entries(colorMap).map(([name, color], idx) => {
-                          const hexColor = normalizeToHex(color);
+                        classOptions
+                          .filter((name) =>
+                            classCardFilter === "all" ? true : autoClassFilter.includes(name)
+                          )
+                          .map((name, idx) => {
+                          const currentColor = colorMap[name] || "#4f6bed";
+                          const hexColor = normalizeToHex(currentColor);
+                          const enabled = autoClassFilter.includes(name);
+                          const preview = templateClassPreviews[name];
                           return (
-                            <label
-                              key={`${name}-${idx}`}
+                            <button
+                              type="button"
+                              key={`class-card-${name}-${idx}`}
+                              onClick={() => {
+                                if (enabled) {
+                                  setAutoClassFilter((prev) => prev.filter((c) => c !== name));
+                                } else {
+                                  setAutoClassFilter((prev) => [...prev, name]);
+                                }
+                              }}
                               style={{
-                                display: "inline-flex",
+                                display: "grid",
+                                gridTemplateColumns: "42px 1fr auto",
                                 alignItems: "center",
                                 gap: 8,
-                                padding: "4px 6px",
-                                border: "1px solid #e3e3e3",
-                                borderRadius: 999,
-                                background: "#fff",
+                                minHeight: 58,
+                                padding: "8px 10px",
+                                border: enabled ? "1px solid #1a73e8" : "1px solid #e3e3e3",
+                                borderRadius: 8,
+                                background: enabled ? "#eef6ff" : "#fff",
                                 fontSize: 11,
+                                cursor: "pointer",
+                                textAlign: "left",
                               }}
                             >
+                              <div
+                                style={{
+                                  width: 48,
+                                  height: 48,
+                                  borderRadius: 6,
+                                  overflow: "hidden",
+                                  border: "1px solid #e6e6e6",
+                                  background: "#f4f4f4",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                {preview ? (
+                                  <img
+                                    src={`data:image/png;base64,${preview}`}
+                                    alt={name}
+                                    style={{ width: "100%", height: "100%", objectFit: "contain", background: "#fff" }}
+                                  />
+                                ) : (
+                                  <span style={{ fontSize: 9, color: "#777" }}>No Img</span>
+                                )}
+                              </div>
+                              <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    color: "#0b1f3a",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {name}
+                                </span>
+                                <span style={{ fontSize: 10, color: enabled ? "#1a73e8" : "#666" }}>
+                                  {enabled ? "検出ON" : "検出OFF"}
+                                </span>
+                              </div>
                               <input
                                 type="color"
                                 value={hexColor}
+                                onClick={(e) => e.stopPropagation()}
                                 onChange={(e) =>
                                   setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
                                 }
-                                style={{ width: 20, height: 20, padding: 0, border: "none" }}
+                                style={{ width: 24, height: 24, padding: 0, border: "none", cursor: "pointer" }}
+                                title={`${name} の色`}
                               />
-                              <span>{name}</span>
-                            </label>
+                            </button>
                           );
                         })
                       )}
@@ -4175,118 +4267,8 @@ export default function App() {
                         {autoThresholdDanger && <span className="badge badgeDanger">Danger</span>}
                       </div>
                     </div>
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>対象クラス</div>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            type="button"
-                            className="btn btnGhost"
-                            style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                            onClick={() => setAutoClassFilter([...classOptions])}
-                          >
-                            全選択
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btnGhost"
-                            style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                            onClick={() => setAutoClassFilter([])}
-                          >
-                            解除
-                          </button>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
-                        カードをクリックして対象クラスを選択します。
-                      </div>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-                          gap: 8,
-                          marginTop: 8,
-                          maxHeight: 190,
-                          overflowY: "auto",
-                          padding: 4,
-                          borderRadius: 8,
-                          border: "1px solid #eceff1",
-                          background: "#fcfcfc",
-                        }}
-                      >
-                        {classOptions.length === 0 && (
-                          <span style={{ fontSize: 12, color: "#888" }}>クラス未設定</span>
-                        )}
-                        {asChildren(
-                          classOptions.map((name, idx) => {
-                            const checked = autoClassFilter.includes(name);
-                            const preview = templateClassPreviews[name];
-                            return (
-                              <button
-                                key={`auto-class-card-${name}-${idx}`}
-                                type="button"
-                                onClick={() => {
-                                  if (checked) {
-                                    setAutoClassFilter((prev) => prev.filter((c) => c !== name));
-                                  } else {
-                                    setAutoClassFilter((prev) => [...prev, name]);
-                                  }
-                                }}
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: "42px 1fr",
-                                  gap: 8,
-                                  alignItems: "center",
-                                  borderRadius: 8,
-                                  border: checked ? "1px solid #1a73e8" : "1px solid #d9e2ec",
-                                  background: checked ? "#eef6ff" : "#fff",
-                                  padding: 6,
-                                  cursor: "pointer",
-                                  textAlign: "left",
-                                }}
-                                title={name}
-                              >
-                                <div
-                                  style={{
-                                    width: 42,
-                                    height: 42,
-                                    borderRadius: 6,
-                                    overflow: "hidden",
-                                    border: "1px solid #e6e6e6",
-                                    background: "#f4f4f4",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                  }}
-                                >
-                                  {preview ? (
-                                    <img
-                                      src={`data:image/png;base64,${preview}`}
-                                      alt={name}
-                                      style={{
-                                        width: "100%",
-                                        height: "100%",
-                                        objectFit: "contain",
-                                        background: "#fff",
-                                      }}
-                                    />
-                                  ) : (
-                                    <span style={{ fontSize: 9, color: "#777" }}>No Img</span>
-                                  )}
-                                </div>
-                                <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: "#0b1f3a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {name}
-                                  </span>
-                                  <span style={{ fontSize: 10, color: checked ? "#1a73e8" : "#666" }}>
-                                    {checked ? "対象" : "対象外"}
-                                  </span>
-                                </div>
-                              </button>
-                            );
-                          })
-                        )}
-                      </div>
+                    <div style={{ fontSize: 11, color: "#607d8b" }}>
+                      対象クラスは「検出 共通設定 ＞ クラス別カラー」で設定します。
                     </div>
                     <button
                       type="button"
@@ -4389,25 +4371,6 @@ export default function App() {
                       >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                           <div style={{ fontSize: 12, fontWeight: 600 }} />
-                          {autoDirty && autoBaseline && (
-                            <button
-                              type="button"
-                              className="btn btnGhost"
-                              style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                              onClick={() => {
-                                setAutoThreshold(autoBaseline.autoThreshold);
-                                setAutoMethod(autoBaseline.autoMethod);
-                                setAutoClassFilter(autoBaseline.autoClassFilter);
-                                setAutoStride(autoBaseline.autoStride);
-                                setScaleMin(autoBaseline.scaleMin);
-                                setScaleMax(autoBaseline.scaleMax);
-                                setScaleSteps(autoBaseline.scaleSteps);
-                                setRoiSize(autoBaseline.roiSize);
-                              }}
-                            >
-                              Reset
-                            </button>
-                          )}
                         </div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
                         <div style={{ display: "grid", gap: 6 }}>
@@ -4606,6 +4569,27 @@ export default function App() {
                             {roiDanger && <span className="badge badgeDanger">Danger</span>}
                           </div>
                         </div>
+                        {autoDirty && autoBaseline && (
+                          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                            <button
+                              type="button"
+                              className="btn btnDanger"
+                              style={{ height: 26, padding: "0 10px", fontSize: 10 }}
+                              onClick={() => {
+                                setAutoThreshold(autoBaseline.autoThreshold);
+                                setAutoMethod(autoBaseline.autoMethod);
+                                setAutoClassFilter(autoBaseline.autoClassFilter);
+                                setAutoStride(autoBaseline.autoStride);
+                                setScaleMin(autoBaseline.scaleMin);
+                                setScaleMax(autoBaseline.scaleMax);
+                                setScaleSteps(autoBaseline.scaleSteps);
+                                setRoiSize(autoBaseline.roiSize);
+                              }}
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
