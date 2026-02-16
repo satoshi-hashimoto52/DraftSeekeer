@@ -358,6 +358,24 @@ export default function App() {
     });
   }, [filteredAnnotations]);
 
+  const classAnnotationStats = useMemo(() => {
+    const stats: Record<string, { count: number; minScore: number | null; maxScore: number | null }> = {};
+    for (const ann of annotations) {
+      const key = ann.class_name;
+      if (!stats[key]) {
+        stats[key] = { count: 0, minScore: null, maxScore: null };
+      }
+      stats[key].count += 1;
+      if (typeof ann.score === "number" && Number.isFinite(ann.score)) {
+        stats[key].minScore =
+          stats[key].minScore === null ? ann.score : Math.min(stats[key].minScore, ann.score);
+        stats[key].maxScore =
+          stats[key].maxScore === null ? ann.score : Math.max(stats[key].maxScore, ann.score);
+      }
+    }
+    return stats;
+  }, [annotations]);
+
   useEffect(() => {
     if (checkedAnnotationIds.length === 0) return;
     const currentIds = new Set(annotations.map((a) => a.id));
@@ -3698,36 +3716,47 @@ export default function App() {
                           const hexColor = normalizeToHex(currentColor);
                           const enabled = autoClassFilter.includes(name);
                           const preview = templateClassPreviews[name];
+                          const stat = classAnnotationStats[name] || { count: 0, minScore: null, maxScore: null };
+                          const confidenceLabel =
+                            stat.minScore === null || stat.maxScore === null
+                              ? "-"
+                              : `${stat.minScore.toFixed(3)} ~ ${stat.maxScore.toFixed(3)}`;
                           return (
-                            <button
-                              type="button"
+                            <div
                               key={`class-card-${name}-${idx}`}
-                              onClick={() => {
-                                if (enabled) {
-                                  setAutoClassFilter((prev) => prev.filter((c) => c !== name));
-                                } else {
-                                  setAutoClassFilter((prev) => [...prev, name]);
-                                }
-                              }}
                               style={{
                                 display: "grid",
-                                gridTemplateColumns: "42px 1fr auto",
+                                gridTemplateColumns: "18px 56px 1fr auto",
                                 alignItems: "center",
                                 gap: 8,
-                                minHeight: 58,
+                                minHeight: 72,
                                 padding: "8px 10px",
                                 border: enabled ? "1px solid #1a73e8" : "1px solid #e3e3e3",
                                 borderRadius: 8,
                                 background: enabled ? "#eef6ff" : "#fff",
                                 fontSize: 11,
-                                cursor: "pointer",
                                 textAlign: "left",
                               }}
                             >
+                              <input
+                                type="checkbox"
+                                checked={enabled}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  if (checked) {
+                                    setAutoClassFilter((prev) =>
+                                      prev.includes(name) ? prev : [...prev, name]
+                                    );
+                                  } else {
+                                    setAutoClassFilter((prev) => prev.filter((c) => c !== name));
+                                  }
+                                }}
+                                aria-label={`${name} を検出対象にする`}
+                              />
                               <div
                                 style={{
-                                  width: 48,
-                                  height: 48,
+                                  width: 56,
+                                  height: 56,
                                   borderRadius: 6,
                                   overflow: "hidden",
                                   border: "1px solid #e6e6e6",
@@ -3748,32 +3777,51 @@ export default function App() {
                                 )}
                               </div>
                               <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
-                                <span
+                                <div
                                   style={{
-                                    fontWeight: 600,
-                                    color: "#0b1f3a",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
+                                    display: "flex",
+                                    alignItems: "baseline",
+                                    gap: 8,
+                                    minWidth: 0,
                                   }}
                                 >
-                                  {name}
-                                </span>
-                                <span style={{ fontSize: 10, color: enabled ? "#1a73e8" : "#666" }}>
-                                  {enabled ? "検出ON" : "検出OFF"}
+                                  <span
+                                    style={{
+                                      fontSize: 13,
+                                      fontWeight: 700,
+                                      color: "#0b1f3a",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {name}
+                                  </span>
+                                  <span
+                                    style={{
+                                      fontSize: 12,
+                                      fontWeight: 600,
+                                      color: enabled ? "#1a73e8" : "#666",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    {enabled ? "検出ON" : "検出OFF"}
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: 12, color: "#607d8b" }}>
+                                  確定: {stat.count}, 確信度: {confidenceLabel}
                                 </span>
                               </div>
                               <input
                                 type="color"
                                 value={hexColor}
-                                onClick={(e) => e.stopPropagation()}
                                 onChange={(e) =>
                                   setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
                                 }
                                 style={{ width: 24, height: 24, padding: 0, border: "none", cursor: "pointer" }}
                                 title={`${name} の色`}
                               />
-                            </button>
+                            </div>
                           );
                         })
                       )}
