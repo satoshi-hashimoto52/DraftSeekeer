@@ -194,7 +194,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
             // Keep labels visible while panning with Space/middle-drag.
             const isDragging = draggingRef.current && !panDragRef.current.active;
             const baseLine = Math.max(0.35, Math.min(canvas.width, canvas.height) * 0.0007);
-            const drawLabel = (x, y, text, color, alpha = 1) => {
+            const drawLabel = (x, y, text, color, alpha = 1, bgFill = "rgba(20, 24, 32, 0.40)") => {
                 ctx.save();
                 ctx.globalAlpha = alpha;
                 ctx.font = "12px \"IBM Plex Sans\", system-ui, sans-serif";
@@ -205,7 +205,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                 const labelH = 16;
                 const bx = Math.max(0, x);
                 const by = Math.max(0, y - labelH - 2);
-                ctx.fillStyle = "rgba(20, 24, 32, 0.40)";
+                ctx.fillStyle = bgFill;
                 ctx.globalAlpha = alpha;
                 ctx.fillRect(bx, by, labelW, labelH);
                 ctx.strokeStyle = color;
@@ -305,7 +305,7 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
                     const classLabel = c.class_name || (isManual ? "manual" : "");
                     if (isSelected && classLabel) {
                         const selectedLabel = typeof c.score === "number" ? `${classLabel} (${c.score.toFixed(3)})` : classLabel;
-                        drawLabel(c.bbox.x, c.bbox.y, selectedLabel, color, isSelected ? 0.95 : 0.6);
+                        drawLabel(c.bbox.x, c.bbox.y, selectedLabel, color, isSelected ? 0.95 : 0.6, "rgba(20, 24, 32, 0.40)");
                     }
                 });
             }
@@ -1095,12 +1095,24 @@ export default forwardRef(function ImageCanvas({ imageUrl, candidates, selectedC
             canvas.removeEventListener("wheel", handleWheel);
         };
     }, [imageUrl, setPanOffset, setScale]);
-    return (_jsxs("div", { style: { width: "100%" }, children: [_jsx("canvas", { ref: canvasRef, onMouseDown: imageUrl ? handleMouseDown : undefined, onMouseDownCapture: imageUrl ? handleMouseDownCapture : undefined, onMouseMove: imageUrl ? handleMouseMove : undefined, onMouseUp: imageUrl ? handleMouseUp : undefined, onDoubleClick: imageUrl ? handleDoubleClick : undefined, onMouseLeave: (event) => {
+    return (_jsxs("div", { style: {
+            width: "100%",
+            height: "100%",
+            minHeight: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+        }, children: [_jsx("canvas", { ref: canvasRef, onMouseDown: imageUrl ? handleMouseDown : undefined, onMouseDownCapture: imageUrl ? handleMouseDownCapture : undefined, onMouseMove: imageUrl ? handleMouseMove : undefined, onMouseUp: imageUrl ? handleMouseUp : undefined, onDoubleClick: imageUrl ? handleDoubleClick : undefined, onMouseLeave: (event) => {
                     if (imageUrl)
                         handleMouseUp();
                     setCursorStyle(imageUrl ? "crosshair" : "default");
                 }, style: {
-                    width: "100%",
+                    width: "auto",
+                    height: "auto",
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    display: "block",
                     border: "1px solid #ddd",
                     background: "#fafafa",
                     cursor: cursorStyle,

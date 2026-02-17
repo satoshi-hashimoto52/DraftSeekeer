@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import React, { useCallback, useEffect, useRef } from "react";
+import React from "react";
 const clamp = (value, min, max) => {
     let next = value;
     if (typeof min === "number")
@@ -9,13 +9,13 @@ const clamp = (value, min, max) => {
     return next;
 };
 export default function NumericInputWithButtons({ value, onChange, min, max, step = 1, disabled, ariaLabel, inputWidth = 72, minWidth = 0, height = 32, placeholder, className, inputClassName, buttonClassName, }) {
-    const holdTimerRef = useRef(null);
-    const holdIntervalRef = useRef(null);
-    const valueRef = useRef(value);
-    useEffect(() => {
+    const holdTimerRef = React.useRef(null);
+    const holdIntervalRef = React.useRef(null);
+    const valueRef = React.useRef(value);
+    React.useEffect(() => {
         valueRef.current = value;
     }, [value]);
-    const stopHold = useCallback(() => {
+    const stopHold = React.useCallback(() => {
         if (holdTimerRef.current !== null) {
             window.clearTimeout(holdTimerRef.current);
             holdTimerRef.current = null;
@@ -72,7 +72,7 @@ export default function NumericInputWithButtons({ value, onChange, min, max, ste
             }, 70);
         }, 320);
     };
-    useEffect(() => {
+    React.useEffect(() => {
         return () => stopHold();
     }, [stopHold]);
     return (_jsxs("div", { className: className, style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }, children: [_jsx("input", { type: "number", value: value, min: min, max: max, step: step, disabled: disabled, "aria-label": ariaLabel, placeholder: placeholder, onChange: handleInputChange, onBlur: handleBlur, onWheel: (e) => e.currentTarget.blur(), style: {

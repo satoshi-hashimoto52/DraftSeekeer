@@ -264,3 +264,32 @@ export async function deleteDatasetProject(project_name) {
     }
     return (await res.json());
 }
+export async function shutdownApp() {
+    const parsedPort = Number.parseInt(window.location.port || "", 10);
+    const hasPort = Number.isFinite(parsedPort) && parsedPort > 0;
+    const requestBody = hasPort ? JSON.stringify({ frontend_port: parsedPort }) : undefined;
+    const fetchShutdown = async (url) => {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 1200);
+        try {
+            return await fetch(url, {
+                method: "POST",
+                signal: controller.signal,
+                headers: requestBody ? { "Content-Type": "application/json" } : undefined,
+                body: requestBody,
+            });
+        }
+        finally {
+            window.clearTimeout(timer);
+        }
+    };
+    let res = await fetchShutdown(`${API_BASE}/app/shutdown`);
+    if (res.status === 404) {
+        res = await fetchShutdown(`${API_BASE}/shutdown`);
+    }
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Shutdown failed");
+    }
+    return (await res.json());
+}

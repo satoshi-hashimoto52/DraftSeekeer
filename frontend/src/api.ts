@@ -531,3 +531,34 @@ export async function deleteDatasetProject(project_name: string): Promise<{ ok: 
   }
   return (await res.json()) as { ok: boolean };
 }
+
+export async function shutdownApp(): Promise<{ ok: boolean }> {
+  const parsedPort = Number.parseInt(window.location.port || "", 10);
+  const hasPort = Number.isFinite(parsedPort) && parsedPort > 0;
+  const requestBody = hasPort ? JSON.stringify({ frontend_port: parsedPort }) : undefined;
+
+  const fetchShutdown = async (url: string): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1200);
+    try {
+      return await fetch(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: requestBody ? { "Content-Type": "application/json" } : undefined,
+        body: requestBody,
+      });
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
+
+  let res = await fetchShutdown(`${API_BASE}/app/shutdown`);
+  if (res.status === 404) {
+    res = await fetchShutdown(`${API_BASE}/shutdown`);
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Shutdown failed");
+  }
+  return (await res.json()) as { ok: boolean };
+}

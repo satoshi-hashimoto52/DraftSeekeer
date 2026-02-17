@@ -29,6 +29,7 @@ import {
   createDatasetProject,
   deleteDatasetProject,
   autoAnnotate,
+  shutdownApp,
 } from "./api";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
 import NumericInputWithButtons from "./components/NumericInputWithButtons";
@@ -1038,6 +1039,54 @@ export default function App() {
       await refreshProjectList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project delete failed");
+    }
+  };
+
+  const handleShutdownApp = async () => {
+    if (!window.confirm("アプリを終了しますか？\n(バックエンドも停止します)")) return;
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    const closeFrontend = () => {
+      // Hide current UI immediately to avoid looking "alive" while closing.
+      try {
+        document.documentElement.style.opacity = "0";
+      } catch {
+        // ignore
+      }
+      // Try to close tab first (works in limited browser contexts).
+      try {
+        window.open("", "_self");
+        window.close();
+      } catch {
+        // ignore
+      }
+      // Ensure frontend UI is terminated even when window.close is blocked.
+      window.setTimeout(() => {
+        try {
+          window.location.replace("about:blank");
+        } catch {
+          // Last resort: clear current document.
+          try {
+            document.body.innerHTML = "";
+            document.documentElement.style.background = "#fff";
+          } catch {
+            // ignore
+          }
+        }
+      }, 20);
+    };
+    try {
+      await shutdownApp();
+      setNotice("終了処理を開始しました。");
+    } catch (err) {
+      // Even if backend shutdown fails, frontend should still terminate.
+      setError(err instanceof Error ? err.message : "Shutdown failed");
+    } finally {
+      closeFrontend();
+      window.setTimeout(() => {
+        setBusy(false);
+      }, 0);
     }
   };
 
@@ -2590,6 +2639,16 @@ export default function App() {
                   </div>
                 )}
               </div>
+            )}
+            {viewState.view === "home" && (
+              <button
+                type="button"
+                onClick={handleShutdownApp}
+                className="btn btnDanger"
+                style={{ height: 32, padding: "0 12px", fontSize: 12 }}
+              >
+                アプリ終了
+              </button>
             )}
           </div>
         </div>

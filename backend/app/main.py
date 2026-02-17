@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+import os
+import signal
+import threading
+import time
+import subprocess
 
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -1869,6 +1874,75 @@ def download_yolo(path: str) -> FileResponse:
     if not target.exists():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(str(target), media_type="text/plain", filename=target.name)
+
+
+def _terminate_port_listener(port: int) -> None:
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return
+
+    pids: List[int] = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid = int(line)
+        except ValueError:
+            continue
+        if pid != os.getpid():
+            pids.append(pid)
+
+    if not pids:
+        return
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+
+    time.sleep(0.25)
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except Exception:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            continue
+
+
+@app.post("/app/shutdown")
+@app.post("/shutdown")
+def shutdown_app(payload: Optional[Dict[str, int]] = None) -> Dict[str, bool]:
+    frontend_port: Optional[int] = None
+    if payload is not None:
+        candidate = payload.get("frontend_port")
+        if isinstance(candidate, int) and 1 <= candidate <= 65535:
+            frontend_port = candidate
+    if frontend_port is None:
+        frontend_port = 5173
+
+    # Return response first, then terminate server process.
+    def _shutdown_later() -> None:
+        time.sleep(0.2)
+        _terminate_port_listener(frontend_port)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=_shutdown_later, daemon=True).start()
+    return {"ok": True}
 
 
 if __name__ == "__main__":
