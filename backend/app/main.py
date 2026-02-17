@@ -482,6 +482,32 @@ def get_template_class_previews(project: str) -> Dict[str, Dict[str, Optional[st
     return {"previews": previews}
 
 
+@app.get("/templates/{project}/{class_name}/items")
+def get_template_class_items(project: str, class_name: str) -> Dict[str, List[str]]:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    class_templates = project_templates.get(class_name)
+    if class_templates is None:
+        raise HTTPException(status_code=404, detail="class not found")
+    names = sorted([t.template_name for t in class_templates])
+    return {"items": names}
+
+
+@app.get("/templates/{project}/{class_name}/{template_name}/image")
+def get_template_image(project: str, class_name: str, template_name: str) -> FileResponse:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    class_templates = project_templates.get(class_name)
+    if class_templates is None:
+        raise HTTPException(status_code=404, detail="class not found")
+    tpl = next((t for t in class_templates if t.template_name == template_name), None)
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    return FileResponse(str(tpl.path), filename=tpl.template_name)
+
+
 @app.get("/dataset/projects", response_model=List[DatasetInfo])
 def list_dataset_projects() -> List[DatasetInfo]:
     DATASETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1123,6 +1149,14 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
     project_templates = templates_cache.get(payload.project)
     if project_templates is None:
         raise HTTPException(status_code=400, detail="invalid project")
+    if payload.class_filter is not None:
+        project_templates = {
+            k: v for k, v in project_templates.items() if k in set(payload.class_filter)
+        }
+    project_templates = _cap_templates_per_class_random(
+        project_templates,
+        AUTO_MAX_TEMPLATES_PER_CLASS,
+    )
 
     matches = match_templates(
         image_bgr=image,
@@ -1565,7 +1599,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
     if project_templates is None:
         raise HTTPException(status_code=400, detail="invalid project")
 
-    if payload.class_filter:
+    if payload.class_filter is not None:
         filtered = {
             k: v for k, v in project_templates.items() if k in set(payload.class_filter)
         }

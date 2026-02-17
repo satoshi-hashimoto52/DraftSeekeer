@@ -95,6 +95,18 @@ export async function fetchTemplateClassPreviews(project) {
     const payload = (await res.json());
     return payload.previews || {};
 }
+export async function fetchTemplateClassItems(project, className) {
+    const res = await fetch(`${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(className)}/items`);
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Template class items fetch failed");
+    }
+    const payload = (await res.json());
+    return Array.isArray(payload.items) ? payload.items : [];
+}
+export function buildTemplateImageUrl(project, className, templateName) {
+    return `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(className)}/${encodeURIComponent(templateName)}/image`;
+}
 export async function clearProjectAnnotations(project_name) {
     const res = await fetch(`${API_BASE}/annotations/clear`, {
         method: "POST",

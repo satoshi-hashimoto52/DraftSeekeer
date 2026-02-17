@@ -12,6 +12,8 @@ import {
   fetchTemplates,
   fetchTemplatePreview,
   fetchTemplateClassPreviews,
+  fetchTemplateClassItems,
+  buildTemplateImageUrl,
   clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
@@ -214,6 +216,10 @@ export default function App() {
   } | null>(null);
   const [templatePreviewBase64, setTemplatePreviewBase64] = useState<string | null>(null);
   const [templateClassPreviews, setTemplateClassPreviews] = useState<Record<string, string | null>>({});
+  const [templateGalleryOpen, setTemplateGalleryOpen] = useState<boolean>(false);
+  const [templateGalleryClassName, setTemplateGalleryClassName] = useState<string>("");
+  const [templateGalleryItems, setTemplateGalleryItems] = useState<string[]>([]);
+  const [templateGalleryLoading, setTemplateGalleryLoading] = useState<boolean>(false);
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
   const didAutoRestoreRef = useRef(false);
   type AppViewState =
@@ -1174,6 +1180,7 @@ export default function App() {
         scale_min: scaleMin,
         scale_max: scaleMax,
         scale_steps: scaleSteps,
+        class_filter: autoClassFilter,
         topk,
         confirmed_boxes: annotations.map((a) => ({
           x: a.bbox.x,
@@ -1661,7 +1668,7 @@ export default function App() {
         threshold: clipped,
         method: autoMethod,
         roi_size: roiSize,
-        class_filter: autoClassFilter.length > 0 ? autoClassFilter : undefined,
+        class_filter: autoClassFilter,
         scale_min: scaleMin,
         scale_max: scaleMax,
         scale_steps: scaleSteps,
@@ -1864,6 +1871,23 @@ export default function App() {
       cancelled = true;
     };
   }, [project, classOptions]);
+
+  const openTemplateGallery = async (className: string) => {
+    if (!project) return;
+    setTemplateGalleryOpen(true);
+    setTemplateGalleryClassName(className);
+    setTemplateGalleryItems([]);
+    setTemplateGalleryLoading(true);
+    try {
+      const items = await fetchTemplateClassItems(project, className);
+      setTemplateGalleryItems(items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Template list fetch failed");
+      setTemplateGalleryOpen(false);
+    } finally {
+      setTemplateGalleryLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedAnnotationId) return;
@@ -2963,6 +2987,135 @@ export default function App() {
         </div>
       )}
 
+      {templateGalleryOpen && (
+        <>
+          <div
+            onClick={() => setTemplateGalleryOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(18, 28, 45, 0.28)",
+              backdropFilter: "blur(8px)",
+              zIndex: 70,
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: "8vh",
+              left: "6vw",
+              width: "88vw",
+              height: "84vh",
+              borderRadius: 16,
+              border: "1px solid rgba(255,255,255,0.45)",
+              background: "rgba(255,255,255,0.22)",
+              boxShadow: "0 18px 48px rgba(9, 18, 34, 0.30)",
+              backdropFilter: "blur(14px) saturate(120%)",
+              zIndex: 80,
+              display: "grid",
+              gridTemplateRows: "auto 1fr",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 14px",
+                borderBottom: "1px solid rgba(255,255,255,0.35)",
+                background: "rgba(255,255,255,0.18)",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#f8fbff", textShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
+                テンプレート一覧: {templateGalleryClassName}
+              </div>
+              <button
+                type="button"
+                onClick={() => setTemplateGalleryOpen(false)}
+                className="btn btnGhost"
+                style={{
+                  height: 30,
+                  padding: "0 10px",
+                  color: "#f8fbff",
+                  borderColor: "rgba(255,255,255,0.5)",
+                  background: "rgba(255,255,255,0.12)",
+                }}
+              >
+                閉じる
+              </button>
+            </div>
+            <div style={{ padding: 14, overflowY: "auto" }}>
+              {templateGalleryLoading ? (
+                <div style={{ color: "#f8fbff", fontSize: 13 }}>読み込み中...</div>
+              ) : (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                    gap: 10,
+                  }}
+                >
+                  {templateGalleryItems.map((templateName, idx) => (
+                    <div
+                      key={`${templateName}-${idx}`}
+                      style={{
+                        borderRadius: 12,
+                        border: "1px solid rgba(255,255,255,0.42)",
+                        background: "rgba(255,255,255,0.16)",
+                        backdropFilter: "blur(8px)",
+                        padding: 8,
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          borderRadius: 8,
+                          overflow: "hidden",
+                          border: "1px solid rgba(255,255,255,0.5)",
+                          background: "rgba(255,255,255,0.14)",
+                        }}
+                      >
+                        <img
+                          src={buildTemplateImageUrl(project, templateGalleryClassName, templateName)}
+                          alt={templateName}
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            opacity: 0.82,
+                            filter: "contrast(1.05)",
+                          }}
+                        />
+                      </div>
+                      <div
+                        title={templateName}
+                        style={{
+                          fontSize: 11,
+                          color: "#f8fbff",
+                          textShadow: "0 1px 2px rgba(0,0,0,0.35)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {templateName}
+                      </div>
+                    </div>
+                  ))}
+                  {!templateGalleryLoading && templateGalleryItems.length === 0 && (
+                    <div style={{ color: "#f8fbff", fontSize: 12 }}>テンプレートがありません。</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {datasetId ? (
         <div
           style={{
@@ -3753,7 +3906,9 @@ export default function App() {
                                 }}
                                 aria-label={`${name} を検出対象にする`}
                               />
-                              <div
+                              <button
+                                type="button"
+                                onClick={() => void openTemplateGallery(name)}
                                 style={{
                                   width: 56,
                                   height: 56,
@@ -3764,7 +3919,10 @@ export default function App() {
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
+                                  cursor: "pointer",
+                                  padding: 0,
                                 }}
+                                title={`${name} のテンプレート一覧を表示`}
                               >
                                 {preview ? (
                                   <img
@@ -3775,7 +3933,7 @@ export default function App() {
                                 ) : (
                                   <span style={{ fontSize: 9, color: "#777" }}>No Img</span>
                                 )}
-                              </div>
+                              </button>
                               <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
                                 <div
                                   style={{

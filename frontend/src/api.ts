@@ -276,6 +276,31 @@ export async function fetchTemplateClassPreviews(
   return payload.previews || {};
 }
 
+export async function fetchTemplateClassItems(
+  project: string,
+  className: string
+): Promise<string[]> {
+  const res = await fetch(
+    `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(className)}/items`
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Template class items fetch failed");
+  }
+  const payload = (await res.json()) as { items?: string[] };
+  return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export function buildTemplateImageUrl(
+  project: string,
+  className: string,
+  templateName: string
+): string {
+  return `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(
+    className
+  )}/${encodeURIComponent(templateName)}/image`;
+}
+
 export async function clearProjectAnnotations(project_name: string): Promise<{ ok: boolean; deleted: number }> {
   const res = await fetch(`${API_BASE}/annotations/clear`, {
     method: "POST",
@@ -298,6 +323,7 @@ export async function detectPoint(params: {
   scale_min: number;
   scale_max: number;
   scale_steps: number;
+  class_filter?: string[];
   score_threshold?: number;
   iou_threshold?: number;
   topk: number;

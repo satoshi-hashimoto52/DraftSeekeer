@@ -34,6 +34,7 @@ class DetectPointRequest(BaseModel):
     score_threshold: float = Field(-1.0, ge=-1.0, le=1.0)
     iou_threshold: float = Field(0.4, ge=0, le=1)
     topk: int = Field(3, gt=0)
+    class_filter: Optional[List[str]] = None
     template_off: bool = False
     confirmed_boxes: List[BBox] = Field(default_factory=list)
     exclude_same_class_only: bool = False
