@@ -4717,111 +4717,6 @@ export default function App() {
                   </div>
                   <div
                     role="button"
-                    aria-pressed={showCandidates}
-                    onClick={() => setShowCandidates((prev) => !prev)}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto auto",
-                      alignItems: "center",
-                      gap: 10,
-                      height: 28,
-                      cursor: "pointer",
-                      marginBottom: 2,
-                    }}
-                  >
-                    <span style={{ fontSize: 12, color: "#455a64" }}>未確定候補を表示</span>
-                    <span
-                      style={{
-                        width: 34,
-                        height: 18,
-                        borderRadius: 999,
-                        background: showCandidates ? "#1a73e8" : "#cfd8dc",
-                        position: "relative",
-                        transition: "background 120ms ease",
-                        display: "inline-block",
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: "50%",
-                          background: "#fff",
-                          position: "absolute",
-                          top: 2,
-                          left: showCandidates ? 18 : 2,
-                          transition: "left 120ms ease",
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                        }}
-                      />
-                    </span>
-                    <span
-                      style={{
-                        width: 28,
-                        textAlign: "right",
-                        fontSize: 11,
-                        color: showCandidates ? "#455a64" : "#90a4ae",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {showCandidates ? "ON" : "OFF"}
-                    </span>
-                  </div>
-                  <div
-                    role="button"
-                    aria-pressed={showAnnotations}
-                    onClick={() => setShowAnnotations((prev) => !prev)}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto auto",
-                      alignItems: "center",
-                      gap: 10,
-                      height: 28,
-                      cursor: "pointer",
-                      marginBottom: 6,
-                    }}
-                  >
-                    <span style={{ fontSize: 12, color: "#455a64" }}>確定アノテーションを表示</span>
-                    <span
-                      style={{
-                        width: 34,
-                        height: 18,
-                        borderRadius: 999,
-                        background: showAnnotations ? "#2e7d32" : "#cfd8dc",
-                        position: "relative",
-                        transition: "background 120ms ease",
-                        display: "inline-block",
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: "50%",
-                          background: "#fff",
-                          position: "absolute",
-                          top: 2,
-                          left: showAnnotations ? 18 : 2,
-                          transition: "left 120ms ease",
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                        }}
-                      />
-                    </span>
-                    <span
-                      style={{
-                        width: 28,
-                        textAlign: "right",
-                        fontSize: 11,
-                        color: showAnnotations ? "#455a64" : "#90a4ae",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {showAnnotations ? "ON" : "OFF"}
-                    </span>
-                  </div>
-                  <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
-                  <div
-                    role="button"
                     aria-pressed={excludeEnabled}
                     onClick={() => setExcludeEnabled((prev) => !prev)}
                     style={{
@@ -4975,6 +4870,111 @@ export default function App() {
                     />
                     <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
                   </label>
+                  <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
+                  <div
+                    role="button"
+                    aria-pressed={showCandidates}
+                    onClick={() => setShowCandidates((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>未確定候補を表示</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: showCandidates ? "#1a73e8" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: showCandidates ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: showCandidates ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {showCandidates ? "ON" : "OFF"}
+                    </span>
+                  </div>
+                  <div
+                    role="button"
+                    aria-pressed={showAnnotations}
+                    onClick={() => setShowAnnotations((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>確定アノテーションを表示</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: showAnnotations ? "#2e7d32" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: showAnnotations ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: showAnnotations ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {showAnnotations ? "ON" : "OFF"}
+                    </span>
+                  </div>
                   </div>
                   </>
                   )}
@@ -5467,10 +5467,10 @@ export default function App() {
                 </button>
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                    <div className="formRow" style={{ gridTemplateColumns: "152px 1fr" }}>
+                    <div className="formRow" style={{ gridTemplateColumns: "152px 1fr", order: 2 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>確信度 閾値</div>
-                        <div style={{ fontSize: 11, color: "#607d8b", marginTop: 2 }}>
+                        <div style={{ fontSize: 10, color: "#607d8b", marginTop: 2 }}>
                           高いほど誤検出が減ります。低いほど拾いやすくなります。
                         </div>
                       </div>
@@ -5501,7 +5501,7 @@ export default function App() {
                         />
                       </div>
                     </div>
-                    <div style={{ fontSize: 11, color: "#607d8b" }}>
+                    <div style={{ fontSize: 11, color: "#607d8b", order: 3 }}>
                       対象クラスは「検出 共通設定 ＞ クラス別カラー」で設定します。
                     </div>
                     <button
@@ -5509,6 +5509,7 @@ export default function App() {
                       onClick={handleAutoAnnotate}
                       disabled={autoRunning}
                       style={{
+                        order: 4,
                         height: 38,
                         borderRadius: 10,
                         border: "1px solid #0b7285",
@@ -5549,7 +5550,7 @@ export default function App() {
                       </span>
                     </button>
                     {autoResult && (
-                      <div style={{ fontSize: 12, color: "#0b3954" }}>
+                      <div style={{ fontSize: 12, color: "#0b3954", order: 5 }}>
                         <div>追加されたアノテーション数: {autoResult.added}</div>
                         <div>除外された候補数: {autoResult.rejected}</div>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
@@ -5579,19 +5580,35 @@ export default function App() {
                     <div
                       className="autoAdvanced"
                       style={{
+                        order: 1,
                         display: "grid",
-                        gap: 8,
+                        gap: 10,
                         marginTop: 2,
-                        padding: 10,
-                        borderRadius: 8,
-                        background: "#eef3ff",
-                        border: "1px solid #c8d6ff",
+                        padding: 12,
+                        borderRadius: 12,
+                        background: "linear-gradient(180deg, #f7faff 0%, #eef4ff 100%)",
+                        border: "1px solid #d3e1fb",
+                        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.9)",
                       }}
                     >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <div style={{ fontSize: 12, fontWeight: 600 }} />
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
+                          {autoDirty && autoBaseline && (
+                            <button
+                              type="button"
+                              className="btn btnDanger"
+                              style={{ height: 26, padding: "0 10px", fontSize: 10 }}
+                              onClick={() => {
+                                setAutoThreshold(autoBaseline.autoThreshold);
+                                setAutoMethod(autoBaseline.autoMethod);
+                                setAutoClassFilter(autoBaseline.autoClassFilter);
+                                setAutoStride(autoBaseline.autoStride);
+                              }}
+                            >
+                              Reset
+                            </button>
+                          )}
                         </div>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>検出方式</div>
                         <div style={{ display: "grid", gap: 6 }}>
                           {[
                             {
@@ -5624,8 +5641,8 @@ export default function App() {
                                   display: "flex",
                                   alignItems: "center",
                                   gap: 8,
-                                  padding: "6px 8px",
-                                  borderRadius: 8,
+                                  padding: "8px 10px",
+                                  borderRadius: 10,
                                   border: selected ? `1px solid ${item.accent}` : "1px solid #e0e0e0",
                                   background: selected ? item.bg : "#fff",
                                   fontSize: 11,
@@ -5670,7 +5687,7 @@ export default function App() {
                           })}
                         </div>
                         <div className="formRow">
-                          <span style={{ fontSize: 12, fontWeight: 600 }}>stride</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, alignSelf: "center" }}>探索間隔</span>
                           <div className="controlWrap" title="±1">
                             <div style={{ display: "flex", flexWrap: "nowrap", gap: 6, alignItems: "center" }}>
                               <NumericInputWithButtons
@@ -5695,23 +5712,6 @@ export default function App() {
                             )}
                           </div>
                         </div>
-                        {autoDirty && autoBaseline && (
-                          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
-                            <button
-                              type="button"
-                              className="btn btnDanger"
-                              style={{ height: 26, padding: "0 10px", fontSize: 10 }}
-                              onClick={() => {
-                                setAutoThreshold(autoBaseline.autoThreshold);
-                                setAutoMethod(autoBaseline.autoMethod);
-                                setAutoClassFilter(autoBaseline.autoClassFilter);
-                                setAutoStride(autoBaseline.autoStride);
-                              }}
-                            >
-                              Reset
-                            </button>
-                          </div>
-                        )}
                     </div>
                   </div>
                 )}
