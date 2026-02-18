@@ -246,6 +246,7 @@ export default function App() {
   const [debugTemplateName, setDebugTemplateName] = useState<string>("");
   const [debugTemplateLoading, setDebugTemplateLoading] = useState<boolean>(false);
   const [debugTemplateEnabled, setDebugTemplateEnabled] = useState<boolean>(false);
+  const [classScoreVisibility, setClassScoreVisibility] = useState<Record<string, number>>({});
   const templateGalleryTextColor = "rgba(72, 132, 255, 0.92)";
   const templateGalleryPreviewTextColor = "rgba(214, 236, 255, 0.98)";
   const didAutoRestoreRef = useRef(false);
@@ -454,6 +455,33 @@ export default function App() {
   }, [annotations]);
 
   useEffect(() => {
+    setClassScoreVisibility((prev) => {
+      const next: Record<string, number> = {};
+      const classNames = new Set<string>([...classOptions, ...Object.keys(classAnnotationStats)]);
+      classNames.forEach((className) => {
+        const stats = classAnnotationStats[className];
+        const minScore = stats?.minScore;
+        const maxScore = stats?.maxScore;
+        const hasRange =
+          (stats?.count || 0) > 1 &&
+          typeof minScore === "number" &&
+          typeof maxScore === "number" &&
+          Number.isFinite(minScore) &&
+          Number.isFinite(maxScore);
+        if (!hasRange) return;
+        const minTrunc = Math.floor(minScore * 100) / 100;
+        const maxTrunc = Math.floor(maxScore * 100) / 100;
+        if (!(maxTrunc > minTrunc)) return;
+        const prevValue = prev[className];
+        const base = typeof prevValue === "number" ? prevValue : minTrunc;
+        const clamped = Math.min(maxTrunc, Math.max(minTrunc, Math.floor(base * 100) / 100));
+        next[className] = clamped;
+      });
+      return next;
+    });
+  }, [classOptions, classAnnotationStats]);
+
+  useEffect(() => {
     if (checkedAnnotationIds.length === 0) return;
     const currentIds = new Set(annotations.map((a) => a.id));
     const next = checkedAnnotationIds.filter((id) => currentIds.has(id));
@@ -461,6 +489,15 @@ export default function App() {
       setCheckedAnnotationIds(next);
     }
   }, [annotations, checkedAnnotationIds]);
+
+  const canvasAnnotations = useMemo(() => {
+    return filteredAnnotations.filter((ann) => {
+      const threshold = classScoreVisibility[ann.class_name];
+      if (typeof threshold !== "number") return true;
+      if (typeof ann.score !== "number" || !Number.isFinite(ann.score)) return true;
+      return ann.score >= threshold;
+    });
+  }, [filteredAnnotations, classScoreVisibility]);
 
   useEffect(() => {
     if (annotationFilterClass === "all") return;
@@ -2664,7 +2701,7 @@ export default function App() {
           inset: 0;
         }
         .dualRangeInput::-webkit-slider-runnable-track {
-          height: 4px;
+          height: 3px;
           background: transparent;
         }
         .dualRangeInput::-webkit-slider-thumb {
@@ -2675,16 +2712,16 @@ export default function App() {
           border-radius: 5px;
           background:
             radial-gradient(circle at center, #ffffff 0 2px, transparent 2px),
-            linear-gradient(180deg, #66a1ff 0%, #2b74ff 100%);
+            linear-gradient(180deg, #dbe2ea 0%, #8f99a6 100%);
           border: 1px solid #ffffff;
-          box-shadow: 0 1px 4px rgba(19, 53, 117, 0.35), 0 0 0 1px rgba(43, 116, 255, 0.35);
+          box-shadow: 0 1px 4px rgba(48, 56, 68, 0.28), 0 0 0 1px rgba(118, 129, 146, 0.35);
           margin-top: -10px;
           pointer-events: auto;
           cursor: pointer;
           transition: transform 120ms ease, box-shadow 120ms ease;
         }
         .dualRangeInput::-moz-range-track {
-          height: 4px;
+          height: 3px;
           background: transparent;
         }
         .dualRangeInput::-moz-range-thumb {
@@ -2693,9 +2730,9 @@ export default function App() {
           border-radius: 5px;
           background:
             radial-gradient(circle at center, #ffffff 0 2px, transparent 2px),
-            linear-gradient(180deg, #66a1ff 0%, #2b74ff 100%);
+            linear-gradient(180deg, #dbe2ea 0%, #8f99a6 100%);
           border: 1px solid #ffffff;
-          box-shadow: 0 1px 4px rgba(19, 53, 117, 0.35), 0 0 0 1px rgba(43, 116, 255, 0.35);
+          box-shadow: 0 1px 4px rgba(48, 56, 68, 0.28), 0 0 0 1px rgba(118, 129, 146, 0.35);
           transform: translateY(-4px);
           pointer-events: auto;
           cursor: pointer;
@@ -2703,11 +2740,116 @@ export default function App() {
         }
         .dualRangeInput:active::-webkit-slider-thumb {
           transform: scale(1.06);
-          box-shadow: 0 2px 6px rgba(19, 53, 117, 0.45), 0 0 0 2px rgba(43, 116, 255, 0.4);
+          box-shadow: 0 2px 6px rgba(48, 56, 68, 0.36), 0 0 0 2px rgba(118, 129, 146, 0.38);
         }
         .dualRangeInput:active::-moz-range-thumb {
           transform: scale(1.06);
-          box-shadow: 0 2px 6px rgba(19, 53, 117, 0.45), 0 0 0 2px rgba(43, 116, 255, 0.4);
+          box-shadow: 0 2px 6px rgba(48, 56, 68, 0.36), 0 0 0 2px rgba(118, 129, 146, 0.38);
+        }
+        .paramSlider {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 100%;
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(238,241,245,0.95));
+          border: 1px solid rgba(183, 191, 202, 0.55);
+          box-shadow: inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 1px rgba(120,130,145,0.14);
+        }
+        .paramSlider::-webkit-slider-runnable-track {
+          height: 4px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(176, 183, 194, 0.65), rgba(129, 139, 153, 0.82));
+        }
+        .paramSlider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          margin-top: -5px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #d9e0e8 0%, #8f98a5 100%);
+          box-shadow: 0 2px 6px rgba(57, 66, 79, 0.28), 0 0 0 1px rgba(132, 141, 154, 0.24);
+          cursor: pointer;
+        }
+        .paramSlider::-moz-range-track {
+          height: 4px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(176, 183, 194, 0.65), rgba(129, 139, 153, 0.82));
+          border: 1px solid rgba(183, 191, 202, 0.55);
+        }
+        .paramSlider::-moz-range-progress {
+          height: 4px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(152, 161, 174, 0.75), rgba(116, 126, 140, 0.9));
+        }
+        .paramSlider::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #d9e0e8 0%, #8f98a5 100%);
+          box-shadow: 0 2px 6px rgba(57, 66, 79, 0.28), 0 0 0 1px rgba(132, 141, 154, 0.24);
+          cursor: pointer;
+        }
+        .classScoreSlider {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 100%;
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(235,244,255,0.9));
+          border: 1px solid rgba(153, 183, 227, 0.6);
+          box-shadow:
+            inset 0 1px 2px rgba(255,255,255,0.85),
+            inset 0 -1px 2px rgba(84,126,201,0.15),
+            0 1px 2px rgba(41, 78, 146, 0.12);
+        }
+        .classScoreSlider::-webkit-slider-runnable-track {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(80,140,255,0.25), rgba(80,140,255,0.72));
+        }
+        .classScoreSlider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 16px;
+          height: 16px;
+          margin-top: -6px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #7fb5ff 0%, #2b74ff 100%);
+          box-shadow: 0 3px 8px rgba(32, 67, 140, 0.35), 0 0 0 1px rgba(43,116,255,0.2);
+          cursor: pointer;
+        }
+        .classScoreSlider::-moz-range-track {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(80,140,255,0.25), rgba(80,140,255,0.72));
+          border: 1px solid rgba(153, 183, 227, 0.6);
+        }
+        .classScoreSlider::-moz-range-progress {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(80,140,255,0.45), rgba(80,140,255,0.85));
+        }
+        .classScoreSlider::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #7fb5ff 0%, #2b74ff 100%);
+          box-shadow: 0 3px 8px rgba(32, 67, 140, 0.35), 0 0 0 1px rgba(43,116,255,0.2);
+          cursor: pointer;
         }
         .rightPanel .numInput {
           width: 84px !important;
@@ -3779,7 +3921,7 @@ export default function App() {
                   imageUrl={imageUrl}
                   candidates={candidates}
                   selectedCandidateId={selectedCandidateId}
-                  annotations={filteredAnnotations}
+                  annotations={canvasAnnotations}
                   selectedAnnotationId={selectedAnnotationId}
                   colorMap={colorMap}
                   showCandidates={showCandidates}
@@ -4435,9 +4577,9 @@ export default function App() {
                           left: 0,
                           right: 0,
                           top: 36,
-                          height: 4,
+                          height: 3,
                           borderRadius: 999,
-                          background: "#d7deea",
+                          background: "#cfd4dc",
                         }}
                       />
                       <div
@@ -4446,9 +4588,9 @@ export default function App() {
                           left: `${((scaleMin - 0.1) / (3.0 - 0.1)) * 100}%`,
                           width: `${Math.max(0, ((scaleMax - scaleMin) / (3.0 - 0.1)) * 100)}%`,
                           top: 36,
-                          height: 4,
+                          height: 3,
                           borderRadius: 999,
-                          background: "#2b74ff",
+                          background: "#6b7280",
                         }}
                       />
                       <input
@@ -4523,6 +4665,7 @@ export default function App() {
                     <div style={{ width: "100%", display: "grid", gap: 6 }}>
                       <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
                         <input
+                          className="paramSlider"
                           type="range"
                           min={1}
                           max={20}
@@ -4550,6 +4693,7 @@ export default function App() {
                     <span style={{ fontSize: 12 }}>上位件数</span>
                     <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
                       <input
+                        className="paramSlider"
                         type="range"
                         min={1}
                         max={3}
@@ -4799,6 +4943,7 @@ export default function App() {
                     <div style={{ width: "100%", display: "grid", gap: 6 }}>
                       <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
                         <input
+                          className="paramSlider"
                           type="range"
                           min={0.4}
                           max={0.8}
@@ -4872,6 +5017,26 @@ export default function App() {
                                 .map((className) => {
                                   const enabled = autoClassFilter.includes(className);
                                   const stats = classAnnotationStats[className];
+                                  const hasScoreRange =
+                                    (stats?.count || 0) > 1 &&
+                                    typeof stats?.minScore === "number" &&
+                                    typeof stats?.maxScore === "number" &&
+                                    Number.isFinite(stats.minScore) &&
+                                    Number.isFinite(stats.maxScore);
+                                  const minScoreTrunc = hasScoreRange
+                                    ? Math.floor((stats?.minScore || 0) * 100) / 100
+                                    : null;
+                                  const maxScoreTrunc = hasScoreRange
+                                    ? Math.floor((stats?.maxScore || 0) * 100) / 100
+                                    : null;
+                                  const hasSlider =
+                                    hasScoreRange &&
+                                    minScoreTrunc !== null &&
+                                    maxScoreTrunc !== null &&
+                                    maxScoreTrunc > minScoreTrunc;
+                                  const sliderValue = hasSlider
+                                    ? classScoreVisibility[className] ?? minScoreTrunc
+                                    : null;
                                   const scoreText =
                                     typeof stats?.minScore === "number" &&
                                     typeof stats?.maxScore === "number"
@@ -4934,6 +5099,41 @@ export default function App() {
                                         <div style={{ fontSize: 12, color: "#546e7a" }}>
                                           確信度: {scoreText}
                                         </div>
+                                        {hasSlider && sliderValue !== null && minScoreTrunc !== null && maxScoreTrunc !== null && (
+                                          <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 8 }}>
+                                              <input
+                                                className="classScoreSlider"
+                                                type="range"
+                                                min={minScoreTrunc}
+                                                max={maxScoreTrunc}
+                                                step={0.01}
+                                                value={sliderValue}
+                                                onChange={(e) => {
+                                                  const raw = Number(e.target.value);
+                                                  const next = Math.floor(raw * 100) / 100;
+                                                  setClassScoreVisibility((prev) => ({
+                                                    ...prev,
+                                                    [className]: Math.min(maxScoreTrunc, Math.max(minScoreTrunc, next)),
+                                                  }));
+                                                }}
+                                                style={{ width: "100%" }}
+                                              />
+                                              <span
+                                                style={{
+                                                  fontSize: 11,
+                                                  fontWeight: 700,
+                                                  color: "#385672",
+                                                  minWidth: 38,
+                                                  textAlign: "right",
+                                                  fontVariantNumeric: "tabular-nums",
+                                                }}
+                                              >
+                                                {sliderValue.toFixed(2)}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
                                       <input
                                         type="color"
@@ -5272,6 +5472,7 @@ export default function App() {
                       </div>
                       <div className="controlWrap" title="±0.01">
                         <input
+                          className="paramSlider"
                           type="range"
                           min={0}
                           max={1}
@@ -5799,6 +6000,7 @@ export default function App() {
                 <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <span style={{ fontSize: 12, minWidth: 70 }}>簡略化</span>
                   <input
+                    className="paramSlider"
                     type="range"
                     min={1}
                     max={10}
