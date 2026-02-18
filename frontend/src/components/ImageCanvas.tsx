@@ -46,6 +46,7 @@ type Props = {
   } | null;
   debugRoiSize?: number;
   debugFollowTemplateUrl?: string | null;
+  debugFollowTemplateLabel?: string;
 };
 
 export type ImageCanvasHandle = {
@@ -85,6 +86,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   debugOverlay,
   debugRoiSize,
   debugFollowTemplateUrl,
+  debugFollowTemplateLabel,
 }: Props,
   ref
 ) {
@@ -695,6 +697,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.globalAlpha = 1;
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(tpl, drawX, drawY, tpl.width, tpl.height);
+        if (debugFollowTemplateLabel) {
+          const text = debugFollowTemplateLabel;
+          ctx.font = `${Math.max(12, baseLine * 2.2)}px sans-serif`;
+          const labelX = drawX;
+          const labelY = drawY + tpl.height + 14;
+          ctx.fillStyle = "rgba(255,32,32,0.96)";
+          ctx.strokeStyle = "rgba(0,0,0,0.75)";
+          ctx.lineWidth = 2;
+          ctx.strokeText(text, labelX, labelY);
+          ctx.fillText(text, labelX, labelY);
+        }
         ctx.restore();
       }
       if ((debugOverlay || onDebugCoords) && debugPoints) {
@@ -757,6 +770,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugRoiSize,
     debugPoints,
     debugFollowTemplateUrl,
+    debugFollowTemplateLabel,
     debugHoverImagePoint,
     debugTemplateDrawVersion,
   ]);

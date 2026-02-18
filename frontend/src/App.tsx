@@ -684,6 +684,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (showDebug && debugTemplateEnabled) return;
       if (!selectedCandidate || segEditMode) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
@@ -718,7 +719,52 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedCandidate, segEditMode, imageSize]);
+  }, [selectedCandidate, segEditMode, imageSize, showDebug, debugTemplateEnabled]);
+
+  useEffect(() => {
+    const handleDebugTemplateArrow = (event: KeyboardEvent) => {
+      if (!showDebug || !debugTemplateEnabled) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        tag === "button" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        if (!classOptions.length || !debugTemplateClass) return;
+        const idx = Math.max(0, classOptions.indexOf(debugTemplateClass));
+        const nextIdx =
+          event.key === "ArrowUp"
+            ? (idx - 1 + classOptions.length) % classOptions.length
+            : (idx + 1) % classOptions.length;
+        setDebugTemplateClass(classOptions[nextIdx]);
+        return;
+      }
+      if (!debugTemplateItems.length || !debugTemplateName) return;
+      const idx = Math.max(0, debugTemplateItems.findIndex((item) => item.name === debugTemplateName));
+      const nextIdx =
+        event.key === "ArrowLeft"
+          ? (idx - 1 + debugTemplateItems.length) % debugTemplateItems.length
+          : (idx + 1) % debugTemplateItems.length;
+      setDebugTemplateName(debugTemplateItems[nextIdx].name);
+    };
+    window.addEventListener("keydown", handleDebugTemplateArrow);
+    return () => window.removeEventListener("keydown", handleDebugTemplateArrow);
+  }, [
+    showDebug,
+    debugTemplateEnabled,
+    classOptions,
+    debugTemplateClass,
+    debugTemplateItems,
+    debugTemplateName,
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -3824,6 +3870,7 @@ export default function App() {
                 debugOverlay={showDebug ? detectDebug || null : null}
                 debugRoiSize={showDebug ? roiSize : undefined}
                 debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
+                debugFollowTemplateLabel={showDebug && debugTemplateEnabled ? debugTemplateClass : ""}
               />
                 {selectedAnnotationId && (
                   <div

@@ -568,9 +568,10 @@ def get_template_overlay_red_image(project: str, class_name: str, template_name:
     black_mask = gray < 128
     h, w = gray.shape[:2]
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[:, :, 0] = 255
-    rgba[:, :, 1] = 32
-    rgba[:, :, 2] = 32
+    # OpenCV uses BGRA channel order for 4ch images.
+    rgba[:, :, 0] = 32   # B
+    rgba[:, :, 1] = 32   # G
+    rgba[:, :, 2] = 255  # R
     rgba[:, :, 3] = np.where(black_mask, 150, 0).astype(np.uint8)
     ok, buffer = cv2.imencode(".png", rgba)
     if not ok:
