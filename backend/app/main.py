@@ -551,6 +551,33 @@ def get_template_binary_image(project: str, class_name: str, template_name: str)
     return Response(content=buffer.tobytes(), media_type="image/png")
 
 
+@app.get("/templates/{project}/{class_name}/{template_name}/overlay-red")
+def get_template_overlay_red_image(project: str, class_name: str, template_name: str) -> Response:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    class_templates = project_templates.get(class_name)
+    if class_templates is None:
+        raise HTTPException(status_code=404, detail="class not found")
+    tpl = next((t for t in class_templates if t.template_name == template_name), None)
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    gray = tpl.image_gray
+    if gray is None or getattr(gray, "size", 0) == 0:
+        raise HTTPException(status_code=500, detail="empty template image")
+    black_mask = gray < 128
+    h, w = gray.shape[:2]
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[:, :, 0] = 255
+    rgba[:, :, 1] = 32
+    rgba[:, :, 2] = 32
+    rgba[:, :, 3] = np.where(black_mask, 150, 0).astype(np.uint8)
+    ok, buffer = cv2.imencode(".png", rgba)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to encode overlay image")
+    return Response(content=buffer.tobytes(), media_type="image/png")
+
+
 @app.get("/dataset/projects", response_model=List[DatasetInfo])
 def list_dataset_projects() -> List[DatasetInfo]:
     DATASETS_DIR.mkdir(parents=True, exist_ok=True)

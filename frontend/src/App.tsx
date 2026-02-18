@@ -15,6 +15,7 @@ import {
   fetchTemplateClassItems,
   buildTemplateImageUrl,
   buildTemplateBinaryImageUrl,
+  buildTemplateOverlayRedImageUrl,
   clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
@@ -210,7 +211,6 @@ export default function App() {
     elapsedMs: number;
   } | null>(null);
   const [autoProgress, setAutoProgress] = useState<number>(0);
-  const prevRoiSizeRef = useRef<number>(DEFAULT_ROI_SIZE);
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressTimerRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
@@ -237,7 +237,15 @@ export default function App() {
   const [templateGalleryPreviewNaturalSize, setTemplateGalleryPreviewNaturalSize] = useState<
     { w: number; h: number } | null
   >(null);
+  const debugParamSyncRef = useRef<string>("");
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
+  const [debugTemplateClass, setDebugTemplateClass] = useState<string>("");
+  const [debugTemplateItems, setDebugTemplateItems] = useState<
+    { name: string; width: number; height: number }[]
+  >([]);
+  const [debugTemplateName, setDebugTemplateName] = useState<string>("");
+  const [debugTemplateLoading, setDebugTemplateLoading] = useState<boolean>(false);
+  const [debugTemplateEnabled, setDebugTemplateEnabled] = useState<boolean>(false);
   const templateGalleryTextColor = "rgba(72, 132, 255, 0.92)";
   const templateGalleryPreviewTextColor = "rgba(214, 236, 255, 0.98)";
   const didAutoRestoreRef = useRef(false);
@@ -261,6 +269,10 @@ export default function App() {
     }
     return { width: "auto", height: `${Math.round(targetH)}px` } as const;
   }, [templateGalleryPreviewNaturalSize]);
+  const debugTemplateImageUrl = useMemo(() => {
+    if (!debugTemplateEnabled || !project || !debugTemplateClass || !debugTemplateName) return null;
+    return buildTemplateOverlayRedImageUrl(project, debugTemplateClass, debugTemplateName);
+  }, [debugTemplateEnabled, project, debugTemplateClass, debugTemplateName]);
   const applyAutoMethodDefaults = (method: "combined" | "scaled_templates") => {
     setAutoMethod(method);
     setAutoThreshold(DEFAULT_AUTO_THRESHOLD_BY_METHOD[method]);
@@ -1404,6 +1416,7 @@ export default function App() {
     setCandidates([]);
     setDetectDebug(null);
     setLastClick(null);
+    debugParamSyncRef.current = "";
     setFollowupScanReady(false);
     followupScanPointRef.current = null;
   };
@@ -1548,16 +1561,58 @@ export default function App() {
   }, [annotations, selectedAnnotationId, selectedCandidateId, pendingManualBBox]);
 
   useEffect(() => {
-    if (prevRoiSizeRef.current === roiSize) return;
-    prevRoiSizeRef.current = roiSize;
-    if (!showDebug || busy) return;
+    if (!showDebug || busy || autoRunning) return;
     const click = detectDebug?.clicked_image_xy || lastClick;
     if (!click) return;
+    const debugKey = JSON.stringify({
+      x: Number(click.x.toFixed(2)),
+      y: Number(click.y.toFixed(2)),
+      roiSize,
+      scaleMin,
+      scaleMax,
+      scaleSteps,
+      topk,
+      refineContour,
+      excludeEnabled,
+      excludeMode,
+      excludeCenter,
+      excludeIouThreshold,
+      shapeRatioThreshold,
+      classFilter: autoClassFilter.join("|"),
+    });
+    if (debugParamSyncRef.current === debugKey) return;
+    debugParamSyncRef.current = debugKey;
     const timer = window.setTimeout(() => {
       void handleClickPoint(click.x, click.y);
-    }, 80);
+    }, 120);
     return () => window.clearTimeout(timer);
-  }, [roiSize, showDebug, busy, detectDebug, lastClick]);
+  }, [
+    showDebug,
+    busy,
+    autoRunning,
+    roiSize,
+    scaleMin,
+    scaleMax,
+    scaleSteps,
+    topk,
+    refineContour,
+    excludeEnabled,
+    excludeMode,
+    excludeCenter,
+    excludeIouThreshold,
+    shapeRatioThreshold,
+    autoClassFilter,
+    detectDebug?.clicked_image_xy?.x,
+    detectDebug?.clicked_image_xy?.y,
+    lastClick?.x,
+    lastClick?.y,
+  ]);
+
+  useEffect(() => {
+    if (!showDebug) {
+      debugParamSyncRef.current = "";
+    }
+  }, [showDebug]);
 
   const pickUniqueColor = (existing: Record<string, string>) => {
     const used = new Set(Object.values(existing));
@@ -1981,6 +2036,57 @@ export default function App() {
       cancelled = true;
     };
   }, [project, classOptions]);
+
+  useEffect(() => {
+    if (!showDebug) return;
+    const nextClass =
+      debugTemplateClass ||
+      selectedCandidate?.class_name ||
+      selectedAnnotation?.class_name ||
+      classOptions[0] ||
+      "";
+    if (nextClass && nextClass !== debugTemplateClass) {
+      setDebugTemplateClass(nextClass);
+    }
+  }, [
+    showDebug,
+    debugTemplateClass,
+    selectedCandidate?.class_name,
+    selectedAnnotation?.class_name,
+    classOptions,
+  ]);
+
+  useEffect(() => {
+    if (!showDebug || !project || !debugTemplateClass) {
+      setDebugTemplateItems([]);
+      setDebugTemplateName("");
+      setDebugTemplateEnabled(false);
+      return;
+    }
+    let cancelled = false;
+    setDebugTemplateLoading(true);
+    fetchTemplateClassItems(project, debugTemplateClass)
+      .then((items) => {
+        if (cancelled) return;
+        setDebugTemplateItems(items);
+        if (!items.some((it) => it.name === debugTemplateName)) {
+          setDebugTemplateName(items[0]?.name || "");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDebugTemplateItems([]);
+          setDebugTemplateName("");
+          setDebugTemplateEnabled(false);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDebugTemplateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showDebug, project, debugTemplateClass, debugTemplateName]);
 
   const openTemplateGallery = async (className: string) => {
     if (!project) return;
@@ -3717,6 +3823,7 @@ export default function App() {
                 onDebugCoords={showDebug ? setCoordDebug : undefined}
                 debugOverlay={showDebug ? detectDebug || null : null}
                 debugRoiSize={showDebug ? roiSize : undefined}
+                debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
               />
                 {selectedAnnotationId && (
                   <div
@@ -4818,7 +4925,7 @@ export default function App() {
                 >
                   {showDebug ? "▼ Debug" : "▶︎ Debug"}
                 </button>
-                {showDebug && (detectDebug || coordDebug) && (
+                {showDebug && (
                   <div
                     style={{
                       marginTop: 10,
@@ -5015,6 +5122,65 @@ export default function App() {
                           </div>
                         )}
                       </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 10,
+                        paddingTop: 8,
+                        borderTop: "1px dashed #f4a35d",
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#7a3e00" }}>
+                        Template Follow
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
+                        <select
+                          value={debugTemplateClass}
+                          onChange={(e) => setDebugTemplateClass(e.target.value)}
+                          style={{ height: 28, fontSize: 12 }}
+                        >
+                          <option value="">選択</option>
+                          {asChildren(
+                            classOptions.map((name, idx) => (
+                              <option key={`debug-class-${name}-${idx}`} value={name}>
+                                {name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>テンプレ</span>
+                        <select
+                          value={debugTemplateName}
+                          onChange={(e) => setDebugTemplateName(e.target.value)}
+                          disabled={!debugTemplateClass || debugTemplateLoading}
+                          style={{ height: 28, fontSize: 12 }}
+                        >
+                          <option value="">
+                            {debugTemplateLoading ? "読み込み中..." : "選択"}
+                          </option>
+                          {asChildren(
+                            debugTemplateItems.map((item, idx) => (
+                              <option key={`debug-template-${item.name}-${idx}`} value={item.name}>
+                                {item.name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#555" }}>
+                        <input
+                          type="checkbox"
+                          checked={debugTemplateEnabled}
+                          onChange={(e) => setDebugTemplateEnabled(e.target.checked)}
+                          disabled={!debugTemplateClass || !debugTemplateName}
+                        />
+                        カーソル追従で表示（右下をカーソル先端に配置）
+                      </label>
                     </div>
                   </div>
                 )}

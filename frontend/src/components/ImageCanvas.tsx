@@ -45,6 +45,7 @@ type Props = {
     tight_bbox?: { x: number; y: number; w: number; h: number };
   } | null;
   debugRoiSize?: number;
+  debugFollowTemplateUrl?: string | null;
 };
 
 export type ImageCanvasHandle = {
@@ -83,6 +84,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onDebugCoords,
   debugOverlay,
   debugRoiSize,
+  debugFollowTemplateUrl,
 }: Props,
   ref
 ) {
@@ -153,6 +155,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     screen: { x: number; y: number };
     image: { x: number; y: number };
   } | null>(null);
+  const [debugHoverImagePoint, setDebugHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
+  const [debugTemplateDrawVersion, setDebugTemplateDrawVersion] = useState(0);
+  const debugTemplateImageRef = useRef<HTMLImageElement | null>(null);
 
   const endAnnotationEditSession = (reason: string) => {
     if (!editSessionRef.current.active) return;
@@ -258,6 +263,30 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     setBlinkActive(selectionBlinkEnabled);
   }, [selectionBlinkEnabled, editMode]);
+
+  useEffect(() => {
+    if (!debugFollowTemplateUrl) {
+      debugTemplateImageRef.current = null;
+      setDebugTemplateDrawVersion((v) => v + 1);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      debugTemplateImageRef.current = img;
+      setDebugTemplateDrawVersion((v) => v + 1);
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      debugTemplateImageRef.current = null;
+      setDebugTemplateDrawVersion((v) => v + 1);
+    };
+    img.src = debugFollowTemplateUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [debugFollowTemplateUrl]);
 
   const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
   const clampPanToTop = (pan: { x: number; y: number }) => ({
@@ -658,6 +687,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           drawDebugPoint(debugOverlay.clicked_image_xy, "#d81b60");
         }
       }
+      if (debugFollowTemplateUrl && debugHoverImagePoint && debugTemplateImageRef.current) {
+        const tpl = debugTemplateImageRef.current;
+        const drawX = debugHoverImagePoint.x - tpl.width;
+        const drawY = debugHoverImagePoint.y - tpl.height;
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(tpl, drawX, drawY, tpl.width, tpl.height);
+        ctx.restore();
+      }
       if ((debugOverlay || onDebugCoords) && debugPoints) {
         const dpr = getDpr();
         ctx.save();
@@ -717,6 +756,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugOverlay,
     debugRoiSize,
     debugPoints,
+    debugFollowTemplateUrl,
+    debugHoverImagePoint,
+    debugTemplateDrawVersion,
   ]);
 
   const schedulePanZoomUpdate = () => {
@@ -1165,6 +1207,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     if (!editMode) {
       const coords = getImageCoords(event);
       if (coords) updateCursorByHandle(coords.x, coords.y);
+      if (debugFollowTemplateUrl) {
+        setDebugHoverImagePoint(coords ? { x: coords.x, y: coords.y } : null);
+      }
     }
     if (manualDragRef.current.active) {
       const coords = getImageCoords(event);
@@ -1365,6 +1410,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         onMouseLeave={(event) => {
           if (imageUrl) handleMouseUp();
           setCursorStyle(imageUrl ? "crosshair" : "default");
+          setDebugHoverImagePoint(null);
         }}
         style={{
           position: "absolute",
