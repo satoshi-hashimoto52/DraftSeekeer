@@ -2608,13 +2608,12 @@ export default function App() {
         .confirmedSection {
           display: flex;
           flex-direction: column;
-          flex: 1 1 auto;
+          flex: 0 0 auto;
           min-height: 0;
         }
         .confirmedBody {
           display: flex;
           flex-direction: column;
-          flex: 1 1 auto;
           min-height: 0;
         }
         .confirmedList {
@@ -2622,9 +2621,14 @@ export default function App() {
           flex-direction: column;
           gap: 8px;
           overflow-y: auto;
-          flex: 1 1 auto;
+          flex: 0 0 auto;
           min-height: 0;
+          max-height: 612px;
           padding-right: 4px;
+          padding: 8px;
+          border-radius: 10px;
+          background: #f4f8ff;
+          border: 1px solid #dbe6f7;
           overscroll-behavior: contain;
           scrollbar-gutter: stable;
         }
