@@ -4982,6 +4982,65 @@ export default function App() {
                       padding: 10,
                     }}
                   >
+                    <div
+                      style={{
+                        marginBottom: 10,
+                        paddingBottom: 8,
+                        borderBottom: "1px dashed #f4a35d",
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#7a3e00" }}>
+                        Template Follow
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
+                        <select
+                          value={debugTemplateClass}
+                          onChange={(e) => setDebugTemplateClass(e.target.value)}
+                          style={{ height: 28, fontSize: 12 }}
+                        >
+                          <option value="">選択</option>
+                          {asChildren(
+                            classOptions.map((name, idx) => (
+                              <option key={`debug-class-${name}-${idx}`} value={name}>
+                                {name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#666" }}>テンプレ</span>
+                        <select
+                          value={debugTemplateName}
+                          onChange={(e) => setDebugTemplateName(e.target.value)}
+                          disabled={!debugTemplateClass || debugTemplateLoading}
+                          style={{ height: 28, fontSize: 12 }}
+                        >
+                          <option value="">
+                            {debugTemplateLoading ? "読み込み中..." : "選択"}
+                          </option>
+                          {asChildren(
+                            debugTemplateItems.map((item, idx) => (
+                              <option key={`debug-template-${item.name}-${idx}`} value={item.name}>
+                                {item.name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#555" }}>
+                        <input
+                          type="checkbox"
+                          checked={debugTemplateEnabled}
+                          onChange={(e) => setDebugTemplateEnabled(e.target.checked)}
+                          disabled={!debugTemplateClass || !debugTemplateName}
+                        />
+                        カーソル追従で表示（右下をカーソル先端に配置）
+                      </label>
+                    </div>
                     {detectDebug && (
                       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
                     )}
@@ -5169,65 +5228,6 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 10,
-                        paddingTop: 8,
-                        borderTop: "1px dashed #f4a35d",
-                        display: "grid",
-                        gap: 6,
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#7a3e00" }}>
-                        Template Follow
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
-                        <select
-                          value={debugTemplateClass}
-                          onChange={(e) => setDebugTemplateClass(e.target.value)}
-                          style={{ height: 28, fontSize: 12 }}
-                        >
-                          <option value="">選択</option>
-                          {asChildren(
-                            classOptions.map((name, idx) => (
-                              <option key={`debug-class-${name}-${idx}`} value={name}>
-                                {name}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>テンプレ</span>
-                        <select
-                          value={debugTemplateName}
-                          onChange={(e) => setDebugTemplateName(e.target.value)}
-                          disabled={!debugTemplateClass || debugTemplateLoading}
-                          style={{ height: 28, fontSize: 12 }}
-                        >
-                          <option value="">
-                            {debugTemplateLoading ? "読み込み中..." : "選択"}
-                          </option>
-                          {asChildren(
-                            debugTemplateItems.map((item, idx) => (
-                              <option key={`debug-template-${item.name}-${idx}`} value={item.name}>
-                                {item.name}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                      </div>
-                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#555" }}>
-                        <input
-                          type="checkbox"
-                          checked={debugTemplateEnabled}
-                          onChange={(e) => setDebugTemplateEnabled(e.target.checked)}
-                          disabled={!debugTemplateClass || !debugTemplateName}
-                        />
-                        カーソル追従で表示（右下をカーソル先端に配置）
-                      </label>
                     </div>
                   </div>
                 )}
