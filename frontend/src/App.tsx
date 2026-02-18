@@ -14,6 +14,7 @@ import {
   fetchTemplateClassPreviews,
   fetchTemplateClassItems,
   buildTemplateImageUrl,
+  buildTemplateBinaryImageUrl,
   clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
@@ -30,17 +31,28 @@ import {
   deleteDatasetProject,
   autoAnnotate,
   shutdownApp,
-} from "./api";
-import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas";
-import NumericInputWithButtons from "./components/NumericInputWithButtons";
-import { normalizeToHex } from "./utils/color";
-import { clampToImage, simplifyPolygon } from "./utils/polygon";
+} from "./api.ts";
+import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas.tsx";
+import NumericInputWithButtons from "./components/NumericInputWithButtons.tsx";
+import { normalizeToHex } from "./utils/color.ts";
+import { clampToImage, simplifyPolygon } from "./utils/polygon.ts";
 
 const DEFAULT_ROI_SIZE = 200;
 const DEFAULT_TOPK = 3;
 const DEFAULT_SCALE_MIN = 0.5;
 const DEFAULT_SCALE_MAX = 1.7;
 const DEFAULT_SCALE_STEPS = 8;
+const DEFAULT_SHAPE_RATIO_THRESHOLD = 0.6;
+const DEFAULT_EXCLUDE_ENABLED = true;
+const DEFAULT_EXCLUDE_MODE: "same_class" | "any_class" = "same_class";
+const DEFAULT_EXCLUDE_CENTER = true;
+const DEFAULT_EXCLUDE_IOU_THRESHOLD = 0.6;
+const DEFAULT_REFINE_CONTOUR = false;
+const DEFAULT_AUTO_METHOD: "combined" | "scaled_templates" = "combined";
+const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<"combined" | "scaled_templates", number> = {
+  combined: 0.65,
+  scaled_templates: 0.7,
+};
 
 export default function App() {
   const headerScrollRef = useRef<HTMLDivElement | null>(null);
@@ -61,15 +73,14 @@ export default function App() {
   const [includeNegatives, setIncludeNegatives] = useState<boolean>(true);
   const [datasetType, setDatasetType] = useState<"bbox" | "seg">("bbox");
   const [exportFormat, setExportFormat] = useState<"folder" | "zip">("folder");
-  const [refineContour, setRefineContour] = useState<boolean>(false);
-  const [excludeEnabled, setExcludeEnabled] = useState<boolean>(true);
-  const [excludeMode, setExcludeMode] = useState<"same_class" | "any_class">("same_class");
-  const [excludeCenter, setExcludeCenter] = useState<boolean>(true);
-  const [excludeIouThreshold, setExcludeIouThreshold] = useState<number>(0.6);
+  const [refineContour, setRefineContour] = useState<boolean>(DEFAULT_REFINE_CONTOUR);
+  const [excludeEnabled, setExcludeEnabled] = useState<boolean>(DEFAULT_EXCLUDE_ENABLED);
+  const [excludeMode, setExcludeMode] = useState<"same_class" | "any_class">(DEFAULT_EXCLUDE_MODE);
+  const [excludeCenter, setExcludeCenter] = useState<boolean>(DEFAULT_EXCLUDE_CENTER);
+  const [excludeIouThreshold, setExcludeIouThreshold] = useState<number>(DEFAULT_EXCLUDE_IOU_THRESHOLD);
   const [showExportDrawer, setShowExportDrawer] = useState<boolean>(false);
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [advancedTab, setAdvancedTab] = useState<"params" | "classes">("params");
   const [showDebug, setShowDebug] = useState<boolean>(false);
-  const [showClassColors, setShowClassColors] = useState<boolean>(true);
   const [classCardFilter, setClassCardFilter] = useState<"all" | "enabled">("all");
   const [showCommonSettings, setShowCommonSettings] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
@@ -107,6 +118,7 @@ export default function App() {
   const [classOptions, setClassOptions] = useState<string[]>([]);
   const [roiSize, setRoiSize] = useState<number>(DEFAULT_ROI_SIZE);
   const [topk, setTopk] = useState<number>(DEFAULT_TOPK);
+  const [shapeRatioThreshold, setShapeRatioThreshold] = useState<number>(DEFAULT_SHAPE_RATIO_THRESHOLD);
   const [scaleMin, setScaleMin] = useState<number>(DEFAULT_SCALE_MIN);
   const [scaleMax, setScaleMax] = useState<number>(DEFAULT_SCALE_MAX);
   const [scaleSteps, setScaleSteps] = useState<number>(DEFAULT_SCALE_STEPS);
@@ -164,15 +176,17 @@ export default function App() {
   });
   const [showHeaderSettings, setShowHeaderSettings] = useState<boolean>(false);
   const headerSettingsRef = useRef<HTMLDivElement | null>(null);
-  const [autoThreshold, setAutoThreshold] = useState<number>(0.7);
+  const [autoThreshold, setAutoThreshold] = useState<number>(
+    DEFAULT_AUTO_THRESHOLD_BY_METHOD[DEFAULT_AUTO_METHOD]
+  );
   const [autoClassFilter, setAutoClassFilter] = useState<string[]>([]);
-  const [autoMethod, setAutoMethod] = useState<"combined" | "scaled_templates">("combined");
+  const [autoMethod, setAutoMethod] = useState<"combined" | "scaled_templates">(DEFAULT_AUTO_METHOD);
   const [autoPanelOpen, setAutoPanelOpen] = useState<boolean>(true);
-  const [autoAdvancedOpen, setAutoAdvancedOpen] = useState<boolean>(false);
   const [autoStride, setAutoStride] = useState<number | null>(null);
   const [advancedBaseline, setAdvancedBaseline] = useState<{
     roiSize: number;
     topk: number;
+    shapeRatioThreshold: number;
     scaleMin: number;
     scaleMax: number;
     scaleSteps: number;
@@ -187,10 +201,6 @@ export default function App() {
     autoMethod: "combined" | "scaled_templates";
     autoClassFilter: string[];
     autoStride: number | null;
-    scaleMin: number;
-    scaleMax: number;
-    scaleSteps: number;
-    roiSize: number;
   } | null>(null);
   const [autoRunning, setAutoRunning] = useState<boolean>(false);
   const [autoResult, setAutoResult] = useState<{
@@ -219,10 +229,42 @@ export default function App() {
   const [templateClassPreviews, setTemplateClassPreviews] = useState<Record<string, string | null>>({});
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState<boolean>(false);
   const [templateGalleryClassName, setTemplateGalleryClassName] = useState<string>("");
-  const [templateGalleryItems, setTemplateGalleryItems] = useState<string[]>([]);
+  const [templateGalleryItems, setTemplateGalleryItems] = useState<
+    { name: string; width: number; height: number }[]
+  >([]);
   const [templateGalleryLoading, setTemplateGalleryLoading] = useState<boolean>(false);
+  const [templateGalleryPreviewName, setTemplateGalleryPreviewName] = useState<string | null>(null);
+  const [templateGalleryPreviewNaturalSize, setTemplateGalleryPreviewNaturalSize] = useState<
+    { w: number; h: number } | null
+  >(null);
   const templatePreviewCacheRef = useRef<Map<string, string>>(new Map());
+  const templateGalleryTextColor = "rgba(72, 132, 255, 0.92)";
+  const templateGalleryPreviewTextColor = "rgba(214, 236, 255, 0.98)";
   const didAutoRestoreRef = useRef(false);
+  const previewImageBoostStyle = useMemo(() => {
+    if (!templateGalleryPreviewNaturalSize) {
+      return { width: "auto", height: "auto" } as const;
+    }
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1400;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 900;
+    const targetW = vw * 0.6;
+    const targetH = vh * 0.6;
+    const { w, h } = templateGalleryPreviewNaturalSize;
+    const isLandscape = w >= h;
+    const currentLong = isLandscape ? w : h;
+    const targetLong = isLandscape ? targetW : targetH;
+    if (currentLong >= targetLong * 0.98) {
+      return { width: "auto", height: "auto" } as const;
+    }
+    if (isLandscape) {
+      return { width: `${Math.round(targetW)}px`, height: "auto" } as const;
+    }
+    return { width: "auto", height: `${Math.round(targetH)}px` } as const;
+  }, [templateGalleryPreviewNaturalSize]);
+  const applyAutoMethodDefaults = (method: "combined" | "scaled_templates") => {
+    setAutoMethod(method);
+    setAutoThreshold(DEFAULT_AUTO_THRESHOLD_BY_METHOD[method]);
+  };
   type AppViewState =
     | { view: "home" }
     | { view: "project"; projectName: string; lastImageKey?: string };
@@ -317,6 +359,15 @@ export default function App() {
     if (!selectedCandidateId) return null;
     return candidates.find((c) => c.id === selectedCandidateId) || null;
   }, [candidates, selectedCandidateId]);
+  const activeDetectedCandidate = useMemo(
+    () => selectedCandidate || candidates[0] || null,
+    [selectedCandidate, candidates]
+  );
+  const activeDetectedClassColor = useMemo(() => {
+    const cls = activeDetectedCandidate?.class_name;
+    if (!cls) return "#35506b";
+    return colorMap[cls] || "#35506b";
+  }, [activeDetectedCandidate, colorMap]);
 
   const isManualSelected = useMemo(
     () => selectedCandidate?.source === "manual",
@@ -364,6 +415,13 @@ export default function App() {
       return a.bbox.x - b.bbox.x;
     });
   }, [filteredAnnotations]);
+  const confirmedSeriesOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const ann of annotations) {
+      if (ann.class_name) names.add(ann.class_name);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [annotations]);
 
   const classAnnotationStats = useMemo(() => {
     const stats: Record<string, { count: number; minScore: number | null; maxScore: number | null }> = {};
@@ -478,6 +536,7 @@ export default function App() {
     return (
       roiSize !== advancedBaseline.roiSize ||
       topk !== advancedBaseline.topk ||
+      shapeRatioThreshold !== advancedBaseline.shapeRatioThreshold ||
       scaleMin !== advancedBaseline.scaleMin ||
       scaleMax !== advancedBaseline.scaleMax ||
       scaleSteps !== advancedBaseline.scaleSteps ||
@@ -491,6 +550,7 @@ export default function App() {
     advancedBaseline,
     roiSize,
     topk,
+    shapeRatioThreshold,
     scaleMin,
     scaleMax,
     scaleSteps,
@@ -507,10 +567,6 @@ export default function App() {
       autoThreshold !== autoBaseline.autoThreshold ||
       autoMethod !== autoBaseline.autoMethod ||
       autoStride !== autoBaseline.autoStride ||
-      scaleMin !== autoBaseline.scaleMin ||
-      scaleMax !== autoBaseline.scaleMax ||
-      scaleSteps !== autoBaseline.scaleSteps ||
-      roiSize !== autoBaseline.roiSize ||
       !isSameArray(autoClassFilter, autoBaseline.autoClassFilter)
     );
   }, [
@@ -518,10 +574,6 @@ export default function App() {
     autoThreshold,
     autoMethod,
     autoStride,
-    scaleMin,
-    scaleMax,
-    scaleSteps,
-    roiSize,
     autoClassFilter,
   ]);
 
@@ -817,7 +869,6 @@ export default function App() {
     setAutoProgress(0);
     setAutoRunning(false);
     setAutoPanelOpen(false);
-    setAutoAdvancedOpen(false);
     setShowExportDrawer(false);
     setExportResult(null);
     setImageStatusMap({});
@@ -882,9 +933,7 @@ export default function App() {
     setNotice(null);
     setBusy(true);
     setShowCommonSettings(false);
-    setShowAdvanced(false);
     setShowDebug(false);
-    setAutoAdvancedOpen(false);
     setAutoPanelOpen(false);
     setShowSplitSettings(false);
     setShowExportDrawer(false);
@@ -909,9 +958,6 @@ export default function App() {
       const storedTemplate = templateMap[projectName];
       if (hasStoredTemplate) {
         setProject(storedTemplate || "");
-        if (storedTemplate) {
-          setShowCommonSettings(true);
-        }
       }
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
@@ -938,7 +984,9 @@ export default function App() {
         if (storedAuto.autoMethod) setAutoMethod(storedAuto.autoMethod);
       }
       const allClasses = classOptions.length > 0 ? classOptions : [];
-      setAutoClassFilter(allClasses);
+      if (allClasses.length > 0) {
+        setAutoClassFilter(allClasses);
+      }
       if (info.images.length > 0) {
         void loadAllAnnotationCounts(projectName, info.images);
       }
@@ -1246,6 +1294,7 @@ export default function App() {
         exclude_mode: excludeMode,
         exclude_center: excludeCenter,
         exclude_iou_threshold: excludeIouThreshold,
+        shape_ratio_threshold: shapeRatioThreshold,
       });
       setDetectDebug(res.debug || null);
       const nextCandidates = toCandidates(res);
@@ -1301,6 +1350,7 @@ export default function App() {
           id: `${Date.now()}-${Math.random()}`,
           class_name: selectedCandidate.class_name,
           bbox: selectedCandidate.bbox,
+          template_name: selectedCandidate.template || undefined,
           source,
           created_at: createdAt,
           score,
@@ -1311,7 +1361,6 @@ export default function App() {
           segMethod,
       },
     ]);
-    setNotice(`${selectedCandidate.class_name} を確定しました`);
     const basePoint = lastClick || {
       x: selectedCandidate.bbox.x + selectedCandidate.bbox.w / 2,
       y: selectedCandidate.bbox.y + selectedCandidate.bbox.h / 2,
@@ -1350,6 +1399,15 @@ export default function App() {
     setSelectedCandidateId(candidates[nextIndex].id);
   };
 
+  const clearDetectionState = () => {
+    setSelectedCandidateId(null);
+    setCandidates([]);
+    setDetectDebug(null);
+    setLastClick(null);
+    setFollowupScanReady(false);
+    followupScanPointRef.current = null;
+  };
+
   const handleSegCandidate = async () => {
     if (!selectedCandidate || !imageId) return;
     setError(null);
@@ -1377,7 +1435,6 @@ export default function App() {
             : c
         )
       );
-      setNotice(`${selectedCandidate.class_name} のSegを生成しました`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Segmentation failed");
     } finally {
@@ -1409,15 +1466,16 @@ export default function App() {
         handleNextCandidate();
         return;
       }
+      const hasActiveDetection = candidates.length > 0 || Boolean(detectDebug) || followupScanReady;
+      if ((key === "Backspace" || key === "Delete" || key === "Escape") && hasActiveDetection) {
+        event.preventDefault();
+        clearDetectionState();
+        return;
+      }
       if (!selectedCandidate) return;
       if (key === "Enter") {
         event.preventDefault();
         if (!manualClassMissing) handleConfirmCandidate();
-        return;
-      }
-      if (key === "Backspace" || key === "Delete") {
-        event.preventDefault();
-        handleRejectCandidate();
         return;
       }
       if (key === "s" || key === "S") {
@@ -1425,15 +1483,11 @@ export default function App() {
         handleSegCandidate();
         return;
       }
-      if (key === "Escape") {
-        event.preventDefault();
-        setSelectedCandidateId(null);
-      }
     };
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [selectedCandidate, manualClassMissing, followupScanReady, busy]);
+  }, [selectedCandidate, manualClassMissing, followupScanReady, busy, candidates, detectDebug]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -1550,6 +1604,7 @@ export default function App() {
       const parsed = JSON.parse(raw) as {
         roiSize?: number;
         topk?: number;
+        shapeRatioThreshold?: number;
         scaleMin?: number;
         scaleMax?: number;
         scaleSteps?: number;
@@ -1571,6 +1626,7 @@ export default function App() {
       const payload = {
         roiSize,
         topk,
+        shapeRatioThreshold,
         scaleMin,
         scaleMax,
         scaleSteps,
@@ -1621,6 +1677,7 @@ export default function App() {
       id: ann.id || `${now}-${Math.random()}-${idx}`,
       class_name: ann.class_name,
       bbox: ann.bbox,
+      template_name: ann.template_name,
       source:
         ann.source === "template" || ann.source === "manual" || ann.source === "sam"
           ? ann.source
@@ -1737,6 +1794,7 @@ export default function App() {
           id: `${Date.now()}-${Math.random()}-${idx}`,
           class_name: item.class_name,
           bbox: item.bbox,
+          template_name: item.template_name,
           source: "template",
           created_at: createdAt,
           score: item.score,
@@ -1755,10 +1813,6 @@ export default function App() {
         autoMethod,
         autoClassFilter: [...autoClassFilter],
         autoStride,
-        scaleMin,
-        scaleMax,
-        scaleSteps,
-        roiSize,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto annotate failed");
@@ -1871,12 +1925,19 @@ export default function App() {
       setTemplatePreviewBase64(null);
       return;
     }
-    const candidate = candidates.find((c) => c.id === selectedCandidateId);
-    if (!candidate || !project) {
+    if (!project) {
       setTemplatePreviewBase64(null);
       return;
     }
-    const cacheKey = `${project}::${candidate.class_name}::${candidate.template}`;
+    const candidate = candidates.find((c) => c.id === selectedCandidateId);
+    const annotation = annotations.find((a) => a.id === selectedAnnotationId) || null;
+    const className = candidate?.class_name || annotation?.class_name;
+    const templateName = candidate?.template || annotation?.template_name;
+    if (!className || !templateName) {
+      setTemplatePreviewBase64(null);
+      return;
+    }
+    const cacheKey = `${project}::${className}::${templateName}`;
     const cached = templatePreviewCacheRef.current.get(cacheKey);
     if (cached) {
       setTemplatePreviewBase64(cached);
@@ -1884,7 +1945,7 @@ export default function App() {
     }
     setTemplatePreviewBase64(null);
     let cancelled = false;
-    fetchTemplatePreview(project, candidate.class_name, candidate.template)
+    fetchTemplatePreview(project, className, templateName)
       .then((res) => {
         if (cancelled) return;
         if (res?.base64) {
@@ -1900,7 +1961,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [showDebug, selectedCandidateId, candidates, project]);
+  }, [showDebug, selectedCandidateId, selectedAnnotationId, candidates, annotations, project]);
 
   useEffect(() => {
     if (!project || classOptions.length === 0) {
@@ -1924,6 +1985,8 @@ export default function App() {
   const openTemplateGallery = async (className: string) => {
     if (!project) return;
     setTemplateGalleryOpen(true);
+    setTemplateGalleryPreviewName(null);
+    setTemplateGalleryPreviewNaturalSize(null);
     setTemplateGalleryClassName(className);
     setTemplateGalleryItems([]);
     setTemplateGalleryLoading(true);
@@ -1936,6 +1999,14 @@ export default function App() {
     } finally {
       setTemplateGalleryLoading(false);
     }
+  };
+  const closeTemplatePreview = () => {
+    setTemplateGalleryPreviewName(null);
+    setTemplateGalleryPreviewNaturalSize(null);
+  };
+  const closeTemplateGallery = () => {
+    closeTemplatePreview();
+    setTemplateGalleryOpen(false);
   };
 
   useEffect(() => {
@@ -2014,23 +2085,40 @@ export default function App() {
     const baseline = {
       roiSize: typeof saved?.roiSize === "number" ? saved.roiSize : DEFAULT_ROI_SIZE,
       topk: typeof saved?.topk === "number" ? saved.topk : DEFAULT_TOPK,
+      shapeRatioThreshold:
+        typeof saved?.shapeRatioThreshold === "number"
+          ? saved.shapeRatioThreshold
+          : DEFAULT_SHAPE_RATIO_THRESHOLD,
       scaleMin: typeof saved?.scaleMin === "number" ? saved.scaleMin : DEFAULT_SCALE_MIN,
-      scaleMax: typeof saved?.scaleMax === "number" ? saved.scaleMax : DEFAULT_SCALE_MAX,
+      scaleMax:
+        typeof saved?.scaleMax === "number"
+          ? Math.min(saved.scaleMax, DEFAULT_SCALE_MAX)
+          : DEFAULT_SCALE_MAX,
       scaleSteps:
         typeof saved?.scaleSteps === "number" ? saved.scaleSteps : DEFAULT_SCALE_STEPS,
-      excludeEnabled: typeof saved?.excludeEnabled === "boolean" ? saved.excludeEnabled : true,
+      excludeEnabled:
+        typeof saved?.excludeEnabled === "boolean"
+          ? saved.excludeEnabled
+          : DEFAULT_EXCLUDE_ENABLED,
       excludeMode:
         saved?.excludeMode === "same_class" || saved?.excludeMode === "any_class"
           ? saved.excludeMode
-          : "same_class",
-      excludeCenter: typeof saved?.excludeCenter === "boolean" ? saved.excludeCenter : true,
+          : DEFAULT_EXCLUDE_MODE,
+      excludeCenter:
+        typeof saved?.excludeCenter === "boolean"
+          ? saved.excludeCenter
+          : DEFAULT_EXCLUDE_CENTER,
       excludeIouThreshold:
-        typeof saved?.excludeIouThreshold === "number" ? saved.excludeIouThreshold : 0.6,
-      refineContour: typeof saved?.refineContour === "boolean" ? saved.refineContour : false,
+        typeof saved?.excludeIouThreshold === "number"
+          ? saved.excludeIouThreshold
+          : DEFAULT_EXCLUDE_IOU_THRESHOLD,
+      refineContour:
+        typeof saved?.refineContour === "boolean" ? saved.refineContour : DEFAULT_REFINE_CONTOUR,
     };
     setAdvancedBaseline(baseline);
     setRoiSize(baseline.roiSize);
     setTopk(baseline.topk);
+    setShapeRatioThreshold(baseline.shapeRatioThreshold);
     setScaleMin(baseline.scaleMin);
     setScaleMax(baseline.scaleMax);
     setScaleSteps(baseline.scaleSteps);
@@ -2044,23 +2132,23 @@ export default function App() {
   useEffect(() => {
     if (!datasetId) return;
     const saved = loadAutoSettingsForProject(datasetId);
+    const hasSavedClassFilter = Array.isArray(saved?.autoClassFilter);
+    const savedMethod = saved?.autoMethod ?? DEFAULT_AUTO_METHOD;
     const baseline = {
       autoThreshold:
-        typeof saved?.autoThreshold === "number" ? saved.autoThreshold : 0.7,
-      autoMethod: saved?.autoMethod ? saved.autoMethod : "combined",
-      autoClassFilter: Array.isArray(saved?.autoClassFilter) ? saved.autoClassFilter : [],
+        typeof saved?.autoThreshold === "number"
+          ? saved.autoThreshold
+          : DEFAULT_AUTO_THRESHOLD_BY_METHOD[savedMethod],
+      autoMethod: savedMethod,
+      autoClassFilter: hasSavedClassFilter ? (saved?.autoClassFilter ?? []) : classOptions,
       autoStride: null,
-      scaleMin,
-      scaleMax,
-      scaleSteps,
-      roiSize,
     };
-      setAutoBaseline(baseline);
-      setAutoThreshold(baseline.autoThreshold);
-      setAutoMethod(baseline.autoMethod);
-      setAutoClassFilter(baseline.autoClassFilter);
-      setAutoStride(baseline.autoStride);
-  }, [datasetId]);
+    setAutoBaseline(baseline);
+    setAutoThreshold(baseline.autoThreshold);
+    setAutoMethod(baseline.autoMethod);
+    setAutoClassFilter(baseline.autoClassFilter);
+    setAutoStride(baseline.autoStride);
+  }, [datasetId, classOptions]);
 
   useEffect(() => {
     if (!datasetId) return;
@@ -2069,6 +2157,7 @@ export default function App() {
     datasetId,
     roiSize,
     topk,
+    shapeRatioThreshold,
     scaleMin,
     scaleMax,
     scaleSteps,
@@ -2410,6 +2499,63 @@ export default function App() {
           color: #607d8b;
           min-width: 28px;
           text-align: right;
+        }
+        .dualRangeInput {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          background: transparent;
+          pointer-events: none;
+          position: absolute;
+          inset: 0;
+        }
+        .dualRangeInput::-webkit-slider-runnable-track {
+          height: 4px;
+          background: transparent;
+        }
+        .dualRangeInput::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 16px;
+          height: 16px;
+          border-radius: 5px;
+          background:
+            radial-gradient(circle at center, #ffffff 0 2px, transparent 2px),
+            linear-gradient(180deg, #66a1ff 0%, #2b74ff 100%);
+          border: 1px solid #ffffff;
+          box-shadow: 0 1px 4px rgba(19, 53, 117, 0.35), 0 0 0 1px rgba(43, 116, 255, 0.35);
+          margin-top: -10px;
+          pointer-events: auto;
+          cursor: pointer;
+          transition: transform 120ms ease, box-shadow 120ms ease;
+        }
+        .dualRangeInput::-moz-range-track {
+          height: 4px;
+          background: transparent;
+        }
+        .dualRangeInput::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border-radius: 5px;
+          background:
+            radial-gradient(circle at center, #ffffff 0 2px, transparent 2px),
+            linear-gradient(180deg, #66a1ff 0%, #2b74ff 100%);
+          border: 1px solid #ffffff;
+          box-shadow: 0 1px 4px rgba(19, 53, 117, 0.35), 0 0 0 1px rgba(43, 116, 255, 0.35);
+          transform: translateY(-4px);
+          pointer-events: auto;
+          cursor: pointer;
+          transition: transform 120ms ease, box-shadow 120ms ease;
+        }
+        .dualRangeInput:active::-webkit-slider-thumb {
+          transform: scale(1.06);
+          box-shadow: 0 2px 6px rgba(19, 53, 117, 0.45), 0 0 0 2px rgba(43, 116, 255, 0.4);
+        }
+        .dualRangeInput:active::-moz-range-thumb {
+          transform: scale(1.06);
+          box-shadow: 0 2px 6px rgba(19, 53, 117, 0.45), 0 0 0 2px rgba(43, 116, 255, 0.4);
         }
         .rightPanel .numInput {
           width: 84px !important;
@@ -3049,7 +3195,7 @@ export default function App() {
       {templateGalleryOpen && (
         <>
           <div
-            onClick={() => setTemplateGalleryOpen(false)}
+            onClick={closeTemplateGallery}
             style={{
               position: "fixed",
               inset: 0,
@@ -3086,17 +3232,17 @@ export default function App() {
                 background: "rgba(255,255,255,0.18)",
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#f8fbff", textShadow: "0 1px 2px rgba(0,0,0,0.35)" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: templateGalleryTextColor }}>
                 テンプレート一覧: {templateGalleryClassName}
               </div>
               <button
                 type="button"
-                onClick={() => setTemplateGalleryOpen(false)}
+                onClick={closeTemplateGallery}
                 className="btn btnGhost"
                 style={{
                   height: 30,
                   padding: "0 10px",
-                  color: "#f8fbff",
+                  color: templateGalleryTextColor,
                   borderColor: "rgba(255,255,255,0.5)",
                   background: "rgba(255,255,255,0.12)",
                 }}
@@ -3106,7 +3252,7 @@ export default function App() {
             </div>
             <div style={{ padding: 14, overflowY: "auto" }}>
               {templateGalleryLoading ? (
-                <div style={{ color: "#f8fbff", fontSize: 13 }}>読み込み中...</div>
+                <div style={{ color: templateGalleryTextColor, fontSize: 13 }}>読み込み中...</div>
               ) : (
                 <div
                   style={{
@@ -3115,9 +3261,9 @@ export default function App() {
                     gap: 10,
                   }}
                 >
-                  {templateGalleryItems.map((templateName, idx) => (
+                  {templateGalleryItems.map((item, idx) => (
                     <div
-                      key={`${templateName}-${idx}`}
+                      key={`${item.name}-${idx}`}
                       style={{
                         borderRadius: 12,
                         border: "1px solid rgba(255,255,255,0.42)",
@@ -3139,39 +3285,151 @@ export default function App() {
                         }}
                       >
                         <img
-                          src={buildTemplateImageUrl(project, templateGalleryClassName, templateName)}
-                          alt={templateName}
+                          src={buildTemplateImageUrl(project, templateGalleryClassName, item.name)}
+                          alt={item.name}
+                          onClick={() => {
+                            setTemplateGalleryPreviewName(item.name);
+                            setTemplateGalleryPreviewNaturalSize(null);
+                          }}
                           style={{
                             width: "100%",
                             height: "100%",
                             objectFit: "contain",
                             opacity: 0.82,
                             filter: "contrast(1.05)",
+                            cursor: "zoom-in",
                           }}
                         />
                       </div>
-                      <div
-                        title={templateName}
-                        style={{
-                          fontSize: 11,
-                          color: "#f8fbff",
-                          textShadow: "0 1px 2px rgba(0,0,0,0.35)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {templateName}
+                      <div style={{ display: "grid", gap: 2, color: templateGalleryTextColor }}>
+                        <div
+                          title={item.name}
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.name}
+                        </div>
+                        <div style={{ fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          {item.width > 0 && item.height > 0
+                            ? `W x H : ${item.width}px X ${item.height}px`
+                            : "W x H : -"}
+                        </div>
                       </div>
                     </div>
                   ))}
                   {!templateGalleryLoading && templateGalleryItems.length === 0 && (
-                    <div style={{ color: "#f8fbff", fontSize: 12 }}>テンプレートがありません。</div>
+                    <div style={{ color: templateGalleryTextColor, fontSize: 12 }}>
+                      テンプレートがありません。
+                    </div>
                   )}
                 </div>
               )}
             </div>
           </div>
+          {templateGalleryPreviewName && (
+            <>
+              <div
+                onClick={closeTemplatePreview}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(8, 14, 26, 0.48)",
+                  backdropFilter: "blur(4px)",
+                  zIndex: 90,
+                }}
+              />
+              <div
+                style={{
+                  position: "fixed",
+                  inset: "8vh 8vw",
+                  borderRadius: 14,
+                  border: "1px solid rgba(255,255,255,0.45)",
+                  background: "rgba(255,255,255,0.14)",
+                  boxShadow: "0 16px 36px rgba(8, 18, 32, 0.4)",
+                  backdropFilter: "blur(10px)",
+                  zIndex: 91,
+                  display: "grid",
+                  gridTemplateRows: "auto 1fr",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "10px 12px",
+                    borderBottom: "1px solid rgba(255,255,255,0.35)",
+                    color: templateGalleryPreviewTextColor,
+                  }}
+                >
+                  <span
+                    title={templateGalleryPreviewName}
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {templateGalleryPreviewName}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    onClick={closeTemplatePreview}
+                    style={{
+                      height: 28,
+                      padding: "0 10px",
+                      color: templateGalleryPreviewTextColor,
+                      borderColor: "rgba(255,255,255,0.5)",
+                      background: "rgba(255,255,255,0.12)",
+                      boxShadow: "none",
+                    }}
+                  >
+                    閉じる
+                  </button>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 14,
+                    minHeight: 0,
+                  }}
+                >
+                  <img
+                    src={buildTemplateBinaryImageUrl(project, templateGalleryClassName, templateGalleryPreviewName)}
+                    alt={templateGalleryPreviewName}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setTemplateGalleryPreviewNaturalSize({
+                        w: img.naturalWidth || 0,
+                        h: img.naturalHeight || 0,
+                      });
+                    }}
+                    style={{
+                      width: previewImageBoostStyle.width,
+                      height: previewImageBoostStyle.height,
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      opacity: 0.92,
+                      filter: "contrast(1.06)",
+                      imageRendering: "pixelated",
+                    }}
+                  />
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -3349,8 +3607,21 @@ export default function App() {
             {error && (
               <div style={{ marginBottom: 12, color: "#b00020" }}>Error: {error}</div>
             )}
-            <div style={{ flex: "1 1 auto", minHeight: 0 }}>
-              <div style={{ position: "relative", height: "100%", minHeight: 0 }}>
+            <div
+              style={{
+                flex: "1 1 auto",
+                minHeight: 0,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  position: "relative",
+                  height: "100%",
+                  minHeight: 0,
+                  width: "100%",
+                }}
+              >
                 <ImageCanvas
                   ref={canvasRef}
                   imageUrl={imageUrl}
@@ -3604,10 +3875,67 @@ export default function App() {
             <div className="sectionCard">
               <div
                 style={{
-                  display: "flex",
-                  gap: 8,
+                  marginBottom: 8,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: "transparent",
+                  display: "grid",
+                  gap: 6,
                 }}
               >
+                <div style={{ display: "grid", gap: 4 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#0b3954" }}>クリック検出ステータス</span>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      alignItems: "center",
+                      columnGap: 12,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: "#35506b",
+                    }}
+                  >
+                    <span
+                      title={activeDetectedCandidate?.class_name || "なし"}
+                      style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                    >
+                      <span>class : </span>
+                      <span
+                        style={{
+                          color: activeDetectedClassColor,
+                          fontSize: 15,
+                          textShadow:
+                            "-0.5px 0 rgba(0,0,0,0.75), 0.5px 0 rgba(0,0,0,0.75), 0 -0.5px rgba(0,0,0,0.75), 0 0.5px rgba(0,0,0,0.75), 0 1px 2px rgba(255,255,255,0.85)",
+                        }}
+                      >
+                        {activeDetectedCandidate?.class_name || ""}
+                      </span>
+                    </span>
+                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", justifySelf: "start" }}>
+                      <span>conf : </span>
+                      <span
+                        style={{
+                          color: activeDetectedClassColor,
+                          fontSize: 15,
+                          textShadow:
+                            "-0.5px 0 rgba(0,0,0,0.75), 0.5px 0 rgba(0,0,0,0.75), 0 -0.5px rgba(0,0,0,0.75), 0 0.5px rgba(0,0,0,0.75), 0 1px 2px rgba(255,255,255,0.85)",
+                        }}
+                      >
+                        {activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
+                          ? activeDetectedCandidate.score.toFixed(3)
+                          : ""}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    marginTop: 2,
+                  }}
+                >
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                   <button
                     type="button"
@@ -3704,6 +4032,7 @@ export default function App() {
                     </span>
                   </button>
                 </div>
+                </div>
               </div>
             </div>
             <div className="sectionCard">
@@ -3733,110 +4062,7 @@ export default function App() {
               </button>
               {showCommonSettings && (
               <>
-              <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }}>
-                <div
-                  role="button"
-                  aria-pressed={showCandidates}
-                  onClick={() => setShowCandidates((prev) => !prev)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr auto auto",
-                    alignItems: "center",
-                    gap: 10,
-                    height: 28,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ fontSize: 12, color: "#455a64" }}>未確定候補を表示</span>
-                  <span
-                    style={{
-                      width: 34,
-                      height: 18,
-                      borderRadius: 999,
-                      background: showCandidates ? "#1a73e8" : "#cfd8dc",
-                      position: "relative",
-                      transition: "background 120ms ease",
-                      display: "inline-block",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 14,
-                        height: 14,
-                        borderRadius: "50%",
-                        background: "#fff",
-                        position: "absolute",
-                        top: 2,
-                        left: showCandidates ? 18 : 2,
-                        transition: "left 120ms ease",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                      }}
-                    />
-                  </span>
-                  <span
-                    style={{
-                      width: 28,
-                      textAlign: "right",
-                      fontSize: 11,
-                      color: showCandidates ? "#455a64" : "#90a4ae",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {showCandidates ? "ON" : "OFF"}
-                  </span>
-                </div>
-                <div
-                  role="button"
-                  aria-pressed={showAnnotations}
-                  onClick={() => setShowAnnotations((prev) => !prev)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr auto auto",
-                    alignItems: "center",
-                    gap: 10,
-                    height: 28,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ fontSize: 12, color: "#455a64" }}>確定アノテーションを表示</span>
-                  <span
-                    style={{
-                      width: 34,
-                      height: 18,
-                      borderRadius: 999,
-                      background: showAnnotations ? "#2e7d32" : "#cfd8dc",
-                      position: "relative",
-                      transition: "background 120ms ease",
-                      display: "inline-block",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 14,
-                        height: 14,
-                        borderRadius: "50%",
-                        background: "#fff",
-                        position: "absolute",
-                        top: 2,
-                        left: showAnnotations ? 18 : 2,
-                        transition: "left 120ms ease",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                      }}
-                    />
-                  </span>
-                  <span
-                    style={{
-                      width: 28,
-                      textAlign: "right",
-                      fontSize: 11,
-                      color: showAnnotations ? "#455a64" : "#90a4ae",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {showAnnotations ? "ON" : "OFF"}
-                  </span>
-                </div>
-              </div>
+              <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }} />
               <div
                 style={{
                   marginBottom: 10,
@@ -3844,229 +4070,91 @@ export default function App() {
                   borderBottom: "1px dashed #e0e0e0",
                 }}
               >
-                <div className="formRow">
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
-                  <div className="controlWrap">
-                    <NumericInputWithButtons
-                      value={roiSize}
-                      onChange={(v) => typeof v === "number" && setRoiSize(v)}
-                      min={10}
-                      step={10}
-                      height={32}
-                      inputWidth={84}
-                      ariaLabel="roi size"
-                      className="controlWrap"
-                      inputClassName="numInput"
-                      buttonClassName="stepBtn"
-                    />
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "104px 1fr",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
+                    <div className="controlWrap" style={{ justifyContent: "flex-end" }}>
+                      <NumericInputWithButtons
+                        value={roiSize}
+                        onChange={(v) => typeof v === "number" && setRoiSize(v)}
+                        min={10}
+                        step={10}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="roi size"
+                        className="controlWrap"
+                        inputClassName="numInput"
+                        buttonClassName="stepBtn"
+                      />
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "104px 1fr",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
                     <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+                    <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                      <span className="badge">推奨 200–600</span>
+                      {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
+                      {roiDanger && <span className="badge badgeDanger">Danger</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 4, marginTop: 6, marginBottom: 8 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "104px 1fr",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>形状一致率</span>
+                    <div className="controlWrap" title="±0.05" style={{ justifyContent: "flex-end" }}>
+                      <NumericInputWithButtons
+                        value={shapeRatioThreshold}
+                        onChange={(v) =>
+                          typeof v === "number" && setShapeRatioThreshold(v)
+                        }
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        height={32}
+                        inputWidth={84}
+                        ariaLabel="shape ratio threshold"
+                        placeholder="推奨 0.5–0.7"
+                        className="controlWrap"
+                        inputClassName="numInput"
+                        buttonClassName="stepBtn"
+                      />
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "104px 1fr",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span />
+                    <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                      <span className="badge">推奨 0.5–0.7</span>
+                    </div>
                   </div>
                 </div>
               </div>
-              {classOptions.length > 0 && (
-                <div style={{ marginBottom: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowClassColors((prev) => !prev)}
-                    className="btn btnGhost"
-                    style={{ width: "auto", height: 32, marginBottom: 8 }}
-                  >
-                    {showClassColors ? "▼ クラス別カラー" : "▶︎ クラス別カラー"}
-                  </button>
-                  {showClassColors && (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                        gap: 8,
-                        maxHeight: 380,
-                        overflowY: "auto",
-                        padding: 6,
-                        borderRadius: 8,
-                        border: "1px solid #eceff1",
-                        background: "#fcfcfc",
-                      }}
-                    >
-                      <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          className="btn btnGhost"
-                          style={{ height: 24, padding: "0 10px", fontSize: 10 }}
-                          onClick={() => {
-                            const allEnabled =
-                              classOptions.length > 0 &&
-                              classOptions.every((name) => autoClassFilter.includes(name));
-                            setAutoClassFilter(allEnabled ? [] : [...classOptions]);
-                          }}
-                        >
-                          全検出 {classOptions.length > 0 && classOptions.every((name) => autoClassFilter.includes(name)) ? "OFF" : "ON"}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btnGhost"
-                          style={{
-                            height: 24,
-                            padding: "0 10px",
-                            fontSize: 10,
-                            borderColor: classCardFilter === "enabled" ? "var(--primary)" : "var(--border)",
-                            color: classCardFilter === "enabled" ? "var(--primary)" : "inherit",
-                          }}
-                          onClick={() =>
-                            setClassCardFilter((prev) => (prev === "all" ? "enabled" : "all"))
-                          }
-                        >
-                          表示 {classCardFilter === "all" ? "全件" : "検出のみ"}
-                        </button>
-                      </div>
-                      {asChildren(
-                        classOptions
-                          .filter((name) =>
-                            classCardFilter === "all" ? true : autoClassFilter.includes(name)
-                          )
-                          .map((name, idx) => {
-                          const currentColor = colorMap[name] || "#4f6bed";
-                          const hexColor = normalizeToHex(currentColor);
-                          const enabled = autoClassFilter.includes(name);
-                          const preview = templateClassPreviews[name];
-                          const stat = classAnnotationStats[name] || { count: 0, minScore: null, maxScore: null };
-                          const confidenceLabel =
-                            stat.minScore === null || stat.maxScore === null
-                              ? "-"
-                              : `${stat.minScore.toFixed(3)} ~ ${stat.maxScore.toFixed(3)}`;
-                          return (
-                            <div
-                              key={`class-card-${name}-${idx}`}
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "18px 56px 1fr auto",
-                                alignItems: "center",
-                                gap: 8,
-                                minHeight: 72,
-                                padding: "8px 10px",
-                                border: enabled ? "1px solid #1a73e8" : "1px solid #e3e3e3",
-                                borderRadius: 8,
-                                background: enabled ? "#eef6ff" : "#fff",
-                                fontSize: 11,
-                                textAlign: "left",
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={enabled}
-                                onChange={(e) => {
-                                  const checked = e.target.checked;
-                                  if (checked) {
-                                    setAutoClassFilter((prev) =>
-                                      prev.includes(name) ? prev : [...prev, name]
-                                    );
-                                  } else {
-                                    setAutoClassFilter((prev) => prev.filter((c) => c !== name));
-                                  }
-                                }}
-                                aria-label={`${name} を検出対象にする`}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void openTemplateGallery(name)}
-                                style={{
-                                  width: 56,
-                                  height: 56,
-                                  borderRadius: 6,
-                                  overflow: "hidden",
-                                  border: "1px solid #e6e6e6",
-                                  background: "#f4f4f4",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  cursor: "pointer",
-                                  padding: 0,
-                                }}
-                                title={`${name} のテンプレート一覧を表示`}
-                              >
-                                {preview ? (
-                                  <img
-                                    src={`data:image/png;base64,${preview}`}
-                                    alt={name}
-                                    style={{ width: "100%", height: "100%", objectFit: "contain", background: "#fff" }}
-                                  />
-                                ) : (
-                                  <span style={{ fontSize: 9, color: "#777" }}>No Img</span>
-                                )}
-                              </button>
-                              <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "baseline",
-                                    gap: 8,
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <span
-                                    style={{
-                                      fontSize: 13,
-                                      fontWeight: 700,
-                                      color: "#0b1f3a",
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    {name}
-                                  </span>
-                                  <span
-                                    style={{
-                                      fontSize: 12,
-                                      fontWeight: 600,
-                                      color: enabled ? "#1a73e8" : "#666",
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    {enabled ? "検出ON" : "検出OFF"}
-                                  </span>
-                                </div>
-                                <span style={{ fontSize: 12, color: "#607d8b" }}>
-                                  確定: {stat.count}, 確信度: {confidenceLabel}
-                                </span>
-                              </div>
-                              <input
-                                type="color"
-                                value={hexColor}
-                                onChange={(e) =>
-                                  setColorMap((prev) => ({ ...prev, [name]: e.target.value }))
-                                }
-                                style={{ width: 24, height: 24, padding: 0, border: "none", cursor: "pointer" }}
-                                title={`${name} の色`}
-                              />
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div style={{ marginTop: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced((prev) => !prev)}
-                  className="btn btnGhost"
-                  style={{
-                    width: "100%",
-                    height: 32,
-                    textAlign: "left",
-                    display: "flex",
-                    justifyContent: "flex-start",
-                    alignItems: "center",
-                    background: showAdvanced ? "var(--panel2)" : "transparent",
-                    borderColor: showAdvanced ? "var(--primary)" : "var(--border)",
-                    color: showAdvanced ? "var(--primary)" : "inherit",
-                  }}
-                >
-                  {showAdvanced ? "▼ 詳細設定" : "▶︎ 詳細設定"}
-                </button>
-              </div>
-              {showAdvanced && (
                 <div
                   style={{
                     marginTop: 8,
@@ -4076,8 +4164,51 @@ export default function App() {
                     border: "1px solid #c8d6ff",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>検出パラメータ</div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 6,
+                      background: "#dfe8ff",
+                      borderRadius: 8,
+                      padding: 4,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 30,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        background: advancedTab === "params" ? "#fff" : "transparent",
+                        borderColor: advancedTab === "params" ? "#a9c3ff" : "transparent",
+                        color: advancedTab === "params" ? "#1f4fbf" : "#546e7a",
+                      }}
+                      onClick={() => setAdvancedTab("params")}
+                    >
+                      検出パラメータ
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 30,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        background: advancedTab === "classes" ? "#fff" : "transparent",
+                        borderColor: advancedTab === "classes" ? "#a9c3ff" : "transparent",
+                        color: advancedTab === "classes" ? "#1f4fbf" : "#546e7a",
+                      }}
+                      onClick={() => setAdvancedTab("classes")}
+                    >
+                      クラス別カラー
+                    </button>
+                  </div>
+                  {advancedTab === "params" && (
+                  <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 6 }}>
                     {advancedDirty && advancedBaseline && (
                       <button
                         type="button"
@@ -4086,6 +4217,7 @@ export default function App() {
                         onClick={() => {
                           setRoiSize(advancedBaseline.roiSize);
                           setTopk(advancedBaseline.topk);
+                          setShapeRatioThreshold(advancedBaseline.shapeRatioThreshold);
                           setScaleMin(advancedBaseline.scaleMin);
                           setScaleMax(advancedBaseline.scaleMax);
                           setScaleSteps(advancedBaseline.scaleSteps);
@@ -4100,112 +4232,400 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  <div className="formRow" style={{ marginBottom: 6, alignItems: "start" }}>
-                    <span style={{ fontSize: 12, paddingTop: 4 }}>スケール</span>
-                    <div className="controlStack">
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                        <NumericInputWithButtons
-                          value={scaleMin}
-                          onChange={(v) => typeof v === "number" && setScaleMin(v)}
-                          min={0.1}
-                          step={0.1}
-                          height={32}
-                          inputWidth={84}
-                          ariaLabel="scale min"
-                          placeholder="推奨 0.4–0.8"
-                          className="controlWrap"
-                          inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
-                          buttonClassName="stepBtn"
-                        />
-                        <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
+                  <div
+                    style={{
+                      border: "1px solid #d6e0f3",
+                      borderRadius: 10,
+                      background: "#ffffff",
+                      padding: "10px 10px 8px",
+                      display: "grid",
+                      gap: 8,
+                    }}
+                  >
+                  <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>スケール</div>
+                    <div style={{ position: "relative", width: "100%", maxWidth: 320, height: 44, marginTop: 2 }}>
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: `${((scaleMin - 0.1) / (3.0 - 0.1)) * 100}%`,
+                          transform: "translateX(-50%)",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "#35506b",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        min {scaleMin.toFixed(1)}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                        <NumericInputWithButtons
-                          value={scaleMax}
-                          onChange={(v) => typeof v === "number" && setScaleMax(v)}
-                          min={0.1}
-                          step={0.1}
-                          height={32}
-                          inputWidth={84}
-                          ariaLabel="scale max"
-                          placeholder="推奨 1.2–2.0"
-                          className="controlWrap"
-                          inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
-                          buttonClassName="stepBtn"
-                        />
-                        <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: `${((scaleMax - 0.1) / (3.0 - 0.1)) * 100}%`,
+                          transform: "translateX(-50%)",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "#35506b",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        max {scaleMax.toFixed(1)}
                       </div>
-                      <div className="hintText">
-                        <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
-                        <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
-                        {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
-                          <span className="badge badgeDanger">注意</span>
-                        )}
-                        {(scaleMinDanger || scaleMaxDanger) && (
-                          <span className="badge badgeDanger">Danger</span>
-                        )}
-                      </div>
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          right: 0,
+                          top: 36,
+                          height: 4,
+                          borderRadius: 999,
+                          background: "#d7deea",
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: `${((scaleMin - 0.1) / (3.0 - 0.1)) * 100}%`,
+                          width: `${Math.max(0, ((scaleMax - scaleMin) / (3.0 - 0.1)) * 100)}%`,
+                          top: 36,
+                          height: 4,
+                          borderRadius: 999,
+                          background: "#2b74ff",
+                        }}
+                      />
+                      <input
+                        className="dualRangeInput"
+                        type="range"
+                        min={0.1}
+                        max={3.0}
+                        step={0.1}
+                        value={scaleMin}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          setScaleMin(Math.min(next, scaleMax));
+                        }}
+                        aria-label="scale min"
+                        style={{ zIndex: scaleMin > 2.6 ? 5 : 3, inset: "20px 0 0 0" }}
+                      />
+                      <input
+                        className="dualRangeInput"
+                        type="range"
+                        min={0.1}
+                        max={3.0}
+                        step={0.1}
+                        value={scaleMax}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          setScaleMax(Math.max(next, scaleMin));
+                        }}
+                        aria-label="scale max"
+                        style={{ zIndex: 4, inset: "20px 0 0 0" }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          (scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger
+                            ? "1fr auto auto"
+                            : (scaleMinDanger || scaleMaxDanger)
+                              ? "1fr auto auto"
+                              : "1fr auto",
+                        alignItems: "center",
+                        gap: 6,
+                        marginTop: 2,
+                      }}
+                    >
+                      <span />
+                      <span
+                        className="badge"
+                        style={{
+                          justifySelf: "end",
+                          whiteSpace: "normal",
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        推奨 min 0.4–0.8 / max 1.2–2.0
+                      </span>
+                      {((scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger) ||
+                      (scaleMinDanger || scaleMaxDanger) ? (
+                        <div style={{ display: "flex", justifyContent: "flex-end", minWidth: 56 }}>
+                          {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
+                            <span className="badge badgeDanger">注意</span>
+                          )}
+                          {(scaleMinDanger || scaleMaxDanger) && (
+                            <span className="badge badgeDanger">Danger</span>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="formRow" style={{ marginBottom: 8 }}>
                     <span style={{ fontSize: 12 }}>分割</span>
-                    <div className="controlWrap" title="±1">
-                      <NumericInputWithButtons
-                        value={scaleSteps}
-                        onChange={(v) => typeof v === "number" && setScaleSteps(v)}
-                        min={1}
-                        step={1}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="scale steps"
-                        placeholder="推奨 6–12"
-                        className="controlWrap"
-                        inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
-                        buttonClassName="stepBtn"
-                      />
-                      <span className="badge">推奨 6–12</span>
-                      <span className="badge badgeWarn">危険 &gt;20</span>
-                      {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
-                      {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
+                    <div style={{ width: "100%", display: "grid", gap: 6 }}>
+                      <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
+                        <input
+                          type="range"
+                          min={1}
+                          max={20}
+                          step={1}
+                          value={scaleSteps}
+                          onChange={(e) => setScaleSteps(Number(e.target.value))}
+                          style={{ flex: "1 1 120px", width: "100%", maxWidth: 180 }}
+                          aria-label="scale steps"
+                        />
+                        <span
+                          className={`badge ${scaleStepsDanger ? "badgeDanger" : scaleStepsWarn ? "badgeWarn" : ""}`}
+                          style={{ minWidth: 36, textAlign: "center", fontVariantNumeric: "tabular-nums" }}
+                        >
+                          {scaleSteps}
+                        </span>
+                      </div>
+                      <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                        <span className="badge">推奨 6–12</span>
+                        {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
+                        {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
+                      </div>
                     </div>
                   </div>
                   <div className="formRow" style={{ marginBottom: 6 }}>
                     <span style={{ fontSize: 12 }}>上位件数</span>
-                    <div className="controlWrap" title="±1">
-                      <NumericInputWithButtons
-                        value={topk}
-                        onChange={(v) => typeof v === "number" && setTopk(v)}
+                    <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
+                      <input
+                        type="range"
                         min={1}
                         max={3}
                         step={1}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="topk"
-                        placeholder="推奨 1–5"
-                        className="controlWrap"
-                        inputClassName={`numInput ${topkDanger ? "dangerInput" : topkWarn ? "warnInput" : ""}`}
-                        buttonClassName="stepBtn"
+                        value={topk}
+                        onChange={(e) => setTopk(Number(e.target.value))}
+                        style={{ flex: "1 1 120px", width: "100%", maxWidth: 180 }}
+                        aria-label="topk"
                       />
+                      <span
+                        className={`badge ${topkDanger ? "badgeDanger" : topkWarn ? "badgeWarn" : ""}`}
+                        style={{ minWidth: 36, textAlign: "center", fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {topk}
+                      </span>
                     </div>
                   </div>
+                  <div
+                    role="button"
+                    aria-pressed={showCandidates}
+                    onClick={() => setShowCandidates((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>未確定候補を表示</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: showCandidates ? "#1a73e8" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: showCandidates ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: showCandidates ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {showCandidates ? "ON" : "OFF"}
+                    </span>
+                  </div>
+                  <div
+                    role="button"
+                    aria-pressed={showAnnotations}
+                    onClick={() => setShowAnnotations((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>確定アノテーションを表示</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: showAnnotations ? "#2e7d32" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: showAnnotations ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: showAnnotations ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {showAnnotations ? "ON" : "OFF"}
+                    </span>
+                  </div>
                   <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                    <input
-                      type="checkbox"
-                      checked={excludeEnabled}
-                      onChange={(e) => setExcludeEnabled(e.target.checked)}
-                    />
-                    <span style={{ fontSize: 12 }}>確定BBoxを除外</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                    <input
-                      type="checkbox"
-                      checked={excludeCenter}
-                      disabled={!excludeEnabled}
-                      onChange={(e) => setExcludeCenter(e.target.checked)}
-                    />
-                    <span style={{ fontSize: 12 }}>中心点で除外</span>
-                  </label>
+                  <div
+                    role="button"
+                    aria-pressed={excludeEnabled}
+                    onClick={() => setExcludeEnabled((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>確定BBoxを除外</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: excludeEnabled ? "#1a73e8" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: excludeEnabled ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: excludeEnabled ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {excludeEnabled ? "ON" : "OFF"}
+                    </span>
+                  </div>
+                  <div
+                    role="button"
+                    aria-pressed={excludeCenter}
+                    onClick={() => {
+                      if (!excludeEnabled) return;
+                      setExcludeCenter((prev) => !prev);
+                    }}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: excludeEnabled ? "pointer" : "not-allowed",
+                      marginBottom: 6,
+                      opacity: excludeEnabled ? 1 : 0.55,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>中心点で除外</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: excludeCenter ? "#1a73e8" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: excludeCenter ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: excludeCenter ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {excludeCenter ? "ON" : "OFF"}
+                    </span>
+                  </div>
                   <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                     <span style={{ fontSize: 12, minWidth: 64 }}>除外モード</span>
                     <select
@@ -4222,23 +4642,26 @@ export default function App() {
                   </label>
                   <div className="formRow" style={{ marginBottom: 8 }}>
                     <span style={{ fontSize: 12 }}>IoU</span>
-                    <div className="controlWrap" title="±0.05">
-                      <NumericInputWithButtons
-                        value={excludeIouThreshold}
-                        onChange={(v) => typeof v === "number" && setExcludeIouThreshold(v)}
-                        min={0.4}
-                        max={0.8}
-                        step={0.05}
-                        height={32}
-                        inputWidth={84}
-                        disabled={!excludeEnabled}
-                        ariaLabel="exclude iou"
-                        placeholder="推奨 0.4–0.8"
-                        className="controlWrap"
-                        inputClassName="numInput"
-                        buttonClassName="stepBtn"
-                      />
-                      <span className="badge">推奨 0.4–0.8</span>
+                    <div style={{ width: "100%", display: "grid", gap: 6 }}>
+                      <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
+                        <input
+                          type="range"
+                          min={0.4}
+                          max={0.8}
+                          step={0.05}
+                          value={excludeIouThreshold}
+                          onChange={(e) => setExcludeIouThreshold(Number(e.target.value))}
+                          disabled={!excludeEnabled}
+                          style={{ flex: "1 1 120px", width: "100%", maxWidth: 180 }}
+                          aria-label="exclude iou"
+                        />
+                        <span style={{ minWidth: 36, textAlign: "right", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+                          {excludeIouThreshold.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                        <span className="badge">推奨 0.4–0.8</span>
+                      </div>
                     </div>
                   </div>
                   <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -4249,8 +4672,140 @@ export default function App() {
                     />
                     <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
                   </label>
+                  </div>
+                  </>
+                  )}
+                  {advancedTab === "classes" && (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="btn btnGhost"
+                              style={{ height: 28, padding: "0 10px", boxShadow: "none" }}
+                              onClick={() => {
+                                const allEnabled =
+                                  classOptions.length > 0 &&
+                                  classOptions.every((name) => autoClassFilter.includes(name));
+                                setAutoClassFilter(allEnabled ? [] : [...classOptions]);
+                              }}
+                            >
+                              全検出{" "}
+                              {classOptions.length > 0 &&
+                              classOptions.every((name) => autoClassFilter.includes(name))
+                                ? "OFF"
+                                : "ON"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btnGhost"
+                              style={{ height: 28, padding: "0 10px", boxShadow: "none" }}
+                              onClick={() =>
+                                setClassCardFilter((prev) => (prev === "all" ? "enabled" : "all"))
+                              }
+                            >
+                              表示 {classCardFilter === "all" ? "全件" : "検出のみ"}
+                            </button>
+                          </div>
+                          <div style={{ display: "grid", gap: 8, maxHeight: 440, overflowY: "auto", paddingRight: 2 }}>
+                            {asChildren(
+                              classOptions
+                                .filter((name) =>
+                                  classCardFilter === "enabled"
+                                    ? autoClassFilter.includes(name)
+                                    : true
+                                )
+                                .map((className) => {
+                                  const enabled = autoClassFilter.includes(className);
+                                  const stats = classAnnotationStats[className];
+                                  const scoreText =
+                                    typeof stats?.minScore === "number" &&
+                                    typeof stats?.maxScore === "number"
+                                      ? `${stats.minScore.toFixed(3)} ~ ${stats.maxScore.toFixed(3)}`
+                                      : "-";
+                                  return (
+                                    <div
+                                      key={`class-card-${className}`}
+                                      style={{
+                                        display: "grid",
+                                        gridTemplateColumns: "18px 52px 1fr 34px",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        border: "1px solid #d7e1f3",
+                                        borderRadius: 10,
+                                        background: enabled ? "#f7fbff" : "#ffffff",
+                                        padding: "8px 10px",
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={enabled}
+                                        style={{ width: 16, height: 16 }}
+                                        onChange={(e) => {
+                                          const next = e.target.checked
+                                            ? [...autoClassFilter, className]
+                                            : autoClassFilter.filter((name) => name !== className);
+                                          setAutoClassFilter(next);
+                                        }}
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => openTemplateGallery(className)}
+                                        title={`${className} のテンプレート一覧`}
+                                        style={{
+                                          width: 52,
+                                          height: 52,
+                                          borderRadius: 8,
+                                          border: "1px solid #d7deea",
+                                          background: "#fff",
+                                          padding: 0,
+                                          overflow: "hidden",
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        {templateClassPreviews[className] ? (
+                                          <img
+                                            src={`data:image/png;base64,${templateClassPreviews[className]}`}
+                                            alt={`${className} preview`}
+                                            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                                          />
+                                        ) : (
+                                          <div style={{ fontSize: 9, color: "#90a4ae" }}>no preview</div>
+                                        )}
+                                      </button>
+                                      <div style={{ display: "grid", gap: 3 }}>
+                                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1d3557", lineHeight: 1.2 }}>
+                                          {className} ({stats?.count || 0})
+                                        </div>
+                                        <div style={{ fontSize: 12, color: "#546e7a" }}>
+                                          確信度: {scoreText}
+                                        </div>
+                                      </div>
+                                      <input
+                                        type="color"
+                                        value={colorMap[className] || "#7aa2ff"}
+                                        onChange={(e) => {
+                                          const next = normalizeToHex(e.target.value);
+                                          setColorMap((prev) => ({ ...prev, [className]: next }));
+                                        }}
+                                        style={{
+                                          width: 28,
+                                          height: 28,
+                                          padding: 0,
+                                          border: "1px solid #d0d7e6",
+                                          borderRadius: 6,
+                                          background: "#fff",
+                                        }}
+                                      />
+                                    </div>
+                                  );
+                                })
+                            )}
+                          </div>
+                      </>
+                    </div>
+                  )}
                 </div>
-              )}
               <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e3e3e3" }}>
                 <button
                   type="button"
@@ -4406,7 +4961,7 @@ export default function App() {
                                 display: "block",
                               }}
                             />
-                            {selectedCandidate?.class_name && (
+                            {(selectedCandidate?.class_name || selectedAnnotation?.class_name) && (
                               <div
                                 style={{
                                   position: "absolute",
@@ -4419,10 +4974,10 @@ export default function App() {
                                   fontSize: 10,
                                 }}
                               >
-                                {selectedCandidate.class_name}
+                                {selectedCandidate?.class_name || selectedAnnotation?.class_name}
                               </div>
                             )}
-                            {typeof selectedCandidate?.score === "number" && (
+                            {typeof (selectedCandidate?.score ?? selectedAnnotation?.score) === "number" && (
                               <div
                                 style={{
                                   position: "absolute",
@@ -4436,7 +4991,7 @@ export default function App() {
                                   fontVariantNumeric: "tabular-nums",
                                 }}
                               >
-                                {selectedCandidate.score.toFixed(3)}
+                                {(selectedCandidate?.score ?? selectedAnnotation?.score ?? 0).toFixed(3)}
                               </div>
                             )}
                           </div>
@@ -4526,10 +5081,6 @@ export default function App() {
                           inputClassName={`numInput ${autoThresholdDanger ? "dangerInput" : autoThresholdWarn ? "warnInput" : ""}`}
                           buttonClassName="stepBtn"
                         />
-                        <span className="badge">推奨 0.6–0.85</span>
-                        <span className="badge badgeWarn">危険 &lt;0.3</span>
-                        {autoThresholdWarn && !autoThresholdDanger && <span className="badge badgeDanger">注意</span>}
-                        {autoThresholdDanger && <span className="badge badgeDanger">Danger</span>}
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: "#607d8b" }}>
@@ -4607,33 +5158,18 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setAutoAdvancedOpen((prev) => !prev)}
+                    <div
+                      className="autoAdvanced"
                       style={{
-                        height: 28,
-                        borderRadius: 6,
-                        border: "1px dashed #b0bec5",
-                        background: "#fff",
-                        fontSize: 11,
-                        cursor: "pointer",
+                        display: "grid",
+                        gap: 8,
+                        marginTop: 2,
+                        padding: 10,
+                        borderRadius: 8,
+                        background: "#eef3ff",
+                        border: "1px solid #c8d6ff",
                       }}
                     >
-                      {autoAdvancedOpen ? "詳細設定を閉じる" : "詳細設定を開く"}
-                    </button>
-                    {autoAdvancedOpen && (
-                      <div
-                        className="autoAdvanced"
-                        style={{
-                          display: "grid",
-                          gap: 8,
-                          marginTop: 2,
-                          padding: 10,
-                          borderRadius: 8,
-                          background: "#eef3ff",
-                          border: "1px solid #c8d6ff",
-                        }}
-                      >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                           <div style={{ fontSize: 12, fontWeight: 600 }} />
                         </div>
@@ -4686,7 +5222,9 @@ export default function App() {
                                   type="radio"
                                   name="auto-method"
                                   checked={selected}
-                                  onChange={() => setAutoMethod(item.key as "combined" | "scaled_templates")}
+                                  onChange={() =>
+                                    applyAutoMethodDefaults(item.key as "combined" | "scaled_templates")
+                                  }
                                 />
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                                   <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
@@ -4713,75 +5251,6 @@ export default function App() {
                             );
                           })}
                         </div>
-                        <div className="formRow" style={{ alignItems: "start" }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, paddingTop: 4 }}>スケール</span>
-                          <div className="controlStack">
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                              <NumericInputWithButtons
-                                value={scaleMin}
-                                onChange={(v) => typeof v === "number" && setScaleMin(v)}
-                                min={0.1}
-                                step={0.1}
-                                height={32}
-                                inputWidth={84}
-                                ariaLabel="auto scale min"
-                                placeholder="推奨 0.4–0.8"
-                                className="controlWrap"
-                                inputClassName={`numInput ${scaleMinDanger ? "dangerInput" : scaleMinWarn ? "warnInput" : ""}`}
-                                buttonClassName="stepBtn"
-                              />
-                              <span className="miniLabel" style={{ textAlign: "center" }}>min</span>
-                            </div>
-                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }} title="±0.1">
-                              <NumericInputWithButtons
-                                value={scaleMax}
-                                onChange={(v) => typeof v === "number" && setScaleMax(v)}
-                                min={0.1}
-                                step={0.1}
-                                height={32}
-                                inputWidth={84}
-                                ariaLabel="auto scale max"
-                                placeholder="推奨 1.2–2.0"
-                                className="controlWrap"
-                                inputClassName={`numInput ${scaleMaxDanger ? "dangerInput" : scaleMaxWarn ? "warnInput" : ""}`}
-                                buttonClassName="stepBtn"
-                              />
-                              <span className="miniLabel" style={{ textAlign: "center" }}>max</span>
-                            </div>
-                            <div className="hintText">
-                              <span className="badge">推奨 min 0.4–0.8 / max 1.2–2.0</span>
-                              <span className="badge badgeWarn">危険 min&lt;0.2, max&gt;3.0</span>
-                              {(scaleMinWarn || scaleMaxWarn) && !scaleMinDanger && !scaleMaxDanger && (
-                                <span className="badge badgeDanger">注意</span>
-                              )}
-                              {(scaleMinDanger || scaleMaxDanger) && (
-                                <span className="badge badgeDanger">Danger</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="formRow">
-                          <span style={{ fontSize: 12, fontWeight: 600 }}>分割</span>
-                          <div className="controlWrap" title="±1">
-                            <NumericInputWithButtons
-                              value={scaleSteps}
-                              onChange={(v) => typeof v === "number" && setScaleSteps(v)}
-                              min={1}
-                              step={1}
-                              height={32}
-                              inputWidth={84}
-                              ariaLabel="auto scale steps"
-                              placeholder="推奨 6–12"
-                              className="controlWrap"
-                              inputClassName={`numInput ${scaleStepsDanger ? "dangerInput" : scaleStepsWarn ? "warnInput" : ""}`}
-                              buttonClassName="stepBtn"
-                            />
-                            <span className="badge">推奨 6–12</span>
-                            <span className="badge badgeWarn">危険 &gt;20</span>
-                            {scaleStepsWarn && !scaleStepsDanger && <span className="badge badgeDanger">注意</span>}
-                            {scaleStepsDanger && <span className="badge badgeDanger">Danger</span>}
-                          </div>
-                        </div>
                         <div className="formRow">
                           <span style={{ fontSize: 12, fontWeight: 600 }}>stride</span>
                           <div className="controlWrap" title="±1">
@@ -4801,37 +5270,11 @@ export default function App() {
                               />
                             </div>
                             <span className="badge">推奨 auto / 32–128</span>
-                            <span className="badge badgeWarn">危険 &lt;16 or &gt;256</span>
                             {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
                             {strideDanger && <span className="badge badgeDanger">Danger</span>}
                             {typeof autoStride === "number" && autoStride <= 0 && (
                               <span className="badge badgeDanger">入力が不正です</span>
                             )}
-                          </div>
-                        </div>
-                        <div className="formRow">
-                          <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
-                          <div className="controlWrap" title="±10">
-                            <NumericInputWithButtons
-                              value={roiSize}
-                              onChange={(v) => typeof v === "number" && setRoiSize(v)}
-                              min={10}
-                              step={10}
-                              height={32}
-                              inputWidth={84}
-                              ariaLabel="auto roi size"
-                              placeholder="推奨 200–600"
-                              className="controlWrap"
-                              inputClassName={`numInput ${roiDanger ? "dangerInput" : roiWarn ? "warnInput" : ""}`}
-                              buttonClassName="stepBtn"
-                            />
-                            <span style={{ fontSize: 11, color: "#607d8b" }}>
-                              手動/自動で共通
-                            </span>
-                            <span className="badge">推奨 200–600</span>
-                            <span className="badge badgeWarn">危険 &lt;100 or &gt;1200</span>
-                            {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
-                            {roiDanger && <span className="badge badgeDanger">Danger</span>}
                           </div>
                         </div>
                         {autoDirty && autoBaseline && (
@@ -4845,18 +5288,13 @@ export default function App() {
                                 setAutoMethod(autoBaseline.autoMethod);
                                 setAutoClassFilter(autoBaseline.autoClassFilter);
                                 setAutoStride(autoBaseline.autoStride);
-                                setScaleMin(autoBaseline.scaleMin);
-                                setScaleMax(autoBaseline.scaleMax);
-                                setScaleSteps(autoBaseline.scaleSteps);
-                                setRoiSize(autoBaseline.roiSize);
                               }}
                             >
                               Reset
                             </button>
                           </div>
                         )}
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
             </div>
@@ -4877,7 +5315,7 @@ export default function App() {
                     すべて表示
                   </option>
                   {asChildren(
-                    classOptions.map((name, idx) => (
+                    confirmedSeriesOptions.map((name, idx) => (
                       <option key={`${name}-${idx}`} value={name}>
                         {name}
                       </option>
@@ -4966,9 +5404,9 @@ export default function App() {
                       cursor: "pointer",
                       display: "grid",
                       gridTemplateColumns: "18px 1fr auto 36px",
-                      alignItems: "center",
-                      gap: 12,
-                      minHeight: 70,
+                      alignItems: "flex-start",
+                      gap: 10,
+                      minHeight: 76,
                     }}
                     onClick={() => handleSelectAnnotation(a)}
                   >
@@ -4983,8 +5421,20 @@ export default function App() {
                         setCheckedAnnotationIds(next);
                       }}
                     />
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <div style={{ display: "grid", gap: 4, gridTemplateRows: "auto auto auto" }}>
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: 12,
+                          minWidth: 0,
+                          flexWrap: "nowrap",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                        }}
+                      >
                         <span
                           style={{
                             width: 16,
@@ -4994,7 +5444,17 @@ export default function App() {
                             display: "inline-block",
                           }}
                         />
-                        <span style={{ color: "#0b1f3a" }}>{a.class_name}</span>
+                        <span
+                          style={{
+                            color: "#0b1f3a",
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            flex: "1 1 auto",
+                          }}
+                        >
+                          {a.class_name}
+                        </span>
                         <span
                           style={{
                             fontSize: 10,
@@ -5040,15 +5500,32 @@ export default function App() {
                       <div
                         style={{
                           display: "flex",
-                          justifyContent: "space-between",
-                          gap: 8,
-                          fontSize: 11,
+                          flexWrap: "nowrap",
+                          alignItems: "center",
+                          gap: 3,
+                          fontSize: 10.5,
+                          lineHeight: 1.15,
                           color: "var(--muted)",
                           fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
                         }}
                       >
-                        <span>CONF: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}</span>
-                        <span>TIME: {a.created_at ? new Date(a.created_at).toLocaleTimeString() : ""}</span>
+                        <span style={{ flex: "0 0 auto" }}>
+                          CONF: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
+                        </span>
+                        {a.template_name && (
+                          <span
+                            style={{
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              flex: "1 1 auto",
+                            }}
+                          >
+                            , Template: {a.template_name}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div style={{ textAlign: "right", justifySelf: "end" }} />

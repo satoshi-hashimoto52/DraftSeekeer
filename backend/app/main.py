@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import os
 import signal
 import threading
@@ -10,7 +10,7 @@ import subprocess
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import tempfile
 import zipfile
 from PIL import Image
@@ -488,15 +488,26 @@ def get_template_class_previews(project: str) -> Dict[str, Dict[str, Optional[st
 
 
 @app.get("/templates/{project}/{class_name}/items")
-def get_template_class_items(project: str, class_name: str) -> Dict[str, List[str]]:
+def get_template_class_items(
+    project: str, class_name: str
+) -> Dict[str, List[Dict[str, Union[int, str]]]]:
     project_templates = templates_cache.get(project)
     if project_templates is None:
         raise HTTPException(status_code=404, detail="project not found")
     class_templates = project_templates.get(class_name)
     if class_templates is None:
         raise HTTPException(status_code=404, detail="class not found")
-    names = sorted([t.template_name for t in class_templates])
-    return {"items": names}
+    items: List[Dict[str, Union[int, str]]] = []
+    for tpl in sorted(class_templates, key=lambda t: t.template_name):
+        h, w = tpl.image_gray.shape[:2]
+        items.append(
+            {
+                "name": tpl.template_name,
+                "width": int(w),
+                "height": int(h),
+            }
+        )
+    return {"items": items}
 
 
 @app.get("/templates/{project}/{class_name}/{template_name}/image")
@@ -511,6 +522,33 @@ def get_template_image(project: str, class_name: str, template_name: str) -> Fil
     if tpl is None:
         raise HTTPException(status_code=404, detail="template not found")
     return FileResponse(str(tpl.path), filename=tpl.template_name)
+
+
+@app.get("/templates/{project}/{class_name}/{template_name}/binary-image")
+def get_template_binary_image(project: str, class_name: str, template_name: str) -> Response:
+    project_templates = templates_cache.get(project)
+    if project_templates is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    class_templates = project_templates.get(class_name)
+    if class_templates is None:
+        raise HTTPException(status_code=404, detail="class not found")
+    tpl = next((t for t in class_templates if t.template_name == template_name), None)
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    gray = tpl.image_gray
+    if gray is None or getattr(gray, "size", 0) == 0:
+        raise HTTPException(status_code=500, detail="empty template image")
+    black_mask = gray < 128
+    h, w = gray.shape[:2]
+    rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    rgba[:, :, 0] = 0
+    rgba[:, :, 1] = 0
+    rgba[:, :, 2] = 0
+    rgba[:, :, 3] = np.where(black_mask, 255, 0).astype(np.uint8)
+    ok, buffer = cv2.imencode(".png", rgba)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to encode binary image")
+    return Response(content=buffer.tobytes(), media_type="image/png")
 
 
 @app.get("/dataset/projects", response_model=List[DatasetInfo])
@@ -1179,10 +1217,28 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
     elif payload.confirmed_boxes:
         confirmed = [{"bbox": b.model_dump() if hasattr(b, "model_dump") else b} for b in payload.confirmed_boxes]
 
-    matches_sorted = sorted(matches, key=lambda r: r.score, reverse=True)
-    representative: List[MatchResult] = []
+    shape_ratio_threshold = float(payload.shape_ratio_threshold)
+    # If click score_threshold is not explicitly set, keep UX simple by
+    # aligning confidence floor with shape-ratio threshold.
+    score_floor = (
+        float(payload.score_threshold)
+        if float(payload.score_threshold) >= 0.0
+        else shape_ratio_threshold
+    )
+    weighted_matches = []
+    for m in matches:
+        shape_ratio = float(getattr(m, "shape_ratio", 0.0) or 0.0)
+        if shape_ratio < shape_ratio_threshold:
+            continue
+        weighted_score = 0.55 * float(m.score) + 0.45 * shape_ratio
+        if weighted_score < score_floor:
+            continue
+        weighted_matches.append((m, weighted_score))
+
+    matches_sorted = sorted(weighted_matches, key=lambda item: item[1], reverse=True)
+    representative: List[tuple[MatchResult, float]] = []
     seen_classes = set()
-    for match in matches_sorted:
+    for match, weighted_score in matches_sorted:
         if match.class_name in seen_classes:
             continue
         if confirmed:
@@ -1198,15 +1254,15 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
                 == []
             ):
                 continue
-        representative.append(match)
+        representative.append((match, weighted_score))
         seen_classes.add(match.class_name)
-        if len(representative) >= 3:
+        if len(representative) >= payload.topk:
             break
 
     results: List[DetectResult] = [
         DetectResult(
             class_name=match.class_name,
-            score=match.score,
+            score=weighted_score,
             bbox={
                 "x": match.bbox[0],
                 "y": match.bbox[1],
@@ -1216,7 +1272,7 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             template_name=match.template_name,
             scale=match.scale,
         )
-        for match in representative
+        for match, weighted_score in representative
     ]
 
     debug = {
@@ -1228,10 +1284,10 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         "roi_edge_preview_base64": roi_edge_preview_base64,
     }
     if representative:
-        best_match = representative[0]
+        best_match, best_weighted_score = representative[0]
         match_offset_x = best_match.bbox[0] - rx0
         match_offset_y = best_match.bbox[1] - ry0
-        debug["match_score"] = best_match.score
+        debug["match_score"] = best_weighted_score
         debug["match_offset_in_roi"] = {"x": match_offset_x, "y": match_offset_y}
         debug["match_mode"] = best_match.mode
         debug["outer_bbox"] = {
@@ -1423,10 +1479,10 @@ def segment_candidate(payload: SegmentCandidateRequest) -> SegmentCandidateRespo
 
     expand_w = int(round(bw * payload.expand))
     expand_h = int(round(bh * payload.expand))
-    x0 = max(0, bx - expand_w)
-    y0 = max(0, by - expand_h)
-    x1 = min(width, bx + bw + expand_w)
-    y1 = min(height, by + bh + expand_h)
+    x0 = max(0, int(np.floor(bx - expand_w)))
+    y0 = max(0, int(np.floor(by - expand_h)))
+    x1 = min(width, int(np.ceil(bx + bw + expand_w)))
+    y1 = min(height, int(np.ceil(by + bh + expand_h)))
     if x1 <= x0 or y1 <= y0:
         return SegmentCandidateResponse(ok=False, error="invalid expanded bbox")
 
@@ -1790,6 +1846,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                     "bbox": {"x": c["bbox"][0], "y": c["bbox"][1], "w": c["bbox"][2], "h": c["bbox"][3]},
                     "class_name": c["class_name"],
                     "final_score": c.get("final_score", 0.0),
+                    "template_name": c.get("template_name"),
                 }
                 for c in confirmed
             ],
@@ -1805,6 +1862,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 "class_name": c["class_name"],
                 "bbox": (c["bbox"]["x"], c["bbox"]["y"], c["bbox"]["w"], c["bbox"]["h"]),
                 "final_score": c.get("final_score", 0.0),
+                "template_name": c.get("template_name"),
             }
             for c in confirmed
         ]
@@ -1840,6 +1898,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                         "w": c["bbox"][2],
                         "h": c["bbox"][3],
                     },
+                    "template_name": c.get("template_name"),
                 }
             )
         out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1852,6 +1911,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             class_name=c["class_name"],
             bbox={"x": c["bbox"][0], "y": c["bbox"][1], "w": c["bbox"][2], "h": c["bbox"][3]},
             score=c["final_score"],
+            template_name=c.get("template_name"),
         )
         for c in confirmed
     ]

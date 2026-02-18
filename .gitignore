@@ -2,6 +2,7 @@
 .vscode/
 *.code-workspace
 .history/
+_backup/
 
 # Python related
 __pycache__/

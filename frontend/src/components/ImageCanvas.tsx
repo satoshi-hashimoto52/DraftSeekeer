@@ -1,4 +1,4 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
 import { Annotation, Candidate } from "../api";
 
@@ -86,8 +86,13 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 }: Props,
   ref
 ) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
   const panRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
@@ -255,6 +260,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   }, [selectionBlinkEnabled, editMode]);
 
   const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
+  const clampPanToTop = (pan: { x: number; y: number }) => ({
+    x: pan.x,
+    y: Math.min(0, pan.y),
+  });
+  useEffect(() => {
+    const clamped = clampPanToTop(panOffset);
+    panRef.current = clamped;
+    if (clamped.y !== panOffset.y || clamped.x !== panOffset.x) {
+      setPanOffset(clamped);
+    }
+  }, [panOffset]);
   const getCssScale = () => {
     const canvas = canvasRef.current;
     const img = imgRef.current;
@@ -263,6 +279,32 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     if (rect.width <= 0 || rect.height <= 0) return { sx: 1, sy: 1 };
     return { sx: rect.width / img.width, sy: rect.height / img.height };
   };
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const updateViewportSize = () => {
+      const rect = root.getBoundingClientRect();
+      setViewportSize({
+        width: Math.max(0, rect.width),
+        height: Math.max(0, rect.height),
+      });
+    };
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  const img = imgRef.current;
+  const displayScale =
+    img && viewportSize.width > 0 && viewportSize.height > 0
+      ? Math.min(viewportSize.width / img.width, viewportSize.height / img.height)
+      : null;
+  const displayWidth = img && displayScale !== null ? Math.max(1, Math.round(img.width * displayScale)) : null;
+  const displayHeight = img && displayScale !== null ? Math.max(1, Math.round(img.height * displayScale)) : null;
 
   useImperativeHandle(ref, () => ({
     panTo: (x: number, y: number) => {
@@ -275,8 +317,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const { sx, sy } = getCssScale();
       const panX = rect.width / (2 * sx * scaleRef.current) - x;
       const panY = rect.height / (2 * sy * scaleRef.current) - y;
-      panRef.current = { x: panX, y: panY };
-      setPanOffset({ x: panX, y: panY });
+      const next = clampPanToTop({ x: panX, y: panY });
+      panRef.current = next;
+      setPanOffset(next);
     },
   }));
 
@@ -600,7 +643,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const roiBbox = dynamicRoiBbox || debugOverlay.roi_bbox;
         if (roiBbox) {
           const { x1, y1, x2, y2 } = roiBbox;
-          drawBox(x1, y1, x2 - x1, y2 - y1, "#00bfa5", baseLine * 1.6, true, 0.9, 0);
+          drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
+          drawLabel(x1 + 3, y1 + 18, "ROI AREA", "#e53935", 0.95, "rgba(20, 24, 32, 0.52)");
         }
         if (debugOverlay.outer_bbox) {
           const b = debugOverlay.outer_bbox;
@@ -1070,8 +1114,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         x: panDragRef.current.origin.x + dx,
         y: panDragRef.current.origin.y + dy,
       };
-      panRef.current = next;
-      pendingPanRef.current = next;
+      const clamped = clampPanToTop(next);
+      panRef.current = clamped;
+      pendingPanRef.current = clamped;
       schedulePanZoomUpdate();
       return;
     }
@@ -1288,8 +1333,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         x: cursorX / (sx * nextScale) - imgX,
         y: cursorY / (sy * nextScale) - imgY,
       };
-      panRef.current = nextPan;
-      pendingPanRef.current = nextPan;
+      const clamped = clampPanToTop(nextPan);
+      panRef.current = clamped;
+      pendingPanRef.current = clamped;
       schedulePanZoomUpdate();
     };
     canvas.addEventListener("wheel", handleWheel, { passive: false });
@@ -1300,13 +1346,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 
   return (
     <div
+      ref={rootRef}
       style={{
         width: "100%",
         height: "100%",
         minHeight: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
+        position: "relative",
         overflow: "hidden",
       }}
     >
@@ -1322,10 +1367,13 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           setCursorStyle(imageUrl ? "crosshair" : "default");
         }}
         style={{
-          width: "auto",
-          height: "auto",
-          maxWidth: "100%",
-          maxHeight: "100%",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          margin: "0 auto",
+          width: displayWidth !== null ? `${displayWidth}px` : "auto",
+          height: displayHeight !== null ? `${displayHeight}px` : "auto",
           display: "block",
           border: "1px solid #ddd",
           background: "#fafafa",
@@ -1334,7 +1382,17 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         }}
       />
       {!imageUrl && (
-        <div style={{ padding: "12px 0", color: "#666" }}>画像をアップロードしてください。</div>
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            color: "#666",
+          }}
+        >
+          画像をアップロードしてください。
+        </div>
       )}
     </div>
   );

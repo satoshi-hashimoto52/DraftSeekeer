@@ -44,6 +44,7 @@ class DetectPointRequest(BaseModel):
     exclude_mode: str = Field("same_class", pattern="^(same_class|any_class)$")
     exclude_center: bool = True
     exclude_iou_threshold: float = Field(0.6, ge=0, le=1)
+    shape_ratio_threshold: float = Field(0.55, ge=0, le=1)
 
 
 class BBox(BaseModel):
@@ -172,6 +173,7 @@ class ExportYoloResponse(BaseModel):
 class AnnotationPayload(BaseModel):
     class_name: str
     bbox: BBox
+    template_name: Optional[str] = None
     score: Optional[float] = None
     segPolygon: Optional[List[Point]] = None
     source: Optional[str] = None
@@ -292,6 +294,7 @@ class AutoAnnotationItem(BaseModel):
     class_name: str
     bbox: BBox
     score: float
+    template_name: Optional[str] = None
 
 
 class AutoAnnotateResponse(BaseModel):

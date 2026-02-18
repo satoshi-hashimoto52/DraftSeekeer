@@ -49,6 +49,7 @@ export type Annotation = {
   id: string;
   class_name: string;
   bbox: { x: number; y: number; w: number; h: number };
+  template_name?: string;
   source: "template" | "manual" | "sam";
   created_at: string;
   score?: number;
@@ -88,10 +89,19 @@ export type SegmentCandidateResponse = {
 export async function segmentCandidate(
   params: SegmentCandidateRequest
 ): Promise<SegmentCandidateResponse> {
+  const payload: SegmentCandidateRequest = {
+    ...params,
+    click: params.click
+      ? {
+          x: Math.round(params.click.x),
+          y: Math.round(params.click.y),
+        }
+      : params.click ?? null,
+  };
   const res = await fetch(`${API_BASE}/segment/candidate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -214,6 +224,7 @@ export type AutoAnnotateResponse = {
     class_name: string;
     bbox: { x: number; y: number; w: number; h: number };
     score: number;
+    template_name?: string;
   }[];
   preview_image_url?: string | null;
 };
@@ -279,7 +290,7 @@ export async function fetchTemplateClassPreviews(
 export async function fetchTemplateClassItems(
   project: string,
   className: string
-): Promise<string[]> {
+): Promise<{ name: string; width: number; height: number }[]> {
   const res = await fetch(
     `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(className)}/items`
   );
@@ -287,8 +298,23 @@ export async function fetchTemplateClassItems(
     const text = await res.text();
     throw new Error(text || "Template class items fetch failed");
   }
-  const payload = (await res.json()) as { items?: string[] };
-  return Array.isArray(payload.items) ? payload.items : [];
+  const payload = (await res.json()) as {
+    items?: Array<string | { name?: string; width?: number; height?: number }>;
+  };
+  if (!Array.isArray(payload.items)) return [];
+  return payload.items
+    .map((item) => {
+      if (typeof item === "string") {
+        return { name: item, width: 0, height: 0 };
+      }
+      if (!item || typeof item.name !== "string") return null;
+      return {
+        name: item.name,
+        width: typeof item.width === "number" ? item.width : 0,
+        height: typeof item.height === "number" ? item.height : 0,
+      };
+    })
+    .filter((item): item is { name: string; width: number; height: number } => !!item);
 }
 
 export function buildTemplateImageUrl(
@@ -299,6 +325,16 @@ export function buildTemplateImageUrl(
   return `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(
     className
   )}/${encodeURIComponent(templateName)}/image`;
+}
+
+export function buildTemplateBinaryImageUrl(
+  project: string,
+  className: string,
+  templateName: string
+): string {
+  return `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(
+    className
+  )}/${encodeURIComponent(templateName)}/binary-image`;
 }
 
 export async function clearProjectAnnotations(project_name: string): Promise<{ ok: boolean; deleted: number }> {
@@ -336,6 +372,7 @@ export async function detectPoint(params: {
   exclude_mode?: "same_class" | "any_class";
   exclude_center?: boolean;
   exclude_iou_threshold?: number;
+  shape_ratio_threshold?: number;
 }): Promise<DetectPointResponse> {
   const res = await fetch(`${API_BASE}/detect/point`, {
     method: "POST",
