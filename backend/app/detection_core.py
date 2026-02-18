@@ -18,6 +18,7 @@ from .matching import (
     MatchResult,
     PreparedScaledTemplate,
     match_templates,
+    prepare_scaled_templates,
 )
 from .templates import TemplateImage
 from .annotation_exporter import export_annotations
@@ -298,6 +299,14 @@ def annotate_all_manual(
 
     tile_size = max(64, int(roi_size))
     stride = max(1, int(stride if stride is not None else tile_size * 0.5))
+    # Precompute scaled templates once per request (same behavior, less repeated work).
+    prepared_edge, prepared_bin = prepare_scaled_templates(
+        templates_by_class,
+        scale_min=scale_min,
+        scale_max=scale_max,
+        scale_steps=scale_steps,
+        trim_template_margin=True,
+    )
     # Keep more candidates per tile to reduce early misses before global dedup.
     max_per_tile = 120
     candidates: List[Candidate] = []
@@ -317,6 +326,8 @@ def annotate_all_manual(
                 max_per_tile,
                 roi_size,
                 threshold,
+                prepared_edge=prepared_edge,
+                prepared_bin=prepared_bin,
             )
         )
 
