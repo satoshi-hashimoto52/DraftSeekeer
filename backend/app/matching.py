@@ -10,6 +10,22 @@ from .nms import BoxLike, compute_iou
 from .templates import TemplateImage
 
 
+def _build_scales(scale_min: float, scale_max: float, scale_steps: int) -> List[float]:
+    if scale_steps <= 1:
+        return [float(scale_min)]
+    return [
+        float(scale_min + (scale_max - scale_min) * i / (scale_steps - 1))
+        for i in range(scale_steps)
+    ]
+
+
+def _center_out_order(scales: List[float], center: float = 1.0) -> List[float]:
+    if not scales:
+        return []
+    sorted_scales = sorted(scales, key=lambda s: (abs(float(s) - center), float(s)))
+    return [float(s) for s in sorted_scales]
+
+
 def preprocess_edge(gray: np.ndarray) -> np.ndarray:
     if gray is None or gray.size == 0:
         return gray
@@ -111,11 +127,11 @@ def _iter_scaled_templates(
     scale_min: float,
     scale_max: float,
     scale_steps: int,
+    scale_order: str = "linear",
 ) -> Iterable[Tuple[float, np.ndarray]]:
-    if scale_steps <= 1:
-        yield 1.0, template
-        return
-    scales = np.linspace(scale_min, scale_max, scale_steps)
+    scales = _build_scales(scale_min, scale_max, scale_steps)
+    if scale_order == "center_out":
+        scales = _center_out_order(scales, center=1.0)
     for scale in scales:
         if scale <= 0:
             continue
@@ -132,6 +148,7 @@ def prepare_scaled_templates(
     scale_max: float,
     scale_steps: int,
     trim_template_margin: bool = False,
+    scale_order: str = "linear",
 ) -> Tuple[Dict[str, List[PreparedScaledTemplate]], Dict[str, List[PreparedScaledTemplate]]]:
     """Precompute scaled templates for edge/bin modes once per request."""
     edge_prepared: Dict[str, List[PreparedScaledTemplate]] = {}
@@ -141,7 +158,7 @@ def prepare_scaled_templates(
         bin_items: List[PreparedScaledTemplate] = []
         for tpl in template_list:
             for scale, scaled_edge in _iter_scaled_templates(
-                tpl.image_proc_edge, scale_min, scale_max, scale_steps
+                tpl.image_proc_edge, scale_min, scale_max, scale_steps, scale_order=scale_order
             ):
                 if trim_template_margin:
                     scaled_edge = _trim_template_margin(scaled_edge)
@@ -160,7 +177,7 @@ def prepare_scaled_templates(
                     )
                 )
             for scale, scaled_bin in _iter_scaled_templates(
-                tpl.image_proc_bin, scale_min, scale_max, scale_steps
+                tpl.image_proc_bin, scale_min, scale_max, scale_steps, scale_order=scale_order
             ):
                 if trim_template_margin:
                     scaled_bin = _trim_template_margin(scaled_bin)
@@ -196,6 +213,8 @@ def match_templates(
     min_raw_score: float | None = None,
     prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None,
     prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None,
+    scale_order: str = "linear",
+    stop_on_first_hit: bool = False,
 ) -> List[MatchResult]:
     if image_bgr is None:
         return []
@@ -215,7 +234,7 @@ def match_templates(
         for class_name, template_list in templates.items():
             for tpl in template_list:
                 for scale, scaled in _iter_scaled_templates(
-                    tpl.image_proc_edge, scale_min, scale_max, scale_steps
+                    tpl.image_proc_edge, scale_min, scale_max, scale_steps, scale_order=scale_order
                 ):
                     if trim_template_margin:
                         scaled = _trim_template_margin(scaled)
@@ -252,6 +271,8 @@ def match_templates(
                             shape_ratio=shape_ratio,
                         )
                     )
+                    if stop_on_first_hit and min_raw_score is not None and float(max_val) >= float(min_raw_score):
+                        break
 
         results.sort(key=lambda r: r.score, reverse=True)
         if results:
@@ -262,7 +283,7 @@ def match_templates(
         for class_name, template_list in templates.items():
             for tpl in template_list:
                 for scale, scaled in _iter_scaled_templates(
-                    tpl.image_proc_bin, scale_min, scale_max, scale_steps
+                    tpl.image_proc_bin, scale_min, scale_max, scale_steps, scale_order=scale_order
                 ):
                     if trim_template_margin:
                         scaled = _trim_template_margin(scaled)
@@ -299,6 +320,8 @@ def match_templates(
                             shape_ratio=shape_ratio,
                         )
                     )
+                    if stop_on_first_hit and min_raw_score is not None and float(max_val) >= float(min_raw_score):
+                        break
         results.sort(key=lambda r: r.score, reverse=True)
         return results
 
@@ -320,7 +343,7 @@ def match_templates(
                 )
                 for tpl in template_list
                 for scale, scaled in _iter_scaled_templates(
-                    tpl.image_proc_edge, scale_min, scale_max, scale_steps
+                    tpl.image_proc_edge, scale_min, scale_max, scale_steps, scale_order=scale_order
                 )
             ]
         for item in iter_items:
@@ -386,7 +409,7 @@ def match_templates(
                 )
                 for tpl in template_list
                 for scale, scaled in _iter_scaled_templates(
-                    tpl.image_proc_bin, scale_min, scale_max, scale_steps
+                    tpl.image_proc_bin, scale_min, scale_max, scale_steps, scale_order=scale_order
                 )
             ]
         for item in iter_items:

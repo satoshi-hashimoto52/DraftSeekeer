@@ -42,6 +42,36 @@ def _group_templates(templates: Iterable[TemplateImage]) -> Dict[str, List[Templ
     return grouped
 
 
+def _required_roi_size_for_templates(
+    templates_by_class: Dict[str, List[TemplateImage]],
+    scale_min: float,
+) -> int:
+    """Estimate minimum ROI size so at least one scaled template can fit."""
+    s = max(0.01, float(scale_min))
+    required = 0
+    for template_list in templates_by_class.values():
+        for tpl in template_list:
+            tw = 0
+            th = 0
+            if getattr(tpl, "tight_bbox", None):
+                try:
+                    tw = int(tpl.tight_bbox[2])
+                    th = int(tpl.tight_bbox[3])
+                except Exception:
+                    tw = 0
+                    th = 0
+            if tw <= 0 or th <= 0:
+                img = getattr(tpl, "image_proc_edge", None)
+                if img is not None and getattr(img, "size", 0) > 0:
+                    th, tw = img.shape[:2]
+            if tw <= 0 or th <= 0:
+                continue
+            sw = max(1, int(round(tw * s)))
+            sh = max(1, int(round(th * s)))
+            required = max(required, sw, sh)
+    return int(required)
+
+
 def _iter_tiles(width: int, height: int, tile_size: int, stride: int) -> Iterable[Tuple[int, int, int, int]]:
     y = 0
     while y < height:
@@ -67,6 +97,8 @@ def _match_tile(
     final_threshold: float | None = None,
     prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None,
     prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None,
+    scale_order: str = "linear",
+    stop_on_first_hit: bool = False,
 ) -> List[Candidate]:
     h, w = tile.shape[:2]
     cx = w // 2
@@ -91,6 +123,8 @@ def _match_tile(
         min_raw_score=min_raw_score,
         prepared_edge=prepared_edge,
         prepared_bin=prepared_bin,
+        scale_order=scale_order,
+        stop_on_first_hit=stop_on_first_hit,
     )
     if max_per_tile > 0:
         matches = matches[:max_per_tile]
@@ -283,6 +317,9 @@ def annotate_all_manual(
     scale_max: float = 1.5,
     scale_steps: int = 12,
     stride: int | None = None,
+    scale_order: str = "linear",
+    stop_on_first_hit: bool = False,
+    precompute_scaled_templates: bool = True,
 ) -> dict:
     """Run full-image template matching using raw match scores only.
 
@@ -300,16 +337,21 @@ def annotate_all_manual(
 
     height, width = img.shape[:2]
 
-    tile_size = max(64, int(roi_size))
+    required_roi = _required_roi_size_for_templates(templates_by_class, scale_min)
+    tile_size = max(64, int(roi_size), required_roi)
     stride = max(1, int(stride if stride is not None else tile_size * 0.5))
     # Precompute scaled templates once per request (same behavior, less repeated work).
-    prepared_edge, prepared_bin = prepare_scaled_templates(
-        templates_by_class,
-        scale_min=scale_min,
-        scale_max=scale_max,
-        scale_steps=scale_steps,
-        trim_template_margin=True,
-    )
+    prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None
+    prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None
+    if precompute_scaled_templates:
+        prepared_edge, prepared_bin = prepare_scaled_templates(
+            templates_by_class,
+            scale_min=scale_min,
+            scale_max=scale_max,
+            scale_steps=scale_steps,
+            trim_template_margin=True,
+            scale_order=scale_order,
+        )
     # Keep more candidates per tile to reduce early misses before global dedup.
     max_per_tile = 120
     candidates: List[Candidate] = []
@@ -331,6 +373,8 @@ def annotate_all_manual(
                 threshold,
                 prepared_edge=prepared_edge,
                 prepared_bin=prepared_bin,
+                scale_order=scale_order,
+                stop_on_first_hit=stop_on_first_hit,
             )
         )
 
@@ -364,3 +408,31 @@ def annotate_all_manual(
         "confirmed": confirmed,
         "export": export_payload,
     }
+
+
+def annotate_all_manual_equal_scale_beta(
+    image_path: Path,
+    templates: list,
+    threshold: float,
+    output_format: str,
+    roi_size: int = 200,
+    scale_min: float = 0.5,
+    scale_max: float = 1.5,
+    scale_steps: int = 12,
+    stride: int | None = None,
+) -> dict:
+    """Beta mode: prioritize 1.0x scale and expand outward."""
+    return annotate_all_manual(
+        image_path=image_path,
+        templates=templates,
+        threshold=threshold,
+        output_format=output_format,
+        roi_size=roi_size,
+        scale_min=scale_min,
+        scale_max=scale_max,
+        scale_steps=scale_steps,
+        stride=stride,
+        scale_order="center_out",
+        stop_on_first_hit=True,
+        precompute_scaled_templates=False,
+    )

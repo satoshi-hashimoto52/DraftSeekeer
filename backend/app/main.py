@@ -85,7 +85,7 @@ from .sam_device import get_sam_device
 from .polygon import mask_to_polygon, polygon_to_bbox
 from .export_yolo import make_yolo_lines
 from .export_yolo import normalize_bbox
-from .detection_core import annotate_all, annotate_all_manual
+from .detection_core import annotate_all, annotate_all_manual, annotate_all_manual_equal_scale_beta
 
 
 app = FastAPI(title="Annotator MVP")
@@ -1249,7 +1249,7 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         templates=project_templates,
         scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
         scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
-        scale_steps=5,
+        scale_steps=payload.scale_steps,
     )
     confirmed = []
     if payload.confirmed_annotations:
@@ -1266,14 +1266,35 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         else shape_ratio_threshold
     )
     weighted_matches = []
+
+    def _point_in_box_with_margin(
+        px: float,
+        py: float,
+        box: tuple[int, int, int, int],
+    ) -> bool:
+        bx, by, bw, bh = box
+        if bw <= 0 or bh <= 0:
+            return False
+        margin = max(8, int(round(max(bw, bh) * 0.08)))
+        return (
+            (bx - margin) <= px <= (bx + bw + margin)
+            and (by - margin) <= py <= (by + bh + margin)
+        )
+
     for m in matches:
         shape_ratio = float(getattr(m, "shape_ratio", 0.0) or 0.0)
+        raw_match_score = float(m.score)
+        # For click candidates, keep only cases where shape agreement dominates
+        # raw template matching score within the same class.
+        if shape_ratio <= raw_match_score:
+            continue
         if shape_ratio < shape_ratio_threshold:
             continue
-        weighted_score = 0.55 * float(m.score) + 0.45 * shape_ratio
+        weighted_score = 0.4 * raw_match_score + 0.6 * shape_ratio
         if weighted_score < score_floor:
             continue
-        weighted_matches.append((m, weighted_score))
+        if _point_in_box_with_margin(payload.x, payload.y, m.outer_bbox):
+            weighted_matches.append((m, weighted_score))
 
     matches_sorted = sorted(weighted_matches, key=lambda item: item[1], reverse=True)
     representative: List[tuple[MatchResult, float]] = []
@@ -1300,20 +1321,72 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             break
 
     results: List[DetectResult] = [
-        DetectResult(
-            class_name=match.class_name,
-            score=weighted_score,
-            bbox={
-                "x": match.bbox[0],
-                "y": match.bbox[1],
-                "w": match.bbox[2],
-                "h": match.bbox[3],
-            },
-            template_name=match.template_name,
-            scale=match.scale,
-        )
-        for match, weighted_score in representative
+        # populated below
     ]
+
+    def _build_scaled_template_base64(match: MatchResult) -> Optional[str]:
+        tpl_for_scaled = None
+        for tpl in project_templates.get(match.class_name, []):
+            if tpl.template_name == match.template_name:
+                tpl_for_scaled = tpl
+                break
+        if tpl_for_scaled is None:
+            return None
+        # Use original template image for debug overlay (not edge/bin processed),
+        # and keep only dark drawing pixels as alpha mask.
+        src = tpl_for_scaled.image_gray
+        if src is None or src.size == 0:
+            return None
+        sh, sw = src.shape[:2]
+        new_w = max(1, int(round(sw * float(match.scale))))
+        new_h = max(1, int(round(sh * float(match.scale))))
+        try:
+            # Keep line fidelity for debug overlay mask.
+            scaled = cv2.resize(src, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            alpha = np.where(scaled < 235, 255, 0).astype(np.uint8)
+            alpha = cv2.dilate(alpha, np.ones((2, 2), np.uint8), iterations=1)
+            rgba = np.zeros((new_h, new_w, 4), dtype=np.uint8)
+            rgba[:, :, 0] = 255
+            rgba[:, :, 1] = 255
+            rgba[:, :, 2] = 255
+            rgba[:, :, 3] = alpha
+            ok_scaled, buf_scaled = cv2.imencode(".png", rgba)
+            if not ok_scaled:
+                return None
+            return base64.b64encode(buf_scaled.tobytes()).decode("ascii")
+        except Exception:
+            return None
+
+    scaled_template_by_key: Dict[str, str] = {}
+    for match, weighted_score in representative:
+        key = f"{match.class_name}::{match.template_name}::{match.scale:.6f}::{match.mode}"
+        if key not in scaled_template_by_key:
+            encoded = _build_scaled_template_base64(match)
+            if encoded:
+                scaled_template_by_key[key] = encoded
+        results.append(
+            DetectResult(
+                class_name=match.class_name,
+                score=weighted_score,
+                bbox={
+                    "x": match.bbox[0],
+                    "y": match.bbox[1],
+                    "w": match.bbox[2],
+                    "h": match.bbox[3],
+                },
+                outer_bbox={
+                    "x": match.outer_bbox[0],
+                    "y": match.outer_bbox[1],
+                    "w": match.outer_bbox[2],
+                    "h": match.outer_bbox[3],
+                },
+                template_name=match.template_name,
+                scale=match.scale,
+                shape_ratio=float(getattr(match, "shape_ratio", 0.0) or 0.0),
+                match_mode=match.mode,
+                template_scaled_base64=scaled_template_by_key.get(key),
+            )
+        )
 
     debug = {
         "clicked_image_xy": {"x": payload.x, "y": payload.y},
@@ -1328,8 +1401,10 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
         match_offset_x = best_match.bbox[0] - rx0
         match_offset_y = best_match.bbox[1] - ry0
         debug["match_score"] = best_weighted_score
+        debug["shape_ratio"] = float(getattr(best_match, "shape_ratio", 0.0) or 0.0)
         debug["match_offset_in_roi"] = {"x": match_offset_x, "y": match_offset_y}
         debug["match_mode"] = best_match.mode
+        debug["matched_class_name"] = best_match.class_name
         debug["outer_bbox"] = {
             "x": best_match.outer_bbox[0],
             "y": best_match.outer_bbox[1],
@@ -1353,6 +1428,9 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
                 debug["template_edge_preview_base64"] = base64.b64encode(
                     buffer4.tobytes()
                 ).decode("ascii")
+        best_key = f"{best_match.class_name}::{best_match.template_name}::{best_match.scale:.6f}::{best_match.mode}"
+        if best_key in scaled_template_by_key:
+            debug["matched_template_scaled_base64"] = scaled_template_by_key[best_key]
         if roi.size > 0:
             roi_match = roi.copy()
             mx = int(round(match_offset_x))
@@ -1741,6 +1819,18 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
                 stride=payload.stride,
             )
+        elif method == "scaled_templates_beta":
+            result = annotate_all_manual_equal_scale_beta(
+                image_path=image_path,
+                templates=project_templates,
+                threshold=payload.threshold,
+                output_format="coco",
+                roi_size=payload.roi_size or 200,
+                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
+                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
+                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
+                stride=payload.stride,
+            )
         else:
             result = annotate_all(
                 image_path=image_path,
@@ -1858,7 +1948,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         kept.sort(key=lambda c: c.get("final_score", 0.0), reverse=True)
         return kept
 
-    if method == "scaled_templates":
+    if method in ("scaled_templates", "scaled_templates_beta"):
         confirmed = _dedup_overlap_clusters(confirmed)
     else:
         confirmed = _dedup_any_overlap(confirmed)
@@ -1908,7 +1998,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 }
                 for c in confirmed
             ]
-        if method == "scaled_templates":
+        if method in ("scaled_templates", "scaled_templates_beta"):
             confirmed = _dedup_overlap_clusters(confirmed)
         else:
             confirmed = _dedup_any_overlap(confirmed)

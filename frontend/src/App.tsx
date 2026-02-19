@@ -38,21 +38,26 @@ import NumericInputWithButtons from "./components/NumericInputWithButtons.tsx";
 import { normalizeToHex } from "./utils/color.ts";
 import { clampToImage, simplifyPolygon } from "./utils/polygon.ts";
 
-const DEFAULT_ROI_SIZE = 200;
+const DEFAULT_ROI_SIZE = 350;
 const DEFAULT_TOPK = 3;
-const DEFAULT_SCALE_MIN = 0.5;
-const DEFAULT_SCALE_MAX = 1.7;
+const DEFAULT_SCALE_MIN = 0.6;
+const DEFAULT_SCALE_MAX = 1.4;
 const DEFAULT_SCALE_STEPS = 8;
+const SCALE_RANGE_MIN = 0.1;
+const SCALE_RANGE_MAX = 2.0;
 const DEFAULT_SHAPE_RATIO_THRESHOLD = 0.6;
 const DEFAULT_EXCLUDE_ENABLED = true;
 const DEFAULT_EXCLUDE_MODE: "same_class" | "any_class" = "same_class";
 const DEFAULT_EXCLUDE_CENTER = true;
 const DEFAULT_EXCLUDE_IOU_THRESHOLD = 0.6;
 const DEFAULT_REFINE_CONTOUR = false;
-const DEFAULT_AUTO_METHOD: "combined" | "scaled_templates" = "combined";
-const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<"combined" | "scaled_templates", number> = {
+type AutoMethod = "combined" | "scaled_templates" | "scaled_templates_beta";
+
+const DEFAULT_AUTO_METHOD: AutoMethod = "combined";
+const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
+  scaled_templates_beta: 0.7,
 };
 
 function TemplateLockIcon({ unlocked }: { unlocked: boolean }) {
@@ -240,7 +245,7 @@ export default function App() {
     DEFAULT_AUTO_THRESHOLD_BY_METHOD[DEFAULT_AUTO_METHOD]
   );
   const [autoClassFilter, setAutoClassFilter] = useState<string[]>([]);
-  const [autoMethod, setAutoMethod] = useState<"combined" | "scaled_templates">(DEFAULT_AUTO_METHOD);
+  const [autoMethod, setAutoMethod] = useState<AutoMethod>(DEFAULT_AUTO_METHOD);
   const [autoPanelOpen, setAutoPanelOpen] = useState<boolean>(true);
   const [autoStride, setAutoStride] = useState<number | null>(null);
   const [advancedBaseline, setAdvancedBaseline] = useState<{
@@ -258,7 +263,7 @@ export default function App() {
   } | null>(null);
   const [autoBaseline, setAutoBaseline] = useState<{
     autoThreshold: number;
-    autoMethod: "combined" | "scaled_templates";
+    autoMethod: AutoMethod;
     autoClassFilter: string[];
     autoStride: number | null;
   } | null>(null);
@@ -273,6 +278,7 @@ export default function App() {
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressTimerRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
+  const [editingAnnotationClassId, setEditingAnnotationClassId] = useState<string | null>(null);
   const annotationRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const exportDirInputRef = useRef<HTMLInputElement | null>(null);
@@ -333,7 +339,7 @@ export default function App() {
     if (!debugTemplateEnabled || !project || !debugTemplateClass || !debugTemplateName) return null;
     return buildTemplateOverlayRedImageUrl(project, debugTemplateClass, debugTemplateName);
   }, [debugTemplateEnabled, project, debugTemplateClass, debugTemplateName]);
-  const applyAutoMethodDefaults = (method: "combined" | "scaled_templates") => {
+  const applyAutoMethodDefaults = (method: AutoMethod) => {
     setAutoMethod(method);
     setAutoThreshold(DEFAULT_AUTO_THRESHOLD_BY_METHOD[method]);
   };
@@ -497,11 +503,24 @@ export default function App() {
     () => selectedCandidate || candidates[0] || null,
     [selectedCandidate, candidates]
   );
-  const activeDetectedClassColor = useMemo(() => {
-    const cls = activeDetectedCandidate?.class_name;
-    if (!cls) return "#35506b";
-    return colorMap[cls] || "#35506b";
-  }, [activeDetectedCandidate, colorMap]);
+  const debugOuterForView = activeDetectedCandidate?.outer_bbox || detectDebug?.outer_bbox || null;
+  const debugTightForView = activeDetectedCandidate?.bbox || detectDebug?.tight_bbox || null;
+  const debugMatchScoreForView =
+    typeof activeDetectedCandidate?.score === "number"
+      ? activeDetectedCandidate.score
+      : detectDebug?.match_score;
+  const debugShapeRatioForView =
+    typeof activeDetectedCandidate?.shape_ratio === "number"
+      ? activeDetectedCandidate.shape_ratio
+      : detectDebug?.shape_ratio;
+  const debugMatchModeForView = activeDetectedCandidate?.match_mode || detectDebug?.match_mode;
+  const debugOffsetForView = useMemo(() => {
+    if (!detectDebug?.roi_bbox || !debugTightForView) return detectDebug?.match_offset_in_roi;
+    return {
+      x: debugTightForView.x - detectDebug.roi_bbox.x1,
+      y: debugTightForView.y - detectDebug.roi_bbox.y1,
+    };
+  }, [detectDebug?.roi_bbox, detectDebug?.match_offset_in_roi, debugTightForView]);
 
   const isManualSelected = useMemo(
     () => selectedCandidate?.source === "manual",
@@ -574,6 +593,9 @@ export default function App() {
     }
     return stats;
   }, [annotations]);
+  const detectionTargetClasses = useMemo(() => {
+    return autoClassFilter.length > 0 ? autoClassFilter : classOptions;
+  }, [autoClassFilter, classOptions]);
 
   const syncClassScoreVisibilityForClasses = (
     nextAnnotations: Annotation[],
@@ -609,6 +631,16 @@ export default function App() {
         next[className] = minTrunc;
       });
       return next;
+    });
+  };
+  const ensureClassScoreVisibilityIncludes = (className: string, score?: number) => {
+    if (!className || typeof score !== "number" || !Number.isFinite(score)) return;
+    const floorScore = Math.floor(score * 100) / 100;
+    setClassScoreVisibility((prev) => {
+      const current = prev[className];
+      if (typeof current !== "number") return prev;
+      if (floorScore >= current) return prev;
+      return { ...prev, [className]: floorScore };
     });
   };
 
@@ -735,6 +767,27 @@ export default function App() {
     };
   }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
 
+  const changeAnnotationClass = (annotationId: string, nextClass: string) => {
+    if (!annotationId || !nextClass) return;
+    setAnnotations((prev) => {
+      let prevClass: string | null = null;
+      const next = prev.map((ann) => {
+        if (ann.id !== annotationId) return ann;
+        prevClass = ann.class_name;
+        return { ...ann, class_name: nextClass };
+      });
+      if (prevClass !== null && prevClass !== nextClass) {
+        syncClassScoreVisibilityForClasses(next, [prevClass, nextClass]);
+      }
+      return next;
+    });
+    setColorMap((prev) => {
+      if (prev[nextClass]) return prev;
+      return { ...prev, [nextClass]: pickUniqueColor(prev) };
+    });
+    setEditingAnnotationClassId(null);
+  };
+
   const showUnsetTemplateOption = useMemo(() => {
     if (!datasetId) return true;
     if (!Object.prototype.hasOwnProperty.call(templateByDataset, datasetId)) return true;
@@ -773,6 +826,18 @@ export default function App() {
     excludeIouThreshold,
     refineContour,
   ]);
+  const detectionDefaultDirty =
+    roiSize !== DEFAULT_ROI_SIZE ||
+    topk !== DEFAULT_TOPK ||
+    shapeRatioThreshold !== DEFAULT_SHAPE_RATIO_THRESHOLD ||
+    scaleMin !== DEFAULT_SCALE_MIN ||
+    scaleMax !== DEFAULT_SCALE_MAX ||
+    scaleSteps !== DEFAULT_SCALE_STEPS ||
+    excludeEnabled !== DEFAULT_EXCLUDE_ENABLED ||
+    excludeMode !== DEFAULT_EXCLUDE_MODE ||
+    excludeCenter !== DEFAULT_EXCLUDE_CENTER ||
+    excludeIouThreshold !== DEFAULT_EXCLUDE_IOU_THRESHOLD ||
+    refineContour !== DEFAULT_REFINE_CONTOUR;
 
   const autoDirty = useMemo(() => {
     if (!autoBaseline) return false;
@@ -791,7 +856,7 @@ export default function App() {
   ]);
 
   const scaleMinDanger = scaleMin < 0.2;
-  const scaleMaxDanger = scaleMax > 3.0;
+  const scaleMaxDanger = scaleMax > SCALE_RANGE_MAX;
   const scaleMinWarn = scaleMin < 0.4 || scaleMin > 0.8;
   const scaleMaxWarn = scaleMax < 1.2 || scaleMax > 2.0;
   const scaleStepsDanger = scaleSteps > 20;
@@ -800,12 +865,26 @@ export default function App() {
   const topkWarn = topk < 1 || topk > 5;
   const roiDanger = roiSize < 100 || roiSize > 1200;
   const roiWarn = roiSize < 200 || roiSize > 600;
+  const shapeRatioDanger = shapeRatioThreshold < 0.5 || shapeRatioThreshold > 0.7;
   const autoThresholdDanger = autoThreshold < 0.3;
   const autoThresholdWarn = autoThreshold < 0.6 || autoThreshold > 0.85;
   const strideDanger =
     typeof autoStride === "number" && (autoStride < 16 || autoStride > 256);
   const strideWarn =
     typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
+  const scaleMinLabel = scaleMin.toFixed(2);
+  const scaleMaxLabel = scaleMax.toFixed(2);
+
+  useEffect(() => {
+    if (scaleMax - scaleMin >= 0.1) return;
+    const nextMax = Math.min(SCALE_RANGE_MAX, Math.round((scaleMin + 0.1) * 20) / 20);
+    if (nextMax - scaleMin >= 0.1) {
+      setScaleMax(nextMax);
+      return;
+    }
+    const nextMin = Math.max(SCALE_RANGE_MIN, Math.round((scaleMax - 0.1) * 20) / 20);
+    setScaleMin(nextMin);
+  }, [scaleMin, scaleMax]);
 
   const handleExportDirPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
@@ -1286,7 +1365,13 @@ export default function App() {
       const storedAuto = loadAutoSettingsForProject(projectName);
       if (storedAuto) {
         if (typeof storedAuto.autoThreshold === "number") setAutoThreshold(storedAuto.autoThreshold);
-        if (storedAuto.autoMethod) setAutoMethod(storedAuto.autoMethod);
+        if (
+          storedAuto.autoMethod === "combined" ||
+          storedAuto.autoMethod === "scaled_templates" ||
+          storedAuto.autoMethod === "scaled_templates_beta"
+        ) {
+          setAutoMethod(storedAuto.autoMethod);
+        }
       }
       if (info.images.length > 0) {
         void loadAllAnnotationCounts(projectName, info.images);
@@ -1335,6 +1420,15 @@ export default function App() {
     setNotice(null);
     try {
       await createDatasetProject(name);
+      // Ensure newly created project starts from true defaults even when
+      // localStorage has stale settings from a previously deleted project
+      // with the same name.
+      try {
+        localStorage.removeItem(`draftseeker.advanced.${name}`);
+        localStorage.removeItem(`draftseeker.auto.${name}`);
+      } catch {
+        // ignore
+      }
       if (newProjectFiles && newProjectFiles.length > 0) {
         await importDataset({ project_name: name, files: Array.from(newProjectFiles) });
       }
@@ -1645,10 +1739,13 @@ export default function App() {
       ? selectedCandidate.segPolygon.map((p: { x: number; y: number }) => ({ ...p }))
       : undefined;
     const segMethod = selectedCandidate.segMethod;
+    const createdId = `${Date.now()}-${Math.random()}`;
+    const confirmedClassName = selectedCandidate.class_name;
+    const confirmedScore = score;
     setAnnotations((prev) => [
       ...prev,
         {
-          id: `${Date.now()}-${Math.random()}`,
+          id: createdId,
           class_name: selectedCandidate.class_name,
           bbox: selectedCandidate.bbox,
           template_name: selectedCandidate.template || undefined,
@@ -1666,6 +1763,8 @@ export default function App() {
           segMethod,
       },
     ]);
+    ensureClassScoreVisibilityIncludes(confirmedClassName, confirmedScore);
+    setSelectedAnnotationId(createdId);
     const basePoint = lastClick || {
       x: selectedCandidate.bbox.x + selectedCandidate.bbox.w / 2,
       y: selectedCandidate.bbox.y + selectedCandidate.bbox.h / 2,
@@ -2003,7 +2102,7 @@ export default function App() {
       if (!raw) return null;
       const parsed = JSON.parse(raw) as {
         autoThreshold?: number;
-        autoMethod?: "combined" | "scaled_templates";
+        autoMethod?: AutoMethod;
         autoClassFilter?: string[];
       };
       if (!parsed || typeof parsed !== "object") return null;
@@ -2158,6 +2257,21 @@ export default function App() {
         }));
         setLastAutoAddedIds(appended.map((item) => item.id));
         setAnnotations((prev) => [...prev, ...appended]);
+        setClassScoreVisibility((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const ann of appended) {
+            if (typeof ann.score !== "number" || !Number.isFinite(ann.score)) continue;
+            const current = next[ann.class_name];
+            if (typeof current !== "number") continue;
+            const floorScore = Math.floor(ann.score * 100) / 100;
+            if (floorScore < current) {
+              next[ann.class_name] = floorScore;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
       } else {
         const loaded = await loadAnnotations({
           project_name: datasetId,
@@ -2541,7 +2655,12 @@ export default function App() {
     if (!datasetId) return;
     const saved = loadAutoSettingsForProject(datasetId);
     const hasSavedClassFilter = Array.isArray(saved?.autoClassFilter);
-    const savedMethod = saved?.autoMethod ?? DEFAULT_AUTO_METHOD;
+    const savedMethod: AutoMethod =
+      saved?.autoMethod === "combined" ||
+      saved?.autoMethod === "scaled_templates" ||
+      saved?.autoMethod === "scaled_templates_beta"
+        ? saved.autoMethod
+        : DEFAULT_AUTO_METHOD;
     const baseline = {
       autoThreshold:
         typeof saved?.autoThreshold === "number"
@@ -4266,6 +4385,8 @@ export default function App() {
                 debugRoiSize={showDebug ? roiSize : undefined}
                 debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
                 debugFollowTemplateLabel={showDebug && debugTemplateEnabled ? debugTemplateClass : ""}
+                roiOverlayPoint={lastClick}
+                roiOverlaySize={roiSize}
               />
                 {selectedAnnotationId && (
                   <div
@@ -4341,7 +4462,13 @@ export default function App() {
                   pointerEvents: "auto",
                 }}
               >
-                全自動アノテーション {autoMethod === "combined" ? "Fusion Mode" : "Template Mode"} 実行中…{" "}
+                全自動アノテーション{" "}
+                {autoMethod === "combined"
+                  ? "Fusion Mode"
+                  : autoMethod === "scaled_templates"
+                    ? "Template Mode"
+                    : "Template β"}{" "}
+                実行中…{" "}
                 {autoProgress}%
               </div>
             )}
@@ -4424,22 +4551,31 @@ export default function App() {
             <div className="sectionCard">
               <div
                 style={{
-                  marginBottom: 8,
-                  padding: "8px 10px",
+                  marginBottom: 4,
+                  padding: "6px 10px 2px",
                   borderRadius: 10,
                   background: "transparent",
                   display: "grid",
-                  gap: 6,
+                  gap: 4,
                 }}
               >
                 <div style={{ display: "grid", gap: 4 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#0b3954" }}>クリック検出ステータス</span>
+                  <span
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: "#0b3954",
+                      textDecoration: "underline",
+                      textUnderlineOffset: "3px",
+                    }}
+                  >
+                    クリック検出ステータス
+                  </span>
                   <div
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
+                      display: "flex",
                       alignItems: "center",
-                      columnGap: 12,
+                      minHeight: 20,
                       fontSize: 14,
                       fontWeight: 600,
                       color: "#35506b",
@@ -4449,30 +4585,84 @@ export default function App() {
                       title={activeDetectedCandidate?.class_name || "なし"}
                       style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                     >
-                      <span>class : </span>
+                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}>CLASS : </span>
                       <span
                         style={{
-                          color: activeDetectedClassColor,
-                          fontSize: 15,
-                          textShadow:
-                            "-0.5px 0 rgba(0,0,0,0.75), 0.5px 0 rgba(0,0,0,0.75), 0 -0.5px rgba(0,0,0,0.75), 0 0.5px rgba(0,0,0,0.75), 0 1px 2px rgba(255,255,255,0.85)",
+                          display: "inline-block",
+                          minWidth: "16ch",
+                          minHeight: "1.8em",
+                          padding: "1px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #9fb3c8",
+                          background: "#f6fbff",
+                          color: "#16324f",
+                          fontSize: 14,
+                          fontWeight: 700,
+                          lineHeight: "1.8em",
+                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
+                          boxSizing: "border-box",
                         }}
                       >
                         {activeDetectedCandidate?.class_name || ""}
                       </span>
                     </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", justifySelf: "start" }}>
-                      <span>conf : </span>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 18,
+                      minHeight: 20,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: "#35506b",
+                    }}
+                  >
+                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}>CONF : </span>
                       <span
                         style={{
-                          color: activeDetectedClassColor,
-                          fontSize: 15,
-                          textShadow:
-                            "-0.5px 0 rgba(0,0,0,0.75), 0.5px 0 rgba(0,0,0,0.75), 0 -0.5px rgba(0,0,0,0.75), 0 0.5px rgba(0,0,0,0.75), 0 1px 2px rgba(255,255,255,0.85)",
+                          display: "inline-block",
+                          minWidth: "6ch",
+                          minHeight: "1.8em",
+                          padding: "1px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #9fb3c8",
+                          background: "#f6fbff",
+                          color: "#16324f",
+                          fontSize: 14,
+                          fontWeight: 700,
+                          lineHeight: "1.8em",
+                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
+                          boxSizing: "border-box",
                         }}
                       >
                         {activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
                           ? activeDetectedCandidate.score.toFixed(3)
+                          : ""}
+                      </span>
+                    </span>
+                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}> SCALE : </span>
+                      <span
+                        style={{
+                          display: "inline-block",
+                          minWidth: "6ch",
+                          minHeight: "1.8em",
+                          padding: "1px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #9fb3c8",
+                          background: "#f6fbff",
+                          color: "#16324f",
+                          fontSize: 14,
+                          fontWeight: 700,
+                          lineHeight: "1.8em",
+                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        {activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
+                          ? activeDetectedCandidate.scale.toFixed(2)
                           : ""}
                       </span>
                     </span>
@@ -4482,7 +4672,8 @@ export default function App() {
                   style={{
                     display: "flex",
                     gap: 8,
-                    marginTop: 2,
+                    marginTop: 0,
+                    marginBottom: 0,
                   }}
                 >
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
@@ -4607,103 +4798,11 @@ export default function App() {
                 <span style={{ fontSize: 12, color: "#546e7a" }}>
                   {showCommonSettings ? "▼" : "▶"}
                 </span>
-                <span>検出 共通設定</span>
+                <span style={{ textDecoration: "underline", textUnderlineOffset: "3px" }}>検出 共通設定</span>
               </button>
               {showCommonSettings && (
               <>
               <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }} />
-              <div
-                style={{
-                  marginBottom: 10,
-                  paddingBottom: 10,
-                  borderBottom: "1px dashed #e0e0e0",
-                }}
-              >
-                <div style={{ display: "grid", gap: 4 }}>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "104px 1fr",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
-                    <div className="controlWrap" style={{ justifyContent: "flex-end" }}>
-                      <NumericInputWithButtons
-                        value={roiSize}
-                        onChange={(v) => typeof v === "number" && setRoiSize(v)}
-                        min={10}
-                        step={10}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="roi size"
-                        className="controlWrap"
-                        inputClassName="numInput"
-                        buttonClassName="stepBtn"
-                      />
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "104px 1fr",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
-                    <div className="hintText" style={{ justifyContent: "flex-end" }}>
-                      <span className="badge">推奨 200–600</span>
-                      {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
-                      {roiDanger && <span className="badge badgeDanger">Danger</span>}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: "grid", gap: 4, marginTop: 6, marginBottom: 8 }}>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "104px 1fr",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>形状一致率</span>
-                    <div className="controlWrap" title="±0.05" style={{ justifyContent: "flex-end" }}>
-                      <NumericInputWithButtons
-                        value={shapeRatioThreshold}
-                        onChange={(v) =>
-                          typeof v === "number" && setShapeRatioThreshold(v)
-                        }
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        height={32}
-                        inputWidth={84}
-                        ariaLabel="shape ratio threshold"
-                        placeholder="推奨 0.5–0.7"
-                        className="controlWrap"
-                        inputClassName="numInput"
-                        buttonClassName="stepBtn"
-                      />
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "104px 1fr",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <span />
-                    <div className="hintText" style={{ justifyContent: "flex-end" }}>
-                      <span className="badge">推奨 0.5–0.7</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
                 <div
                   style={{
                     marginTop: 8,
@@ -4757,30 +4856,6 @@ export default function App() {
                   </div>
                   {advancedTab === "params" && (
                   <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 6 }}>
-                    {advancedDirty && advancedBaseline && (
-                      <button
-                        type="button"
-                        className="btn btnGhost"
-                        style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                        onClick={() => {
-                          setRoiSize(advancedBaseline.roiSize);
-                          setTopk(advancedBaseline.topk);
-                          setShapeRatioThreshold(advancedBaseline.shapeRatioThreshold);
-                          setScaleMin(advancedBaseline.scaleMin);
-                          setScaleMax(advancedBaseline.scaleMax);
-                          setScaleSteps(advancedBaseline.scaleSteps);
-                          setExcludeEnabled(advancedBaseline.excludeEnabled);
-                          setExcludeMode(advancedBaseline.excludeMode);
-                          setExcludeCenter(advancedBaseline.excludeCenter);
-                          setExcludeIouThreshold(advancedBaseline.excludeIouThreshold);
-                          setRefineContour(advancedBaseline.refineContour);
-                        }}
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </div>
                   <div
                     style={{
                       border: "1px solid #d6e0f3",
@@ -4791,15 +4866,107 @@ export default function App() {
                       gap: 8,
                     }}
                   >
-                  <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
+                  <div
+                    style={{
+                      marginBottom: 10,
+                      paddingBottom: 10,
+                      borderBottom: "1px dashed #e0e0e0",
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
+                        <div className="controlWrap" style={{ justifyContent: "flex-end" }}>
+                          <NumericInputWithButtons
+                            value={roiSize}
+                            onChange={(v) => typeof v === "number" && setRoiSize(v)}
+                            min={10}
+                            step={10}
+                            height={32}
+                            inputWidth={84}
+                            ariaLabel="roi size"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+                        <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                          <span className="badge">推奨 200–600</span>
+                          {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
+                          {roiDanger && <span className="badge badgeDanger">Danger</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 4, marginTop: 6, marginBottom: 2 }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>形状一致率</span>
+                        <div className="controlWrap" title="±0.05" style={{ justifyContent: "flex-end" }}>
+                          <NumericInputWithButtons
+                            value={shapeRatioThreshold}
+                            onChange={(v) =>
+                              typeof v === "number" && setShapeRatioThreshold(v)
+                            }
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            height={32}
+                            inputWidth={84}
+                            ariaLabel="shape ratio threshold"
+                            placeholder="推奨 0.5–0.7"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span />
+                        <div className="hintText" style={{ justifyContent: "flex-end" }}>
+                          <span className="badge">推奨 0.5–0.7</span>
+                          {shapeRatioDanger && <span className="badge badgeDanger">危険</span>}
+                        </div>
+                      </div>
+                    </div>
+                  <div style={{ display: "grid", gap: 4, marginTop: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 12, fontWeight: 600 }}>スケール</div>
-                    <div style={{ position: "relative", width: "100%", maxWidth: 320, height: 44, marginTop: 2 }}>
+                    <div style={{ position: "relative", width: "100%", maxWidth: 320, height: 46, marginTop: 2 }}>
                       <div
                         style={{
                           position: "absolute",
-                          top: 0,
-                          left: `${((scaleMin - 0.1) / (3.0 - 0.1)) * 100}%`,
-                          transform: "translateX(-50%)",
+                          top: 6,
+                          left: `${((scaleMin - SCALE_RANGE_MIN) / (SCALE_RANGE_MAX - SCALE_RANGE_MIN)) * 100}%`,
+                          transform: "translateX(calc(-100% - 6px))",
                           fontSize: 11,
                           fontWeight: 600,
                           color: "#35506b",
@@ -4807,14 +4974,14 @@ export default function App() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        min {scaleMin.toFixed(1)}
+                        {scaleMinLabel}
                       </div>
                       <div
                         style={{
                           position: "absolute",
-                          top: 0,
-                          left: `${((scaleMax - 0.1) / (3.0 - 0.1)) * 100}%`,
-                          transform: "translateX(-50%)",
+                          top: 6,
+                          left: `${((scaleMax - SCALE_RANGE_MIN) / (SCALE_RANGE_MAX - SCALE_RANGE_MIN)) * 100}%`,
+                          transform: "translateX(6px)",
                           fontSize: 11,
                           fontWeight: 600,
                           color: "#35506b",
@@ -4822,7 +4989,7 @@ export default function App() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        max {scaleMax.toFixed(1)}
+                        {scaleMaxLabel}
                       </div>
                       <div
                         style={{
@@ -4838,8 +5005,8 @@ export default function App() {
                       <div
                         style={{
                           position: "absolute",
-                          left: `${((scaleMin - 0.1) / (3.0 - 0.1)) * 100}%`,
-                          width: `${Math.max(0, ((scaleMax - scaleMin) / (3.0 - 0.1)) * 100)}%`,
+                          left: `${((scaleMin - SCALE_RANGE_MIN) / (SCALE_RANGE_MAX - SCALE_RANGE_MIN)) * 100}%`,
+                          width: `${Math.max(0, ((scaleMax - scaleMin) / (SCALE_RANGE_MAX - SCALE_RANGE_MIN)) * 100)}%`,
                           top: 36,
                           height: 3,
                           borderRadius: 999,
@@ -4849,27 +5016,27 @@ export default function App() {
                       <input
                         className="dualRangeInput"
                         type="range"
-                        min={0.1}
-                        max={3.0}
-                        step={0.1}
+                        min={SCALE_RANGE_MIN}
+                        max={SCALE_RANGE_MAX}
+                        step={0.05}
                         value={scaleMin}
                         onChange={(e) => {
-                          const next = Number(e.target.value);
-                          setScaleMin(Math.min(next, scaleMax));
+                          const next = Math.round(Number(e.target.value) * 20) / 20;
+                          setScaleMin(Math.min(next, scaleMax - 0.1));
                         }}
                         aria-label="scale min"
-                        style={{ zIndex: scaleMin > 2.6 ? 5 : 3, inset: "20px 0 0 0" }}
+                        style={{ zIndex: scaleMin > 1.6 ? 5 : 3, inset: "20px 0 0 0" }}
                       />
                       <input
                         className="dualRangeInput"
                         type="range"
-                        min={0.1}
-                        max={3.0}
-                        step={0.1}
+                        min={SCALE_RANGE_MIN}
+                        max={SCALE_RANGE_MAX}
+                        step={0.05}
                         value={scaleMax}
                         onChange={(e) => {
-                          const next = Number(e.target.value);
-                          setScaleMax(Math.max(next, scaleMin));
+                          const next = Math.round(Number(e.target.value) * 20) / 20;
+                          setScaleMax(Math.max(next, scaleMin + 0.1));
                         }}
                         aria-label="scale max"
                         style={{ zIndex: 4, inset: "20px 0 0 0" }}
@@ -4886,7 +5053,7 @@ export default function App() {
                               : "1fr auto",
                         alignItems: "center",
                         gap: 6,
-                        marginTop: 2,
+                        marginTop: 4,
                       }}
                     >
                       <span />
@@ -4912,6 +5079,7 @@ export default function App() {
                         </div>
                       ) : null}
                     </div>
+                  </div>
                   </div>
                   <div className="formRow" style={{ marginBottom: 8 }}>
                     <span style={{ fontSize: 12 }}>分割</span>
@@ -5225,6 +5393,30 @@ export default function App() {
                     </span>
                   </div>
                   </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+                    {detectionDefaultDirty && (
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                        onClick={() => {
+                          setRoiSize(DEFAULT_ROI_SIZE);
+                          setTopk(DEFAULT_TOPK);
+                          setShapeRatioThreshold(DEFAULT_SHAPE_RATIO_THRESHOLD);
+                          setScaleMin(DEFAULT_SCALE_MIN);
+                          setScaleMax(DEFAULT_SCALE_MAX);
+                          setScaleSteps(DEFAULT_SCALE_STEPS);
+                          setExcludeEnabled(DEFAULT_EXCLUDE_ENABLED);
+                          setExcludeMode(DEFAULT_EXCLUDE_MODE);
+                          setExcludeCenter(DEFAULT_EXCLUDE_CENTER);
+                          setExcludeIouThreshold(DEFAULT_EXCLUDE_IOU_THRESHOLD);
+                          setRefineContour(DEFAULT_REFINE_CONTOUR);
+                        }}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
                   </>
                   )}
                   {advancedTab === "classes" && (
@@ -5509,16 +5701,16 @@ export default function App() {
                         {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
                       </div>
                     )}
-                    {detectDebug?.outer_bbox && (
+                    {debugOuterForView && (
                       <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                        outer: {detectDebug.outer_bbox.x}, {detectDebug.outer_bbox.y},{" "}
-                        {detectDebug.outer_bbox.w}×{detectDebug.outer_bbox.h}
+                        outer: {debugOuterForView.x}, {debugOuterForView.y},{" "}
+                        {debugOuterForView.w}×{debugOuterForView.h}
                       </div>
                     )}
-                    {detectDebug?.tight_bbox && (
+                    {debugTightForView && (
                       <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        tight: {detectDebug.tight_bbox.x}, {detectDebug.tight_bbox.y},{" "}
-                        {detectDebug.tight_bbox.w}×{detectDebug.tight_bbox.h}
+                        tight: {debugTightForView.x}, {debugTightForView.y},{" "}
+                        {debugTightForView.w}×{debugTightForView.h}
                       </div>
                     )}
                     {detectDebug?.roi_click_xy && (
@@ -5526,15 +5718,23 @@ export default function App() {
                         roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
                       </div>
                     )}
-                    {detectDebug?.match_score !== undefined && detectDebug?.match_offset_in_roi && (
+                    {debugMatchScoreForView !== undefined && debugOffsetForView && (
                       <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        match score: {detectDebug.match_score.toFixed(4)} / offset:{" "}
-                        {detectDebug.match_offset_in_roi.x.toFixed(1)}, {detectDebug.match_offset_in_roi.y.toFixed(1)}
+                        match score: {debugMatchScoreForView.toFixed(4)} / offset:{" "}
+                        {debugOffsetForView.x.toFixed(1)}, {debugOffsetForView.y.toFixed(1)}
                       </div>
                     )}
-                    {detectDebug?.match_mode && (
+                    {debugMatchScoreForView !== undefined && (
                       <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        match mode: {detectDebug.match_mode}
+                        shape_ratio:{" "}
+                        {typeof debugShapeRatioForView === "number"
+                          ? debugShapeRatioForView.toFixed(4)
+                          : "-"}
+                      </div>
+                    )}
+                    {debugMatchModeForView && (
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
+                        match mode: {debugMatchModeForView}
                       </div>
                     )}
                     {coordDebug && (
@@ -5712,7 +5912,9 @@ export default function App() {
                   <span style={{ fontSize: 12, color: "#546e7a" }}>
                     {autoPanelOpen ? "▼" : "▶"}
                   </span>
-                  <span>全自動アノテーション</span>
+                  <span style={{ textDecoration: "underline", textUnderlineOffset: "3px" }}>
+                    全自動アノテーション
+                  </span>
                 </button>
                 {autoPanelOpen && (
                   <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
@@ -5880,6 +6082,16 @@ export default function App() {
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
+                            {
+                              key: "scaled_templates_beta",
+                              label: "Template（等倍率優先・β）",
+                              help: "1.0x付近から交互に探索し、先に閾値到達した倍率を優先。",
+                              detail:
+                                "Template β: スケール探索順を1.0x中心にして外側へ広げる方式。タイル/ROI内で早期ヒットした倍率を優先して採用します。既存Template Modeは保持したまま、新方式を試験利用するためのβモードです。",
+                              recommend: "推奨 0.7~0.8",
+                              accent: "#00897b",
+                              bg: "#e0f2f1",
+                            },
                           ].map((item) => {
                             const selected = autoMethod === item.key;
                             return (
@@ -5907,7 +6119,7 @@ export default function App() {
                                   name="auto-method"
                                   checked={selected}
                                   onChange={() =>
-                                    applyAutoMethodDefaults(item.key as "combined" | "scaled_templates")
+                                    applyAutoMethodDefaults(item.key as AutoMethod)
                                   }
                                 />
                                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -5967,7 +6179,17 @@ export default function App() {
             </div>
             <div className="sectionCard confirmedSection" style={{ paddingTop: 4 }}>
               <div className="sectionTitle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>確定アノテーション</span>
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: "#0b3954",
+                    textDecoration: "underline",
+                    textUnderlineOffset: "3px",
+                  }}
+                >
+                  確定アノテーション
+                </span>
                 <span style={{ fontSize: 11, color: "var(--muted)" }}>表示 {sortedAnnotations.length}件</span>
               </div>
               <div className="sectionBody confirmedBody">
@@ -6118,17 +6340,60 @@ export default function App() {
                             display: "inline-block",
                           }}
                         />
-                        <span
-                          style={{
-                            color: "#0b1f3a",
-                            minWidth: 0,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            flex: "1 1 auto",
-                          }}
-                        >
-                          {a.class_name}
-                        </span>
+                        {editingAnnotationClassId === a.id ? (
+                          <select
+                            autoFocus
+                            value={a.class_name}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              changeAnnotationClass(a.id, e.target.value);
+                            }}
+                            onBlur={() => setEditingAnnotationClassId(null)}
+                            style={{
+                              height: 24,
+                              minWidth: 88,
+                              maxWidth: 180,
+                              fontSize: 12,
+                              flex: "1 1 auto",
+                            }}
+                          >
+                            {asChildren(
+                              Array.from(new Set([a.class_name, ...detectionTargetClasses]))
+                                .map((name, oidx) => (
+                                  <option key={`ann-class-${a.id}-${name}-${oidx}`} value={name}>
+                                    {name}
+                                  </option>
+                                ))
+                            )}
+                          </select>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingAnnotationClassId(a.id);
+                            }}
+                            title="クリックでシリーズ変更"
+                            style={{
+                              color: "#0b1f3a",
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              flex: "1 1 auto",
+                              border: "none",
+                              background: "transparent",
+                              padding: 0,
+                              margin: 0,
+                              textAlign: "left",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {a.class_name}
+                          </button>
+                        )}
                         <span
                           style={{
                             fontSize: 10,

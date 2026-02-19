@@ -58,8 +58,12 @@ class DetectResult(BaseModel):
     class_name: str
     score: float
     bbox: BBox
+    outer_bbox: Optional[BBox] = None
     template_name: str
     scale: float
+    shape_ratio: Optional[float] = None
+    match_mode: Optional[str] = None
+    template_scaled_base64: Optional[str] = None
     contour: Optional[List[Point]] = None
 
 
@@ -76,7 +80,10 @@ class DetectPointDebug(BaseModel):
     roi_preview_marked_base64: Optional[str] = None
     roi_edge_preview_base64: Optional[str] = None
     template_edge_preview_base64: Optional[str] = None
+    matched_class_name: Optional[str] = None
+    matched_template_scaled_base64: Optional[str] = None
     match_score: Optional[float] = None
+    shape_ratio: Optional[float] = None
     match_offset_in_roi: Optional["DebugPoint"] = None
     match_mode: Optional[str] = None
     outer_bbox: Optional[dict] = None
@@ -277,7 +284,7 @@ class AutoAnnotateRequest(BaseModel):
     image_id: str
     project: str
     threshold: float = 0.8
-    method: str = Field("combined", pattern="^(combined|scaled_templates)$")
+    method: str = Field("combined", pattern="^(combined|scaled_templates|scaled_templates_beta)$")
     # deprecated (backward compatibility)
     mode: Optional[str] = None
     class_filter: Optional[List[str]] = None

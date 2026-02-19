@@ -44,10 +44,14 @@ type Props = {
     roi_bbox?: { x1: number; y1: number; x2: number; y2: number };
     outer_bbox?: { x: number; y: number; w: number; h: number };
     tight_bbox?: { x: number; y: number; w: number; h: number };
+    matched_class_name?: string;
+    matched_template_scaled_base64?: string;
   } | null;
   debugRoiSize?: number;
   debugFollowTemplateUrl?: string | null;
   debugFollowTemplateLabel?: string;
+  roiOverlayPoint?: { x: number; y: number } | null;
+  roiOverlaySize?: number;
 };
 
 export type ImageCanvasHandle = {
@@ -89,6 +93,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   debugRoiSize,
   debugFollowTemplateUrl,
   debugFollowTemplateLabel,
+  roiOverlayPoint,
+  roiOverlaySize,
 }: Props,
   ref
 ) {
@@ -162,6 +168,22 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   const [debugHoverImagePoint, setDebugHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
   const [debugTemplateDrawVersion, setDebugTemplateDrawVersion] = useState(0);
   const debugTemplateImageRef = useRef<HTMLImageElement | null>(null);
+  const [debugMatchTemplateDrawVersion, setDebugMatchTemplateDrawVersion] = useState(0);
+  const debugMatchTemplateImageRef = useRef<HTMLImageElement | null>(null);
+  const selectedCandidate =
+    selectedCandidateId != null ? candidates.find((c) => c.id === selectedCandidateId) || null : null;
+  const debugMatchedTemplateBase64 =
+    selectedCandidate?.template_scaled_base64 ||
+    debugOverlay?.matched_template_scaled_base64 ||
+    null;
+  const debugMatchedTemplateClassName =
+    selectedCandidate?.class_name || debugOverlay?.matched_class_name || "";
+  const debugMatchedTemplateBBox =
+    selectedCandidate?.outer_bbox ||
+    selectedCandidate?.bbox ||
+    debugOverlay?.outer_bbox ||
+    debugOverlay?.tight_bbox ||
+    null;
 
   const endAnnotationEditSession = (reason: string) => {
     if (!editSessionRef.current.active) return;
@@ -291,6 +313,31 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       cancelled = true;
     };
   }, [debugFollowTemplateUrl]);
+
+  useEffect(() => {
+    const b64 = debugMatchedTemplateBase64;
+    if (!b64) {
+      debugMatchTemplateImageRef.current = null;
+      setDebugMatchTemplateDrawVersion((v) => v + 1);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      debugMatchTemplateImageRef.current = img;
+      setDebugMatchTemplateDrawVersion((v) => v + 1);
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      debugMatchTemplateImageRef.current = null;
+      setDebugMatchTemplateDrawVersion((v) => v + 1);
+    };
+    img.src = `data:image/png;base64,${b64}`;
+    return () => {
+      cancelled = true;
+    };
+  }, [debugMatchedTemplateBase64]);
 
   const getDpr = () => (typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
   const clampPanToTop = (pan: { x: number; y: number }) => ({
@@ -648,6 +695,24 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.restore();
       }
 
+      const drawRoiOverlay = (
+        point: { x: number; y: number } | null | undefined,
+        size: number | undefined
+      ) => {
+        if (!point || typeof size !== "number" || !imgRef.current) return;
+        const img = imgRef.current;
+        const half = size / 2;
+        const x1 = Math.max(0, Math.round(point.x - half));
+        const y1 = Math.max(0, Math.round(point.y - half));
+        const x2 = Math.min(img.width, Math.round(point.x + half));
+        const y2 = Math.min(img.height, Math.round(point.y + half));
+        drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
+        // Label outside ROI: top-left outside area
+        drawLabel(x1, y1, "ROI AREA", "#e53935", 0.95, "rgba(0, 0, 0, 0)");
+      };
+
+      drawRoiOverlay(debugHoverImagePoint || roiOverlayPoint, roiOverlaySize);
+
       if (debugOverlay) {
         const drawDebugPoint = (pt: { x: number; y: number }, color: string) => {
           ctx.save();
@@ -658,33 +723,36 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.stroke();
           ctx.restore();
         };
-        const dynamicRoiBbox =
-          typeof debugRoiSize === "number" && debugOverlay.clicked_image_xy && imgRef.current
-            ? (() => {
-                const half = debugRoiSize / 2;
-                const img = imgRef.current;
-                const click = debugOverlay.clicked_image_xy;
-                if (!img || !click) return null;
-                return {
-                  x1: Math.max(0, Math.round(click.x - half)),
-                  y1: Math.max(0, Math.round(click.y - half)),
-                  x2: Math.min(img.width, Math.round(click.x + half)),
-                  y2: Math.min(img.height, Math.round(click.y + half)),
-                };
-              })()
-            : null;
-        const roiBbox = dynamicRoiBbox || debugOverlay.roi_bbox;
-        if (roiBbox) {
-          const { x1, y1, x2, y2 } = roiBbox;
-          drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
-          drawLabel(x1 + 3, y1 + 18, "ROI AREA", "#e53935", 0.95, "rgba(0, 0, 0, 0)");
-        }
+        const debugPoint = debugOverlay.clicked_image_xy || null;
+        drawRoiOverlay(debugPoint, debugRoiSize);
         if (debugOverlay.outer_bbox) {
           const b = debugOverlay.outer_bbox;
           drawBox(b.x, b.y, b.w, b.h, "#ffb300", baseLine * 1.4, true, 0.9, 0);
         }
-        if (debugOverlay.tight_bbox) {
-          const b = debugOverlay.tight_bbox;
+        if (debugMatchedTemplateBBox) {
+          const b = debugMatchedTemplateBBox;
+          if (debugMatchTemplateImageRef.current) {
+            const classColor = colorMap[debugMatchedTemplateClassName] || "#ff2b2b";
+            ctx.save();
+            ctx.imageSmoothingEnabled = false;
+            // Build colored mask in an offscreen buffer so only template lines are tinted.
+            const off = document.createElement("canvas");
+            off.width = Math.max(1, Math.round(b.w));
+            off.height = Math.max(1, Math.round(b.h));
+            const offCtx = off.getContext("2d");
+            if (offCtx) {
+              offCtx.clearRect(0, 0, off.width, off.height);
+              offCtx.imageSmoothingEnabled = false;
+              offCtx.fillStyle = classColor;
+              offCtx.fillRect(0, 0, off.width, off.height);
+              offCtx.globalCompositeOperation = "destination-in";
+              offCtx.drawImage(debugMatchTemplateImageRef.current, 0, 0, off.width, off.height);
+              offCtx.globalCompositeOperation = "source-over";
+              ctx.globalAlpha = 0.92;
+              ctx.drawImage(off, b.x, b.y, b.w, b.h);
+            }
+            ctx.restore();
+          }
           drawBox(b.x, b.y, b.w, b.h, "#2962ff", baseLine * 1.8, false, 0.95, 0);
         }
         if (debugOverlay.clicked_image_xy) {
@@ -774,8 +842,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugPoints,
     debugFollowTemplateUrl,
     debugFollowTemplateLabel,
+    roiOverlayPoint,
+    roiOverlaySize,
     debugHoverImagePoint,
     debugTemplateDrawVersion,
+    debugMatchTemplateDrawVersion,
+    debugMatchedTemplateClassName,
+    debugMatchedTemplateBBox?.x,
+    debugMatchedTemplateBBox?.y,
+    debugMatchedTemplateBBox?.w,
+    debugMatchedTemplateBBox?.h,
   ]);
 
   const schedulePanZoomUpdate = () => {
@@ -1274,9 +1350,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     if (!editMode) {
       const coords = getImageCoords(event);
       if (coords) updateCursorByHandle(coords.x, coords.y);
-      if (debugFollowTemplateUrl) {
-        setDebugHoverImagePoint(coords ? { x: coords.x, y: coords.y } : null);
-      }
+      setDebugHoverImagePoint(coords ? { x: coords.x, y: coords.y } : null);
     }
     if (manualDragRef.current.active) {
       const coords = getImageCoords(event);

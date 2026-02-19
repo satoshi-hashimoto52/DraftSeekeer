@@ -9,8 +9,12 @@ export type DetectResult = {
   class_name: string;
   score: number;
   bbox: { x: number; y: number; w: number; h: number };
+  outer_bbox?: { x: number; y: number; w: number; h: number };
   template_name: string;
   scale: number;
+  shape_ratio?: number;
+  match_mode?: string;
+  template_scaled_base64?: string;
   contour?: { x: number; y: number }[];
 };
 
@@ -24,7 +28,10 @@ export type DetectPointResponse = {
     roi_preview_marked_base64?: string;
     roi_edge_preview_base64?: string;
     template_edge_preview_base64?: string;
+    matched_class_name?: string;
+    matched_template_scaled_base64?: string;
     match_score?: number;
+    shape_ratio?: number;
     match_offset_in_roi?: { x: number; y: number };
     match_mode?: string;
     roi_match_preview_base64?: string;
@@ -38,8 +45,12 @@ export type Candidate = {
   class_name: string;
   score: number;
   bbox: { x: number; y: number; w: number; h: number };
+  outer_bbox?: { x: number; y: number; w: number; h: number };
   template: string;
   scale: number;
+  shape_ratio?: number;
+  match_mode?: string;
+  template_scaled_base64?: string;
   segPolygon?: { x: number; y: number }[];
   segMethod?: "sam" | "fallback";
   source?: "template" | "manual";
@@ -66,8 +77,12 @@ export function toCandidates(res: DetectPointResponse): Candidate[] {
     class_name: r.class_name,
     score: r.score,
     bbox: r.bbox,
+    outer_bbox: r.outer_bbox,
     template: r.template_name,
     scale: r.scale,
+    shape_ratio: r.shape_ratio,
+    match_mode: r.match_mode,
+    template_scaled_base64: r.template_scaled_base64,
   }));
 }
 
@@ -206,7 +221,7 @@ export type AutoAnnotateRequest = {
   image_id: string;
   project: string;
   threshold: number;
-  method?: "combined" | "scaled_templates";
+  method?: "combined" | "scaled_templates" | "scaled_templates_beta";
   roi_size?: number;
   class_filter?: string[];
   scale_min?: number;
