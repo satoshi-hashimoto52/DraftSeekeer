@@ -68,6 +68,7 @@ from .schemas import (
     ExportDatasetSegRequest,
     ExportDatasetSegResponse,
     SaveAnnotationsRequest,
+    AnnotationPayload,
     SegmentCandidateRequest,
     SegmentCandidateResponse,
     SegmentMeta,
@@ -792,10 +793,21 @@ def load_annotations(project_name: str, image_key: str) -> LoadAnnotationsRespon
     if not path.exists():
         return LoadAnnotationsResponse(ok=True, annotations=[])
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="invalid annotations") from exc
-    return LoadAnnotationsResponse(ok=True, annotations=data)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        # Keep the UI usable even if an annotation file is malformed.
+        return LoadAnnotationsResponse(ok=True, annotations=[])
+
+    if not isinstance(raw, list):
+        return LoadAnnotationsResponse(ok=True, annotations=[])
+
+    sanitized: List[AnnotationPayload] = []
+    for item in raw:
+        try:
+            sanitized.append(AnnotationPayload.model_validate(item))
+        except Exception:
+            continue
+    return LoadAnnotationsResponse(ok=True, annotations=sanitized)
 
 
 @app.post("/annotations/clear", response_model=ClearAnnotationsResponse)
