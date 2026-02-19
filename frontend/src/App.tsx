@@ -221,13 +221,7 @@ export default function App() {
   const [isCreatingManualBBox, setIsCreatingManualBBox] = useState<boolean>(false);
   const [highlightAnnotationId, setHighlightAnnotationId] = useState<string | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
-  const [showHints, setShowHints] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("draftSeeker.hideHints") !== "1";
-    } catch {
-      return true;
-    }
-  });
+  const [showHints, setShowHints] = useState<boolean>(true);
   const [datasetImporting, setDatasetImporting] = useState<boolean>(false);
   const [lastImportPath, setLastImportPath] = useState<string | null>(null);
   const [importPathByDataset, setImportPathByDataset] = useState<Record<string, string>>(() => {
@@ -385,11 +379,6 @@ export default function App() {
 
   const dismissHints = () => {
     setShowHints(false);
-    try {
-      localStorage.setItem("draftSeeker.hideHints", "1");
-    } catch {
-      // ignore
-    }
   };
 
   const addExportDirHistory = (dir: string) => {
@@ -1643,7 +1632,11 @@ export default function App() {
     };
   };
 
-  const handleClickPoint = async (x: number, y: number, opts?: { fromFollowup?: boolean }) => {
+  const handleClickPoint = async (
+    x: number,
+    y: number,
+    opts?: { fromFollowup?: boolean; roiSizeOverride?: number }
+  ) => {
     if (isCreatingManualBBox) return;
     if (manualClassMissing) return;
     if (annotationEditActiveRef.current) return;
@@ -1668,7 +1661,7 @@ export default function App() {
         project,
         x: sendX,
         y: sendY,
-        roi_size: roiSize,
+        roi_size: opts?.roiSizeOverride ?? roiSize,
         scale_min: scaleMin,
         scale_max: scaleMax,
         scale_steps: scaleSteps,
@@ -1854,6 +1847,30 @@ export default function App() {
       if (tag === "input" || tag === "textarea" || tag === "select") return;
 
       const key = event.key;
+      if (event.code === "BracketLeft" || key === "[") {
+        event.preventDefault();
+        setRoiSize((prev) => {
+          const next = Math.max(10, prev - 10);
+          const clickPoint = coordDebug?.image || detectDebug?.clicked_image_xy || lastClick;
+          if (next !== prev && clickPoint && !busy && !autoRunning) {
+            void handleClickPoint(clickPoint.x, clickPoint.y, { roiSizeOverride: next });
+          }
+          return next;
+        });
+        return;
+      }
+      if (event.code === "BracketRight" || key === "]") {
+        event.preventDefault();
+        setRoiSize((prev) => {
+          const next = Math.min(2000, prev + 10);
+          const clickPoint = coordDebug?.image || detectDebug?.clicked_image_xy || lastClick;
+          if (next !== prev && clickPoint && !busy && !autoRunning) {
+            void handleClickPoint(clickPoint.x, clickPoint.y, { roiSizeOverride: next });
+          }
+          return next;
+        });
+        return;
+      }
       if (key === "f" || key === "F") {
         if (!followupScanReady || busy) return;
         const point = followupScanPointRef.current;
@@ -1892,7 +1909,17 @@ export default function App() {
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [selectedCandidate, manualClassMissing, followupScanReady, busy, candidates, detectDebug]);
+  }, [
+    selectedCandidate,
+    manualClassMissing,
+    followupScanReady,
+    busy,
+    autoRunning,
+    candidates,
+    coordDebug,
+    detectDebug,
+    lastClick,
+  ]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -3804,51 +3831,6 @@ export default function App() {
         </>
       )}
 
-      {showHints && (
-        <div
-          style={{
-            position: "fixed",
-            left: 16,
-            bottom: 16,
-            background: "rgba(255,255,255,0.95)",
-            border: "1px solid #e0e0e0",
-            borderRadius: 10,
-            padding: "8px 10px",
-            fontSize: 11,
-            color: "#444",
-            zIndex: 30,
-            boxShadow: "0 6px 16px rgba(0,0,0,0.08)",
-            maxWidth: 220,
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ fontWeight: 600 }}>操作ヒント</div>
-            <button
-              type="button"
-              onClick={dismissHints}
-              style={{
-                border: "none",
-                background: "transparent",
-                cursor: "pointer",
-                fontSize: 12,
-                color: "#666",
-                padding: 0,
-              }}
-              aria-label="Close hints"
-            >
-              ×
-            </button>
-          </div>
-          <div style={{ marginTop: 6, lineHeight: 1.5 }}>
-            <div>Ctrl+Wheel: Zoom</div>
-            <div>Space+Drag: Pan</div>
-            <div>Shift+Drag: Manual BBox</div>
-            <div>Enter: Confirm / Del: Reject</div>
-            <div>N: Next / S: Seg</div>
-          </div>
-        </div>
-      )}
-
       {templateGalleryOpen && (
         <>
           <div
@@ -4380,7 +4362,7 @@ export default function App() {
                   onClearSelectedAnnotation={() => setSelectedAnnotationId(null)}
                   pendingManualBBox={pendingManualBBox}
                   shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
-                onDebugCoords={showDebug ? setCoordDebug : undefined}
+                onDebugCoords={setCoordDebug}
                 debugOverlay={showDebug ? detectDebug || null : null}
                 debugRoiSize={showDebug ? roiSize : undefined}
                 debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
@@ -4388,6 +4370,50 @@ export default function App() {
                 roiOverlayPoint={lastClick}
                 roiOverlaySize={roiSize}
               />
+                {showHints && imageUrl && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 12,
+                      bottom: 12,
+                      background: "rgba(255,255,255,0.94)",
+                      border: "1px solid #d4ddec",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                      fontSize: 11,
+                      color: "#2b3b52",
+                      zIndex: 22,
+                      boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
+                      maxWidth: 250,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ fontWeight: 700 }}>キー操作</div>
+                      <button
+                        type="button"
+                        onClick={dismissHints}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          color: "#5f6f84",
+                          padding: 0,
+                          lineHeight: 1,
+                        }}
+                        aria-label="Close key help"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div style={{ marginTop: 6, lineHeight: 1.45 }}>
+                      <div>[ / ] : ROIサイズ - / +</div>
+                      <div>N : 次候補 / Enter : 確定</div>
+                      <div>Del or Esc : 候補クリア</div>
+                      <div>Shift+Drag : 手動BBox</div>
+                    </div>
+                  </div>
+                )}
                 {selectedAnnotationId && (
                   <div
                     style={{
@@ -4427,7 +4453,6 @@ export default function App() {
                 {notice}
               </div>
             )}
-            {busy && <div style={{ marginTop: 10, color: "#666" }}>処理中...</div>}
           </div>
 
           <div

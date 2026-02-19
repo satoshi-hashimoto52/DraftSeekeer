@@ -1351,6 +1351,20 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const coords = getImageCoords(event);
       if (coords) updateCursorByHandle(coords.x, coords.y);
       setDebugHoverImagePoint(coords ? { x: coords.x, y: coords.y } : null);
+      if (coords && onDebugCoords) {
+        const screen = getScreenCoords(event);
+        if (screen) {
+          setDebugPoints({ screen, image: coords });
+          onDebugCoords({
+            screen,
+            image: coords,
+            zoom: scaleRef.current,
+            pan: { ...panRef.current },
+            dpr: getDpr(),
+            cssScale: { ...getCssScale() },
+          });
+        }
+      }
     }
     if (manualDragRef.current.active) {
       const coords = getImageCoords(event);
