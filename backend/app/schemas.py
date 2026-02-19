@@ -174,6 +174,7 @@ class AnnotationPayload(BaseModel):
     class_name: str
     bbox: BBox
     template_name: Optional[str] = None
+    scale: Optional[float] = None
     score: Optional[float] = None
     segPolygon: Optional[List[Point]] = None
     source: Optional[str] = None
@@ -295,6 +296,7 @@ class AutoAnnotationItem(BaseModel):
     bbox: BBox
     score: float
     template_name: Optional[str] = None
+    scale: Optional[float] = None
 
 
 class AutoAnnotateResponse(BaseModel):

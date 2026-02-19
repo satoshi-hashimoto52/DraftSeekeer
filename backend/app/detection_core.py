@@ -32,6 +32,7 @@ class Candidate:
     bbox: Tuple[int, int, int, int]
     edge_score: float
     template_name: str
+    scale: float = 1.0
 
 
 def _group_templates(templates: Iterable[TemplateImage]) -> Dict[str, List[TemplateImage]]:
@@ -106,6 +107,7 @@ def _match_tile(
                 bbox=(bx + x0, by + y0, bw, bh),
                 edge_score=final_score,
                 template_name=m.template_name,
+                scale=float(m.scale),
             )
         )
     return candidates
@@ -249,6 +251,7 @@ def annotate_all(
                             "shape_score": 0.0,
                             "final_score": combined_score,
                             "template_name": tpl.template_name,
+                            "scale": float(scale),
                         }
                     )
 
@@ -341,6 +344,7 @@ def annotate_all_manual(
             "shape_score": 0.0,
             "final_score": float(c.edge_score),
             "template_name": c.template_name,
+            "scale": float(c.scale),
         }
         for c in candidates
     ]

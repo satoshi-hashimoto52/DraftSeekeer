@@ -24,6 +24,7 @@ type Props = {
   onManualCreateStateChange: (active: boolean) => void;
   onResizeSelectedBBox: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onResizeSelectedAnnotation: (bbox: { x: number; y: number; w: number; h: number }) => void;
+  onResizePendingManualBBox?: (bbox: { x: number; y: number; w: number; h: number }) => void;
   onSelectAnnotation: (annotation: Annotation) => void;
   onClearSelectedAnnotation?: () => void;
   shouldIgnoreCanvasClick?: () => boolean;
@@ -76,6 +77,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   onManualCreateStateChange,
   onResizeSelectedBBox,
   onResizeSelectedAnnotation,
+  onResizePendingManualBBox,
   onSelectAnnotation,
   onClearSelectedAnnotation,
   shouldIgnoreCanvasClick,
@@ -125,7 +127,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     active: boolean;
     handle: "tl" | "tr" | "bl" | "br" | null;
     origin: { x: number; y: number; w: number; h: number } | null;
-    target: "candidate" | "annotation" | null;
+    target: "candidate" | "annotation" | "pending" | null;
   }>({ active: false, handle: null, origin: null, target: null });
   const panDragRef = useRef<{
     active: boolean;
@@ -138,7 +140,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     active: boolean;
     origin: { x: number; y: number; w: number; h: number } | null;
     start: { x: number; y: number } | null;
-    target: "candidate" | "annotation" | null;
+    target: "candidate" | "annotation" | "pending" | null;
   }>({ active: false, origin: null, start: null, target: null });
   const [blinkActive, setBlinkActive] = useState(false);
   const [blinkTick, setBlinkTick] = useState(0);
@@ -675,7 +677,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         if (roiBbox) {
           const { x1, y1, x2, y2 } = roiBbox;
           drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
-          drawLabel(x1 + 3, y1 + 18, "ROI AREA", "#e53935", 0.95, "rgba(20, 24, 32, 0.52)");
+          drawLabel(x1 + 3, y1 + 18, "ROI AREA", "#e53935", 0.95, "rgba(0, 0, 0, 0)");
         }
         if (debugOverlay.outer_bbox) {
           const b = debugOverlay.outer_bbox;
@@ -765,6 +767,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     showVertices,
     selectedVertexIndex,
     manualPreview,
+    pendingManualBBox,
     scale,
     debugOverlay,
     debugRoiSize,
@@ -912,6 +915,14 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     return null;
   };
 
+  const hitTestPendingManualBBox = (x: number, y: number) => {
+    if (!pendingManualBBox) return null;
+    const corner = findResizeHandleForBBox(pendingManualBBox, x, y);
+    if (corner) return { type: "corner" as const, corner };
+    if (isPointInsideBBox(pendingManualBBox, x, y)) return { type: "inside" as const };
+    return null;
+  };
+
   const findMoveEdge = (x: number, y: number) => {
     const selected = getSelectedCandidate();
     if (!selected || selected.source !== "manual") return false;
@@ -994,6 +1005,28 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const coords = getImageCoords(event);
       if (coords) {
         const handle = findResizeHandle(coords.x, coords.y);
+        const pendingHit = hitTestPendingManualBBox(coords.x, coords.y);
+        if (pendingHit?.type === "corner" && pendingManualBBox) {
+          resizeDragRef.current = {
+            active: true,
+            handle: pendingHit.corner,
+            origin: { ...pendingManualBBox },
+            target: "pending",
+          };
+          draggingRef.current = true;
+          return;
+        }
+        if (pendingHit?.type === "inside" && pendingManualBBox) {
+          moveDragRef.current = {
+            active: true,
+            origin: { ...pendingManualBBox },
+            start: coords,
+            target: "pending",
+          };
+          suppressNextClickRef.current = true;
+          draggingRef.current = true;
+          return;
+        }
         if (handle) {
           const selected = getSelectedCandidate();
           const selectedAnn = getSelectedAnnotation();
@@ -1109,6 +1142,22 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       return;
     }
     const annHit = hitTestSelectedAnnotation(x, y);
+    const pendingHit = hitTestPendingManualBBox(x, y);
+    if (pendingHit?.type === "corner") {
+      const handle = pendingHit.corner;
+      if (handle === "tl" || handle === "br") {
+        setCursorStyle("nwse-resize");
+        return;
+      }
+      if (handle === "tr" || handle === "bl") {
+        setCursorStyle("nesw-resize");
+        return;
+      }
+    }
+    if (pendingHit?.type === "inside") {
+      setCursorStyle("move");
+      return;
+    }
     if (annHit?.type === "corner") {
       const handle = annHit.corner;
       if (handle === "tl" || handle === "br") {
@@ -1189,6 +1238,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       };
       if (moveDragRef.current.target === "annotation") {
         onResizeSelectedAnnotation(next);
+      } else if (moveDragRef.current.target === "pending") {
+        onResizePendingManualBBox?.(next);
       } else {
         onResizeSelectedBBox(next);
       }
@@ -1211,8 +1262,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       const w = Math.max(2, Math.abs(x1 - x0));
       const h = Math.max(2, Math.abs(y1 - y0));
       const nextBox = { x: Math.round(left), y: Math.round(top), w, h };
-      if (getSelectedAnnotation()) {
+      if (resizeDragRef.current.target === "annotation") {
         onResizeSelectedAnnotation(nextBox);
+      } else if (resizeDragRef.current.target === "pending") {
+        onResizePendingManualBBox?.(nextBox);
       } else {
         onResizeSelectedBBox(nextBox);
       }
@@ -1435,8 +1488,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           width: displayWidth !== null ? `${displayWidth}px` : "auto",
           height: displayHeight !== null ? `${displayHeight}px` : "auto",
           display: "block",
-          border: "1px solid #ddd",
-          background: "#fafafa",
+          border: "1px solid #9db6d6",
+          background: "#eef3f8",
+          boxSizing: "border-box",
           cursor: cursorStyle,
           touchAction: "none",
         }}

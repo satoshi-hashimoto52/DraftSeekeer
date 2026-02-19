@@ -50,6 +50,7 @@ export type Annotation = {
   class_name: string;
   bbox: { x: number; y: number; w: number; h: number };
   template_name?: string;
+  scale?: number;
   source: "template" | "manual" | "sam";
   created_at: string;
   score?: number;
@@ -225,6 +226,7 @@ export type AutoAnnotateResponse = {
     bbox: { x: number; y: number; w: number; h: number };
     score: number;
     template_name?: string;
+    scale?: number;
   }[];
   preview_image_url?: string | null;
 };

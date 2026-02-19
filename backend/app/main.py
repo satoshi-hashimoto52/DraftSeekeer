@@ -1887,6 +1887,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                     "class_name": c["class_name"],
                     "final_score": c.get("final_score", 0.0),
                     "template_name": c.get("template_name"),
+                    "scale": c.get("scale"),
                 }
                 for c in confirmed
             ],
@@ -1898,14 +1899,15 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         )
         # convert back to original confirmed format (bbox tuple)
         confirmed = [
-            {
-                "class_name": c["class_name"],
-                "bbox": (c["bbox"]["x"], c["bbox"]["y"], c["bbox"]["w"], c["bbox"]["h"]),
-                "final_score": c.get("final_score", 0.0),
-                "template_name": c.get("template_name"),
-            }
-            for c in confirmed
-        ]
+                {
+                    "class_name": c["class_name"],
+                    "bbox": (c["bbox"]["x"], c["bbox"]["y"], c["bbox"]["w"], c["bbox"]["h"]),
+                    "final_score": c.get("final_score", 0.0),
+                    "template_name": c.get("template_name"),
+                    "scale": c.get("scale"),
+                }
+                for c in confirmed
+            ]
         if method == "scaled_templates":
             confirmed = _dedup_overlap_clusters(confirmed)
         else:
@@ -1930,17 +1932,18 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 pass
         for c in confirmed:
             data.append(
-                {
-                    "class_name": c["class_name"],
-                    "bbox": {
-                        "x": c["bbox"][0],
-                        "y": c["bbox"][1],
-                        "w": c["bbox"][2],
-                        "h": c["bbox"][3],
-                    },
-                    "template_name": c.get("template_name"),
-                }
-            )
+                    {
+                        "class_name": c["class_name"],
+                        "bbox": {
+                            "x": c["bbox"][0],
+                            "y": c["bbox"][1],
+                            "w": c["bbox"][2],
+                            "h": c["bbox"][3],
+                        },
+                        "template_name": c.get("template_name"),
+                        "scale": c.get("scale"),
+                    }
+                )
         out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if tmp_path and tmp_path.exists():
@@ -1952,6 +1955,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             bbox={"x": c["bbox"][0], "y": c["bbox"][1], "w": c["bbox"][2], "h": c["bbox"][3]},
             score=c["final_score"],
             template_name=c.get("template_name"),
+            scale=c.get("scale"),
         )
         for c in confirmed
     ]

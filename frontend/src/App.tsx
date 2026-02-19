@@ -55,6 +55,65 @@ const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<"combined" | "scaled_templates", 
   scaled_templates: 0.7,
 };
 
+function TemplateLockIcon({ unlocked }: { unlocked: boolean }) {
+  const neon = unlocked ? "#ff3b30" : "#39ff14";
+  const outline = "#000000";
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <defs>
+        <filter id="lockGlow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="1.1" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect x="5.5" y="10" width="13" height="10" rx="2.4" fill={neon} fillOpacity="0.22" />
+      <rect x="5.5" y="10" width="13" height="10" rx="2.4" stroke={outline} strokeWidth="3.8" />
+      <rect
+        x="5.5"
+        y="10"
+        width="13"
+        height="10"
+        rx="2.4"
+        stroke={neon}
+        strokeWidth="2.2"
+        filter="url(#lockGlow)"
+      />
+      {!unlocked ? (
+        <>
+          <path d="M8 10V7.1a4 4 0 1 1 8 0V10" stroke={outline} strokeWidth="3.8" strokeLinecap="round" />
+          <path
+            d="M8 10V7.1a4 4 0 1 1 8 0V10"
+            stroke={neon}
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            filter="url(#lockGlow)"
+          />
+          <circle cx="12" cy="14.6" r="1.25" stroke={outline} strokeWidth="2.8" />
+          <circle cx="12" cy="14.6" r="1.25" stroke={neon} strokeWidth="1.8" filter="url(#lockGlow)" />
+          <path d="M12 16V17.5" stroke={outline} strokeWidth="2.8" strokeLinecap="round" />
+          <path d="M12 16V17.5" stroke={neon} strokeWidth="1.8" strokeLinecap="round" filter="url(#lockGlow)" />
+        </>
+      ) : (
+        <>
+          <path d="M16.2 10V7.1a4 4 0 1 0-8 0v1.6" stroke={outline} strokeWidth="3.8" strokeLinecap="round" />
+          <path
+            d="M16.2 10V7.1a4 4 0 1 0-8 0v1.6"
+            stroke={neon}
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            filter="url(#lockGlow)"
+          />
+          <path d="M9 8.7l-2 1.7" stroke={outline} strokeWidth="2.8" strokeLinecap="round" />
+          <path d="M9 8.7l-2 1.7" stroke={neon} strokeWidth="1.8" strokeLinecap="round" filter="url(#lockGlow)" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export default function App() {
   const headerScrollRef = useRef<HTMLDivElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -368,6 +427,68 @@ export default function App() {
     }
   };
 
+  const refreshTemplateStateForProject = async (targetProject: string) => {
+    const list = await fetchTemplates();
+    setTemplateProjects(list);
+    setProjects(list.map((p) => p.name));
+    const selected = list.find((p: ProjectTemplates) => p.name === targetProject);
+    const classes =
+      selected?.classes.map((c: { class_name: string; count: number }) => c.class_name) || [];
+    setClassOptions(classes);
+    setAutoClassFilter(classes);
+    setClassScoreVisibility({});
+    setTemplateClassPreviews({});
+    setColorMap((prev) => {
+      const defaults = buildColorMapFromClasses(classes);
+      const next: Record<string, string> = {};
+      classes.forEach((name) => {
+        next[name] = prev[name] || defaults[name];
+      });
+      return next;
+    });
+    return classes;
+  };
+
+  const resetParamsToDefaults = (classes: string[]) => {
+    const nextAdvancedBaseline = {
+      roiSize: DEFAULT_ROI_SIZE,
+      topk: DEFAULT_TOPK,
+      shapeRatioThreshold: DEFAULT_SHAPE_RATIO_THRESHOLD,
+      scaleMin: DEFAULT_SCALE_MIN,
+      scaleMax: DEFAULT_SCALE_MAX,
+      scaleSteps: DEFAULT_SCALE_STEPS,
+      excludeEnabled: DEFAULT_EXCLUDE_ENABLED,
+      excludeMode: DEFAULT_EXCLUDE_MODE,
+      excludeCenter: DEFAULT_EXCLUDE_CENTER,
+      excludeIouThreshold: DEFAULT_EXCLUDE_IOU_THRESHOLD,
+      refineContour: DEFAULT_REFINE_CONTOUR,
+    };
+    setAdvancedBaseline(nextAdvancedBaseline);
+    setRoiSize(nextAdvancedBaseline.roiSize);
+    setTopk(nextAdvancedBaseline.topk);
+    setShapeRatioThreshold(nextAdvancedBaseline.shapeRatioThreshold);
+    setScaleMin(nextAdvancedBaseline.scaleMin);
+    setScaleMax(nextAdvancedBaseline.scaleMax);
+    setScaleSteps(nextAdvancedBaseline.scaleSteps);
+    setExcludeEnabled(nextAdvancedBaseline.excludeEnabled);
+    setExcludeMode(nextAdvancedBaseline.excludeMode);
+    setExcludeCenter(nextAdvancedBaseline.excludeCenter);
+    setExcludeIouThreshold(nextAdvancedBaseline.excludeIouThreshold);
+    setRefineContour(nextAdvancedBaseline.refineContour);
+
+    const nextAutoBaseline = {
+      autoThreshold: DEFAULT_AUTO_THRESHOLD_BY_METHOD[DEFAULT_AUTO_METHOD],
+      autoMethod: DEFAULT_AUTO_METHOD,
+      autoClassFilter: classes,
+      autoStride: null,
+    };
+    setAutoBaseline(nextAutoBaseline);
+    setAutoThreshold(nextAutoBaseline.autoThreshold);
+    setAutoMethod(nextAutoBaseline.autoMethod);
+    setAutoClassFilter(nextAutoBaseline.autoClassFilter);
+    setAutoStride(nextAutoBaseline.autoStride);
+  };
+
   const selectedCandidate = useMemo(() => {
     if (!selectedCandidateId) return null;
     return candidates.find((c) => c.id === selectedCandidateId) || null;
@@ -453,6 +574,43 @@ export default function App() {
     }
     return stats;
   }, [annotations]);
+
+  const syncClassScoreVisibilityForClasses = (
+    nextAnnotations: Annotation[],
+    classNames: string[]
+  ) => {
+    if (classNames.length === 0) return;
+    const targets = new Set(classNames.filter(Boolean));
+    if (targets.size === 0) return;
+    setClassScoreVisibility((prev) => {
+      const next = { ...prev };
+      targets.forEach((className) => {
+        const classItems = nextAnnotations.filter((ann) => ann.class_name === className);
+        if (classItems.length <= 1) {
+          delete next[className];
+          return;
+        }
+        const scores = classItems
+          .map((ann) => ann.score)
+          .filter((s): s is number => typeof s === "number" && Number.isFinite(s));
+        if (scores.length === 0) {
+          delete next[className];
+          return;
+        }
+        const minScore = Math.min(...scores);
+        const maxScore = Math.max(...scores);
+        const minTrunc = Math.floor(minScore * 100) / 100;
+        const maxTrunc = Math.floor(maxScore * 100) / 100;
+        if (!(maxTrunc > minTrunc)) {
+          delete next[className];
+          return;
+        }
+        // Keep class card slider synchronized to current confirmed range after deletions.
+        next[className] = minTrunc;
+      });
+      return next;
+    });
+  };
 
   useEffect(() => {
     setClassScoreVisibility((prev) => {
@@ -576,6 +734,12 @@ export default function App() {
       test: _test.length,
     };
   }, [datasetInfo?.images, splitTrain, splitVal, splitTest, splitSeed]);
+
+  const showUnsetTemplateOption = useMemo(() => {
+    if (!datasetId) return true;
+    if (!Object.prototype.hasOwnProperty.call(templateByDataset, datasetId)) return true;
+    return !templateByDataset[datasetId];
+  }, [datasetId, templateByDataset]);
 
   const isSameArray = (a: string[], b: string[]) =>
     a.length === b.length && a.every((v, idx) => v === b[idx]);
@@ -823,7 +987,9 @@ export default function App() {
       .then((list: ProjectTemplates[]) => {
         if (!mounted) return;
         setTemplateProjects(list);
-        const selected = list.find((p: ProjectTemplates) => p.name === project) || list[0];
+        const selected = project
+          ? list.find((p: ProjectTemplates) => p.name === project)
+          : undefined;
         const classes = selected
           ? selected.classes.map((c: { class_name: string; count: number }) => c.class_name)
           : [];
@@ -880,6 +1046,12 @@ export default function App() {
     }
   }, [datasetId]);
 
+  useEffect(() => {
+    if (!showHeaderSettings) {
+      setProjectChangeUnlocked(false);
+    }
+  }, [showHeaderSettings]);
+
 
   const handleFolderImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!datasetId) {
@@ -910,6 +1082,16 @@ export default function App() {
       }
     }
     if (files.length === 0) return;
+    const ok = window.confirm(
+      `画像を取り込みます（対象: ${files.length} ファイル）。\n` +
+        "この処理はプロジェクト内の画像一覧を、選択したフォルダ内容で同期します。\n" +
+        "選択フォルダに含まれない既存画像と対応アノテーションは削除されます。\n" +
+        "続行しますか？"
+    );
+    if (!ok) {
+      event.target.value = "";
+      return;
+    }
     setError(null);
     setNotice(null);
     setDatasetImporting(true);
@@ -919,7 +1101,9 @@ export default function App() {
       setDatasetInfo(info);
       setImageStatusMap({});
       setDatasetSelectedName(null);
-      setNotice(`Dataset imported: ${res.project_name} (${res.count} files)`);
+      setNotice(
+        `Dataset synced: ${res.project_name} (total ${info.total_images} files, added ${res.count})`
+      );
       refreshProjectList();
       if (info.images.length > 0) {
         void loadAllAnnotationCounts(res.project_name, info.images);
@@ -975,7 +1159,7 @@ export default function App() {
       return;
     }
     const ok = window.confirm(
-      "プロジェクト（テンプレ）を変更します。\nクラス定義が変わる可能性があるため、現在のアノテーション（確定/候補）とUI状態は全て削除し、クラス一覧を再読み込みします。続行しますか？"
+      "テンプレートを切り替えます。\n画像データはそのまま保持されます。\nクラス定義が変わる可能性があるため、現在のアノテーション（確定/候補）とUI状態は削除され、クラス一覧を再読み込みします。\n続行しますか？"
     );
     if (!ok) {
       setProjectChangeUnlocked(false);
@@ -999,18 +1183,22 @@ export default function App() {
         }
         return next;
       });
+      try {
+        // Do not carry previous class-filter checks across template sets.
+        localStorage.removeItem(`draftseeker.auto.${datasetId}`);
+      } catch {
+        // ignore
+      }
     }
     setProject(nextProject);
     setShowCommonSettings(true);
+    setAdvancedTab("classes");
+    setClassCardFilter("all");
+    setAutoPanelOpen(false);
+    setShowDebug(false);
     try {
-      const list = await fetchTemplates();
-      const selected = list.find((p: ProjectTemplates) => p.name === nextProject);
-      const classes =
-        selected?.classes.map((c: { class_name: string; count: number }) => c.class_name) || [];
-      setClassOptions(classes);
-      const nextColors = buildColorMapFromClasses(classes);
-      setColorMap(nextColors);
-      setAutoClassFilter(classes);
+      const classes = await refreshTemplateStateForProject(nextProject);
+      resetParamsToDefaults(classes);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Templates fetch failed");
     } finally {
@@ -1051,8 +1239,20 @@ export default function App() {
       }
       const hasStoredTemplate = Object.prototype.hasOwnProperty.call(templateMap, projectName);
       const storedTemplate = templateMap[projectName];
+      const resolvedTemplateProject = hasStoredTemplate ? (storedTemplate || "") : "";
       if (hasStoredTemplate) {
         setProject(storedTemplate || "");
+      } else {
+        // Never carry over previous template selection into a new/unmapped dataset.
+        setProject("");
+      }
+      if (resolvedTemplateProject) {
+        await refreshTemplateStateForProject(resolvedTemplateProject);
+      } else {
+        setClassOptions([]);
+        setAutoClassFilter([]);
+        setTemplateClassPreviews({});
+        setClassScoreVisibility({});
       }
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
@@ -1067,20 +1267,26 @@ export default function App() {
       setSelectedAnnotationId(null);
       const storedColors = loadColorMapForProject(projectName);
       if (storedColors) {
-        setColorMap(storedColors);
+        setColorMap((prev) => {
+          const baseClasses = Object.keys(prev);
+          const next: Record<string, string> = {};
+          baseClasses.forEach((name) => {
+            next[name] = storedColors[name] || prev[name];
+          });
+          return next;
+        });
       } else {
-        const nextColors = buildColorMapFromClasses(classOptions);
-        setColorMap(nextColors);
-        saveColorMapForProject(projectName, nextColors);
+        setColorMap((prev) => {
+          const classes = Object.keys(prev);
+          const nextColors = buildColorMapFromClasses(classes);
+          saveColorMapForProject(projectName, nextColors);
+          return nextColors;
+        });
       }
       const storedAuto = loadAutoSettingsForProject(projectName);
       if (storedAuto) {
         if (typeof storedAuto.autoThreshold === "number") setAutoThreshold(storedAuto.autoThreshold);
         if (storedAuto.autoMethod) setAutoMethod(storedAuto.autoMethod);
-      }
-      const allClasses = classOptions.length > 0 ? classOptions : [];
-      if (allClasses.length > 0) {
-        setAutoClassFilter(allClasses);
       }
       if (info.images.length > 0) {
         void loadAllAnnotationCounts(projectName, info.images);
@@ -1132,15 +1338,15 @@ export default function App() {
       if (newProjectFiles && newProjectFiles.length > 0) {
         await importDataset({ project_name: name, files: Array.from(newProjectFiles) });
       }
-      setTemplateByDataset((prev) => {
-        const next = { ...prev, [name]: "" };
-        try {
-          localStorage.setItem("draftseeker.templateByDataset", JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-        return next;
-      });
+      const nextTemplateByDataset = { ...templateByDataset, [name]: "" };
+      setTemplateByDataset(nextTemplateByDataset);
+      try {
+        localStorage.setItem("draftseeker.templateByDataset", JSON.stringify(nextTemplateByDataset));
+      } catch {
+        // ignore
+      }
+      // Ensure a brand-new project always starts with template "unset".
+      setProject("");
       setNewProjectName("");
       setNewProjectFiles(null);
       await refreshProjectList();
@@ -1151,7 +1357,7 @@ export default function App() {
   };
 
   const handleDeleteProject = async (name: string) => {
-    if (!window.confirm(`本当に削除しますか？\n${name}`)) return;
+    if (!window.confirm(`プロジェクトを削除します。\n対象: ${name}\nこの操作は取り消せません。続行しますか？`)) return;
     setError(null);
     setNotice(null);
     try {
@@ -1446,6 +1652,10 @@ export default function App() {
           class_name: selectedCandidate.class_name,
           bbox: selectedCandidate.bbox,
           template_name: selectedCandidate.template || undefined,
+          scale:
+            typeof selectedCandidate.scale === "number" && Number.isFinite(selectedCandidate.scale)
+              ? selectedCandidate.scale
+              : undefined,
           source,
           created_at: createdAt,
           score,
@@ -1627,7 +1837,14 @@ export default function App() {
       if ((event.key === "Delete" || event.key === "Backspace") && selectedAnnotationId && !selectedCandidateId) {
         event.preventDefault();
         pushAnnotationHistory();
-        setAnnotations((prev) => prev.filter((a) => a.id !== selectedAnnotationId));
+        setAnnotations((prev) => {
+          const removed = prev.find((a) => a.id === selectedAnnotationId);
+          const next = prev.filter((a) => a.id !== selectedAnnotationId);
+          if (removed?.class_name) {
+            syncClassScoreVisibilityForClasses(next, [removed.class_name]);
+          }
+          return next;
+        });
         setSelectedAnnotationId(null);
         return;
       }
@@ -1816,6 +2033,7 @@ export default function App() {
       class_name: ann.class_name,
       bbox: ann.bbox,
       template_name: ann.template_name,
+      scale: ann.scale,
       source:
         ann.source === "template" || ann.source === "manual" || ann.source === "sam"
           ? ann.source
@@ -1933,6 +2151,7 @@ export default function App() {
           class_name: item.class_name,
           bbox: item.bbox,
           template_name: item.template_name,
+          scale: item.scale,
           source: "template",
           created_at: createdAt,
           score: item.score,
@@ -2891,7 +3110,7 @@ export default function App() {
       <div
         className="topBar"
         style={{
-          padding: "12px 20px",
+          padding: "4px 20px",
           position: "sticky",
           top: 0,
           zIndex: 10,
@@ -2902,7 +3121,7 @@ export default function App() {
             <img
               src="/lgo_DraftSeeker.png"
               alt="DraftSeeker"
-              style={{ height: 36, width: "auto", display: "block" }}
+              style={{ height: 52, width: "auto", display: "block" }}
             />
           </div>
           <div
@@ -3020,9 +3239,11 @@ export default function App() {
                             cursor: projectChangeUnlocked ? "pointer" : "not-allowed",
                           }}
                         >
-                          <option key="project-unset" value="">
-                            未設定
-                          </option>
+                          {showUnsetTemplateOption && (
+                            <option key="project-unset" value="">
+                              未設定
+                            </option>
+                          )}
                           {asChildren(
                             projects.map((p, idx) => (
                               <option key={`${p}-${idx}`} value={p}>
@@ -3034,16 +3255,35 @@ export default function App() {
                         <button
                           type="button"
                           className="btn btnGhost"
-                          style={{ height: 28, padding: "0 8px", fontSize: 10 }}
+                          title={projectChangeUnlocked ? "開錠中: クリックで施錠" : "施錠中: クリックで開錠"}
+                          style={{
+                            height: 30,
+                            minWidth: 64,
+                            padding: "0 8px",
+                            fontSize: 10,
+                            fontWeight: 800,
+                            letterSpacing: 0.4,
+                            color: "#0c2205",
+                            borderColor: projectChangeUnlocked ? "#39ff14" : "#7ea76f",
+                            background: projectChangeUnlocked ? "#eaffea" : "#f6fbf4",
+                            boxShadow: projectChangeUnlocked
+                              ? "inset 0 0 0 1px rgba(57,255,20,0.45), 0 0 10px rgba(57,255,20,0.35)"
+                              : "inset 0 0 0 1px rgba(0,0,0,0.2)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 5,
+                          }}
                           onClick={() => {
                             if (projects.length === 0) {
                               setNotice("テンプレートがありません");
                               return;
                             }
-                            setProjectChangeUnlocked(true);
+                            setProjectChangeUnlocked((prev) => !prev);
                           }}
                         >
-                          変更…
+                          <TemplateLockIcon unlocked={projectChangeUnlocked} />
+                          <span>{projectChangeUnlocked ? "OPEN" : "LOCK"}</span>
                         </button>
                       </div>
                     </div>
@@ -3918,6 +4158,9 @@ export default function App() {
                   height: "100%",
                   minHeight: 0,
                   width: "100%",
+                  border: "none",
+                  borderRadius: 0,
+                  boxSizing: "border-box",
                 }}
               >
                 <ImageCanvas
@@ -3980,6 +4223,12 @@ export default function App() {
                           : a
                       )
                     );
+                  }}
+                  onResizePendingManualBBox={(bbox) => {
+                    setPendingManualBBox((prev) => {
+                      if (!prev) return prev;
+                      return clampBBoxToImage(bbox);
+                    });
                   }}
                 onAnnotationEditStart={() => {
                   if (annotationEditActiveRef.current) return;
@@ -5767,9 +6016,16 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     if (checkedAnnotationIds.length === 0) return;
-                    setAnnotations((prev) =>
-                      prev.filter((a) => !checkedAnnotationIds.includes(a.id))
-                    );
+                    setAnnotations((prev) => {
+                      const removedClasses = new Set(
+                        prev
+                          .filter((a) => checkedAnnotationIds.includes(a.id))
+                          .map((a) => a.class_name)
+                      );
+                      const next = prev.filter((a) => !checkedAnnotationIds.includes(a.id));
+                      syncClassScoreVisibilityForClasses(next, Array.from(removedClasses));
+                      return next;
+                    });
                     if (selectedAnnotationId && checkedAnnotationIds.includes(selectedAnnotationId)) {
                       setSelectedAnnotationId(null);
                     }
@@ -5932,18 +6188,19 @@ export default function App() {
                         <span style={{ flex: "0 0 auto" }}>
                           CONF: {typeof a.score === "number" ? a.score.toFixed(3) : "-"}
                         </span>
-                        {a.template_name && (
-                          <span
-                            style={{
-                              minWidth: 0,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              flex: "1 1 auto",
-                            }}
-                          >
-                            , Template: {a.template_name}
-                          </span>
-                        )}
+                        <span
+                          style={{
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            flex: "1 1 auto",
+                          }}
+                        >
+                          , Tpl: {a.template_name || "-"}, Scale:{" "}
+                          {typeof a.scale === "number" && Number.isFinite(a.scale)
+                            ? a.scale.toFixed(2)
+                            : "-"}
+                        </span>
                       </div>
                     </div>
                     <div style={{ textAlign: "right", justifySelf: "end" }} />
@@ -5952,7 +6209,11 @@ export default function App() {
                       aria-label="delete"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setAnnotations((prev) => prev.filter((item) => item.id !== a.id));
+                        setAnnotations((prev) => {
+                          const next = prev.filter((item) => item.id !== a.id);
+                          syncClassScoreVisibilityForClasses(next, [a.class_name]);
+                          return next;
+                        });
                         if (selectedAnnotationId === a.id) {
                           setSelectedAnnotationId(null);
                         }
@@ -6040,9 +6301,39 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <div style={{ padding: 24 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Project Home</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <div style={{ padding: 16, flex: "1 1 auto", minHeight: 0, overflow: "auto" }}>
+          <div
+            style={{
+              position: "relative",
+              minHeight: "calc(100vh - 120px)",
+              borderRadius: 18,
+              overflow: "hidden",
+              border: "1px solid rgba(255,255,255,0.45)",
+              boxShadow: "0 14px 38px rgba(17, 33, 51, 0.22)",
+              background: "#e8eef6",
+            }}
+          >
+            <div
+              style={{
+                position: "relative",
+                zIndex: 1,
+                padding: 22,
+              }}
+            >
+          <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 12, color: "#12385f" }}>Project Home</div>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginBottom: 12,
+              alignItems: "center",
+              padding: 12,
+              borderRadius: 12,
+              background: "rgba(255,255,255,0.42)",
+              border: "1px solid rgba(255,255,255,0.6)",
+              backdropFilter: "blur(8px)",
+            }}
+          >
             <input
               type="text"
               id="project-name-input"
@@ -6050,7 +6341,15 @@ export default function App() {
               placeholder="project_name"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
-              style={{ height: 36, padding: "0 10px", minWidth: 240, fontSize: 16 }}
+              style={{
+                height: 36,
+                padding: "0 10px",
+                minWidth: 240,
+                fontSize: 16,
+                borderRadius: 8,
+                border: "1px solid rgba(72, 114, 162, 0.42)",
+                background: "rgba(255,255,255,0.9)",
+              }}
             />
             <button
               type="button"
@@ -6064,6 +6363,7 @@ export default function App() {
                 color: "#fff",
                 fontWeight: 600,
                 cursor: "pointer",
+                boxShadow: "0 6px 18px rgba(26,115,232,0.24)",
               }}
             >
               新規プロジェクト作成
@@ -6074,13 +6374,15 @@ export default function App() {
               <div
                 key={`${p.project_name || "project"}-${idx}`}
                 style={{
-                  border: "1px solid #e3e3e3",
-                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.62)",
+                  borderRadius: 12,
                   padding: 12,
-                  background: "#fff",
+                  background: "rgba(255,255,255,0.48)",
+                  backdropFilter: "blur(9px)",
                   display: "flex",
                   flexDirection: "column",
                   gap: 6,
+                  boxShadow: "0 8px 22px rgba(21, 40, 64, 0.14)",
                 }}
               >
                 <div style={{ fontWeight: 600 }}>{p.project_name}</div>
@@ -6117,8 +6419,10 @@ export default function App() {
                     style={{
                       height: 32,
                       borderRadius: 8,
-                      border: "1px solid #e3e3e3",
-                      background: "#fff",
+                      border: "1px solid #d32f2f",
+                      background: "#ffebee",
+                      color: "#b71c1c",
+                      fontWeight: 700,
                       cursor: "pointer",
                     }}
                   >
@@ -6130,6 +6434,8 @@ export default function App() {
             {projectList.length === 0 && (
               <div style={{ color: "#666" }}>プロジェクトがありません。</div>
             )}
+          </div>
+            </div>
           </div>
         </div>
       )}
