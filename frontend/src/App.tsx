@@ -57,6 +57,7 @@ type DetectionMode = "click" | "hover";
 const DEFAULT_AUTO_METHOD: AutoMethod = "combined";
 const DEFAULT_HOVER_DETECT_INTERVAL_MS = 180;
 const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 20;
+const DEBUG_TEMPLATE_SCALE_STEP = 0.01;
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
@@ -318,6 +319,8 @@ export default function App() {
   const [debugTemplateName, setDebugTemplateName] = useState<string>("");
   const [debugTemplateLoading, setDebugTemplateLoading] = useState<boolean>(false);
   const [debugTemplateEnabled, setDebugTemplateEnabled] = useState<boolean>(false);
+  const [debugTemplateScale, setDebugTemplateScale] = useState<number>(1);
+  const prevDebugTemplateClassRef = useRef<string>("");
   const [classScoreVisibility, setClassScoreVisibility] = useState<Record<string, number>>({});
   const templateGalleryTextColor = "rgba(72, 132, 255, 0.92)";
   const templateGalleryPreviewTextColor = "rgba(214, 236, 255, 0.98)";
@@ -1824,6 +1827,16 @@ export default function App() {
 
       const key = event.key;
       if (showDebug) {
+        if (key === "i" || key === "I") {
+          event.preventDefault();
+          setDebugTemplateScale((prev) => Math.min(8, Math.round((prev + DEBUG_TEMPLATE_SCALE_STEP) * 100) / 100));
+          return;
+        }
+        if (key === "o" || key === "O") {
+          event.preventDefault();
+          setDebugTemplateScale((prev) => Math.max(0.1, Math.round((prev - DEBUG_TEMPLATE_SCALE_STEP) * 100) / 100));
+          return;
+        }
         if (event.code === "ArrowUp") {
           event.preventDefault();
           cycleDebugTemplateClass(-1);
@@ -1909,6 +1922,7 @@ export default function App() {
     debugTemplateClass,
     debugTemplateName,
     debugTemplateItems,
+    debugTemplateScale,
     busy,
     autoRunning,
     candidates,
@@ -2556,6 +2570,13 @@ export default function App() {
     selectedAnnotation?.class_name,
     classOptions,
   ]);
+
+  useEffect(() => {
+    if (prevDebugTemplateClassRef.current && prevDebugTemplateClassRef.current !== debugTemplateClass) {
+      setDebugTemplateScale(1);
+    }
+    prevDebugTemplateClassRef.current = debugTemplateClass;
+  }, [debugTemplateClass]);
 
   useEffect(() => {
     if (!showDebug || !project || !debugTemplateClass) {
@@ -4424,7 +4445,12 @@ export default function App() {
                 debugOverlay={showDebug ? detectDebug || null : null}
                 debugRoiSize={showDebug && showRoiArea ? roiSize : undefined}
                 debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
-                debugFollowTemplateLabel={showDebug && debugTemplateEnabled ? debugTemplateClass : ""}
+                debugFollowTemplateScale={showDebug && debugTemplateEnabled ? debugTemplateScale : 1}
+                debugFollowTemplateLabel={
+                  showDebug && debugTemplateEnabled && debugTemplateClass
+                    ? `${debugTemplateClass} x ${debugTemplateScale.toFixed(2)}`
+                    : ""
+                }
                 roiOverlayPoint={showDebug ? null : lastClick}
                 roiOverlaySize={showDebug ? undefined : roiSize}
                 showRoiArea={showRoiArea}

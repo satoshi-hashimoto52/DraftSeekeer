@@ -50,6 +50,7 @@ type Props = {
   debugRoiSize?: number;
   debugFollowTemplateUrl?: string | null;
   debugFollowTemplateLabel?: string;
+  debugFollowTemplateScale?: number;
   roiOverlayPoint?: { x: number; y: number } | null;
   roiOverlaySize?: number;
   showRoiArea: boolean;
@@ -94,6 +95,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   debugRoiSize,
   debugFollowTemplateUrl,
   debugFollowTemplateLabel,
+  debugFollowTemplateScale,
   roiOverlayPoint,
   roiOverlaySize,
   showRoiArea,
@@ -527,6 +529,33 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.restore();
       };
 
+      const drawFixedScreenTextAtImage = (
+        x: number,
+        y: number,
+        text: string,
+        color: string,
+        alpha = 1
+      ) => {
+        const sx = dpr * scale * (x + panOffset.x);
+        const sy = dpr * scale * (y + panOffset.y);
+        const fontPx = Math.max(10, Math.round(56 * dpr));
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = alpha;
+        ctx.font = `${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = "rgba(0,0,0,0.75)";
+        ctx.lineWidth = Math.max(1, 0.8 * dpr);
+        const maxX = Math.max(0, canvas.width - fontPx);
+        const maxY = Math.max(fontPx, canvas.height - 2);
+        const tx = Math.max(0, Math.min(maxX, Math.round(sx)));
+        const ty = Math.max(fontPx, Math.min(maxY, Math.round(sy + fontPx)));
+        ctx.strokeText(text, tx, ty);
+        ctx.fillText(text, tx, ty);
+        ctx.restore();
+      };
+
       const lineScale = Math.max(1, scale);
       const drawBox = (
         x: number,
@@ -807,24 +836,45 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       }
       if (debugFollowTemplateUrl && debugHoverImagePoint && debugTemplateImageRef.current) {
         const tpl = debugTemplateImageRef.current;
-        const drawX = debugHoverImagePoint.x - tpl.width / 2;
-        const drawY = debugHoverImagePoint.y - tpl.height / 2;
+        const followScale = Math.max(0.1, Math.min(8, debugFollowTemplateScale ?? 1));
+        const drawW = Math.max(1, tpl.width * followScale);
+        const drawH = Math.max(1, tpl.height * followScale);
+        const drawX = debugHoverImagePoint.x - drawW / 2;
+        const drawY = debugHoverImagePoint.y - drawH / 2;
+        const followColor = "#00cc00";
         ctx.save();
         ctx.globalAlpha = 1;
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(tpl, drawX, drawY, tpl.width, tpl.height);
-        if (debugFollowTemplateLabel) {
-          const text = debugFollowTemplateLabel;
-          ctx.font = `${Math.max(12, baseLine * 2.2)}px sans-serif`;
-          const labelX = drawX;
-          const labelY = drawY + tpl.height + 14;
-          ctx.fillStyle = "#00FF00";
-          ctx.strokeStyle = "rgba(0,0,0,0.75)";
-          ctx.lineWidth = 2;
-          ctx.strokeText(text, labelX, labelY);
-          ctx.fillText(text, labelX, labelY);
+        ctx.imageSmoothingEnabled = followScale < 1;
+        const off = document.createElement("canvas");
+        off.width = Math.max(1, tpl.width);
+        off.height = Math.max(1, tpl.height);
+        const offCtx = off.getContext("2d");
+        if (offCtx) {
+          offCtx.clearRect(0, 0, off.width, off.height);
+          offCtx.imageSmoothingEnabled = false;
+          offCtx.fillStyle = followColor;
+          offCtx.fillRect(0, 0, off.width, off.height);
+          offCtx.globalCompositeOperation = "destination-in";
+          offCtx.drawImage(tpl, 0, 0, tpl.width, tpl.height);
+          offCtx.globalCompositeOperation = "source-over";
+          // Downscale pass: draw slight multi-pass halo so thin 1px lines remain visible.
+          if (followScale < 1) {
+            const pad = Math.max(0.2, (1 - followScale) * 0.7);
+            ctx.globalAlpha = 0.42;
+            ctx.drawImage(off, drawX - pad, drawY, drawW, drawH);
+            ctx.drawImage(off, drawX + pad, drawY, drawW, drawH);
+            ctx.drawImage(off, drawX, drawY - pad, drawW, drawH);
+            ctx.drawImage(off, drawX, drawY + pad, drawW, drawH);
+            ctx.globalAlpha = 1;
+          }
+          ctx.drawImage(off, drawX, drawY, drawW, drawH);
+        } else {
+          ctx.drawImage(tpl, drawX, drawY, drawW, drawH);
         }
         ctx.restore();
+        if (debugFollowTemplateLabel) {
+          drawFixedScreenTextAtImage(drawX, drawY + drawH + 2, debugFollowTemplateLabel, followColor, 1);
+        }
       }
       const isDebugMode = !!debugOverlay || typeof debugRoiSize === "number" || !!debugFollowTemplateUrl;
       if (isDebugMode && debugPoints) {
@@ -893,6 +943,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugPoints,
     debugFollowTemplateUrl,
     debugFollowTemplateLabel,
+    debugFollowTemplateScale,
     roiOverlayPoint,
     roiOverlaySize,
     showRoiArea,
