@@ -53,10 +53,11 @@ const DEFAULT_EXCLUDE_IOU_THRESHOLD = 0.6;
 const DEFAULT_REFINE_CONTOUR = false;
 type AutoMethod = "combined" | "scaled_templates" | "scaled_templates_beta";
 type DetectionMode = "click" | "hover";
+type DebugPanelTab = "follow" | "last";
 
 const DEFAULT_AUTO_METHOD: AutoMethod = "combined";
-const DEFAULT_HOVER_DETECT_INTERVAL_MS = 180;
-const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 20;
+const DEFAULT_HOVER_DETECT_INTERVAL_MS = 120;
+const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 10;
 const DEBUG_TEMPLATE_SCALE_STEP = 0.01;
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
@@ -150,6 +151,7 @@ export default function App() {
   const [showExportDrawer, setShowExportDrawer] = useState<boolean>(false);
   const [advancedTab, setAdvancedTab] = useState<"params" | "classes">("params");
   const [showDebug, setShowDebug] = useState<boolean>(false);
+  const [debugPanelTab, setDebugPanelTab] = useState<DebugPanelTab>("follow");
   const [classCardFilter, setClassCardFilter] = useState<"all" | "enabled">("all");
   const [showCommonSettings, setShowCommonSettings] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
@@ -226,6 +228,26 @@ export default function App() {
   const hoverDetectTimerRef = useRef<number | null>(null);
   const hoverLastDetectedPointRef = useRef<{ x: number; y: number } | null>(null);
   const [detectDebug, setDetectDebug] = useState<DetectPointResponse["debug"] | null>(null);
+  const [lastDetectionSnapshot, setLastDetectionSnapshot] = useState<{
+    mode: DetectionMode;
+    point: { x: number; y: number };
+    roiSize: number;
+    scaleMin: number;
+    scaleMax: number;
+    scaleSteps: number;
+    topk: number;
+    shapeRatioThreshold: number;
+    classFilter: string[];
+    excludeMode: "same_class" | "any_class";
+    excludeCenter: boolean;
+    excludeIouThreshold: number;
+    bestClass: string;
+    bestScore: number | null;
+    bestScale: number | null;
+    bestTemplate: string;
+    bestMatchMode: string;
+    matchedTemplateBase64: string | null;
+  } | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
   const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null);
@@ -288,6 +310,8 @@ export default function App() {
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
   const [editingAnnotationClassId, setEditingAnnotationClassId] = useState<string | null>(null);
   const annotationRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const allowAnnotationAutoScrollRef = useRef<boolean>(false);
+  const confirmedListRef = useRef<HTMLDivElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const exportDirInputRef = useRef<HTMLInputElement | null>(null);
   const [coordDebug, setCoordDebug] = useState<{
@@ -318,7 +342,6 @@ export default function App() {
   >([]);
   const [debugTemplateName, setDebugTemplateName] = useState<string>("");
   const [debugTemplateLoading, setDebugTemplateLoading] = useState<boolean>(false);
-  const [debugTemplateEnabled, setDebugTemplateEnabled] = useState<boolean>(false);
   const [debugTemplateScale, setDebugTemplateScale] = useState<number>(1);
   const prevDebugTemplateClassRef = useRef<string>("");
   const [classScoreVisibility, setClassScoreVisibility] = useState<Record<string, number>>({});
@@ -346,9 +369,9 @@ export default function App() {
     return { width: "auto", height: `${Math.round(targetH)}px` } as const;
   }, [templateGalleryPreviewNaturalSize]);
   const debugTemplateImageUrl = useMemo(() => {
-    if (!debugTemplateEnabled || !project || !debugTemplateClass || !debugTemplateName) return null;
+    if (!project || !debugTemplateClass || !debugTemplateName) return null;
     return buildTemplateOverlayBlueImageUrl(project, debugTemplateClass, debugTemplateName);
-  }, [debugTemplateEnabled, project, debugTemplateClass, debugTemplateName]);
+  }, [project, debugTemplateClass, debugTemplateName]);
   const applyAutoMethodDefaults = (method: AutoMethod) => {
     setAutoMethod(method);
     setAutoThreshold(DEFAULT_AUTO_THRESHOLD_BY_METHOD[method]);
@@ -508,24 +531,6 @@ export default function App() {
     () => selectedCandidate || candidates[0] || null,
     [selectedCandidate, candidates]
   );
-  const debugOuterForView = activeDetectedCandidate?.outer_bbox || detectDebug?.outer_bbox || null;
-  const debugTightForView = activeDetectedCandidate?.bbox || detectDebug?.tight_bbox || null;
-  const debugMatchScoreForView =
-    typeof activeDetectedCandidate?.score === "number"
-      ? activeDetectedCandidate.score
-      : detectDebug?.match_score;
-  const debugShapeRatioForView =
-    typeof activeDetectedCandidate?.shape_ratio === "number"
-      ? activeDetectedCandidate.shape_ratio
-      : detectDebug?.shape_ratio;
-  const debugMatchModeForView = activeDetectedCandidate?.match_mode || detectDebug?.match_mode;
-  const debugOffsetForView = useMemo(() => {
-    if (!detectDebug?.roi_bbox || !debugTightForView) return detectDebug?.match_offset_in_roi;
-    return {
-      x: debugTightForView.x - detectDebug.roi_bbox.x1,
-      y: debugTightForView.y - detectDebug.roi_bbox.y1,
-    };
-  }, [detectDebug?.roi_bbox, detectDebug?.match_offset_in_roi, debugTightForView]);
 
   const isManualSelected = useMemo(
     () => selectedCandidate?.source === "manual",
@@ -1623,6 +1628,30 @@ export default function App() {
       });
       setDetectDebug(res.debug || null);
       const nextCandidates = toCandidates(res);
+      const best = nextCandidates[0] || null;
+      setLastDetectionSnapshot({
+        mode: detectionMode,
+        point: { x: sendX, y: sendY },
+        roiSize: opts?.roiSizeOverride ?? roiSize,
+        scaleMin,
+        scaleMax,
+        scaleSteps,
+        topk,
+        shapeRatioThreshold,
+        classFilter: [...autoClassFilter],
+        excludeMode,
+        excludeCenter,
+        excludeIouThreshold,
+        bestClass: best?.class_name || res.debug?.matched_class_name || "",
+        bestScore:
+          typeof best?.score === "number" && Number.isFinite(best.score) ? best.score : res.debug?.match_score ?? null,
+        bestScale:
+          typeof best?.scale === "number" && Number.isFinite(best.scale) ? best.scale : null,
+        bestTemplate: best?.template || "",
+        bestMatchMode: best?.match_mode || res.debug?.match_mode || "",
+        matchedTemplateBase64:
+          best?.template_scaled_base64 || res.debug?.matched_template_scaled_base64 || null,
+      });
       setCandidates(nextCandidates);
       setSelectedCandidateId(nextCandidates.length > 0 ? nextCandidates[0].id : null);
       const nextPoint = computeNextScanPoint({ x: sendX, y: sendY });
@@ -1694,6 +1723,7 @@ export default function App() {
       },
     ]);
     ensureClassScoreVisibilityIncludes(confirmedClassName, confirmedScore);
+    allowAnnotationAutoScrollRef.current = true;
     setSelectedAnnotationId(createdId);
     const basePoint = lastClick || {
       x: selectedCandidate.bbox.x + selectedCandidate.bbox.w / 2,
@@ -1767,7 +1797,6 @@ export default function App() {
     const nextName = names[nextIndex];
     if (!nextName || nextName === debugTemplateName) return;
     setDebugTemplateName(nextName);
-    setDebugTemplateEnabled(true);
   };
 
   const clearDetectionState = () => {
@@ -1826,7 +1855,7 @@ export default function App() {
       if (tag === "input" || tag === "textarea" || tag === "select") return;
 
       const key = event.key;
-      if (showDebug) {
+      if (showDebug && debugPanelTab === "follow") {
         if (key === "i" || key === "I") {
           event.preventDefault();
           setDebugTemplateScale((prev) => Math.min(8, Math.round((prev + DEBUG_TEMPLATE_SCALE_STEP) * 100) / 100));
@@ -1918,6 +1947,7 @@ export default function App() {
     manualClassMissing,
     followupScanReady,
     showDebug,
+    debugPanelTab,
     classOptions,
     debugTemplateClass,
     debugTemplateName,
@@ -1932,21 +1962,21 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (detectionMode !== "hover" || showDebug) {
+    if (detectionMode !== "hover" || (showDebug && debugPanelTab !== "last")) {
       if (hoverDetectTimerRef.current) {
         window.clearTimeout(hoverDetectTimerRef.current);
         hoverDetectTimerRef.current = null;
       }
       hoverLastDetectedPointRef.current = null;
     }
-  }, [detectionMode, showDebug]);
+  }, [detectionMode, showDebug, debugPanelTab]);
 
   useEffect(() => {
     hoverLastDetectedPointRef.current = null;
   }, [imageId, datasetSelectedName]);
 
   useEffect(() => {
-    if (detectionMode !== "hover" || showDebug) return;
+    if (detectionMode !== "hover" || (showDebug && debugPanelTab !== "last")) return;
     if (!coordDebug?.image || !imageId || !project || !imageSize) return;
     if (busy || autoRunning || isCreatingManualBBox || annotationEditActiveRef.current) return;
 
@@ -1980,6 +2010,7 @@ export default function App() {
   }, [
     detectionMode,
     showDebug,
+    debugPanelTab,
     coordDebug?.image.x,
     coordDebug?.image.y,
     imageId,
@@ -2582,7 +2613,6 @@ export default function App() {
     if (!showDebug || !project || !debugTemplateClass) {
       setDebugTemplateItems([]);
       setDebugTemplateName("");
-      setDebugTemplateEnabled(false);
       return;
     }
     let cancelled = false;
@@ -2599,7 +2629,6 @@ export default function App() {
         if (!cancelled) {
           setDebugTemplateItems([]);
           setDebugTemplateName("");
-          setDebugTemplateEnabled(false);
         }
       })
       .finally(() => {
@@ -2639,9 +2668,19 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedAnnotationId) return;
+    if (!allowAnnotationAutoScrollRef.current) return;
+    const list = confirmedListRef.current;
     const el = annotationRowRefs.current[selectedAnnotationId];
-    if (!el) return;
-    el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    if (!list || !el) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRect = el.getBoundingClientRect();
+    const pad = 8;
+    if (rowRect.top < listRect.top) {
+      list.scrollTop += rowRect.top - listRect.top - pad;
+    } else if (rowRect.bottom > listRect.bottom) {
+      list.scrollTop += rowRect.bottom - listRect.bottom + pad;
+    }
+    allowAnnotationAutoScrollRef.current = false;
   }, [selectedAnnotationId]);
 
   useEffect(() => {
@@ -3048,16 +3087,19 @@ export default function App() {
         .rightPanel {
           min-height: 0;
           height: calc(100vh - var(--topbar-h, 72px) - 24px);
+          scrollbar-gutter: stable both-edges;
+          overscroll-behavior: contain;
         }
         .confirmedSection {
           display: flex;
           flex-direction: column;
-          flex: 0 0 auto;
+          flex: 1 1 auto;
           min-height: 0;
         }
         .confirmedBody {
           display: flex;
           flex-direction: column;
+          flex: 1 1 auto;
           min-height: 0;
         }
         .confirmedList {
@@ -3065,9 +3107,9 @@ export default function App() {
           flex-direction: column;
           gap: 8px;
           overflow-y: auto;
-          flex: 0 0 auto;
+          flex: 1 1 auto;
           min-height: 0;
-          max-height: 612px;
+          max-height: none;
           padding-right: 4px;
           padding: 8px;
           border-radius: 10px;
@@ -4374,7 +4416,8 @@ export default function App() {
                     ]);
                   }}
                   onClickPoint={(x, y) => {
-                    if (showDebug || detectionMode === "hover") return;
+                    if (detectionMode === "hover") return;
+                    if (showDebug && debugPanelTab !== "last") return;
                     void handleClickPoint(x, y);
                   }}
                   onCreateManualBBox={(bbox) => {
@@ -4443,11 +4486,12 @@ export default function App() {
                   shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
                 onDebugCoords={setCoordDebug}
                 debugOverlay={showDebug ? detectDebug || null : null}
+                debugOverlayMode={showDebug && debugPanelTab === "last" ? "template" : "bbox"}
                 debugRoiSize={showDebug && showRoiArea ? roiSize : undefined}
-                debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
-                debugFollowTemplateScale={showDebug && debugTemplateEnabled ? debugTemplateScale : 1}
+                debugFollowTemplateUrl={showDebug && debugPanelTab === "follow" ? debugTemplateImageUrl : null}
+                debugFollowTemplateScale={showDebug && debugPanelTab === "follow" ? debugTemplateScale : 1}
                 debugFollowTemplateLabel={
-                  showDebug && debugTemplateEnabled && debugTemplateClass
+                  showDebug && debugPanelTab === "follow" && debugTemplateClass && debugTemplateName
                     ? `${debugTemplateClass} x ${debugTemplateScale.toFixed(2)}`
                     : ""
                 }
@@ -4546,6 +4590,7 @@ export default function App() {
               padding: "16px 16px 6px",
               minHeight: 0,
               overflowY: "auto",
+              scrollbarGutter: "stable both-edges",
               display: "flex",
               flexDirection: "column",
               gap: 10,
@@ -5943,259 +5988,212 @@ export default function App() {
                   >
                     <div
                       style={{
-                        marginBottom: 10,
-                        paddingBottom: 8,
-                        borderBottom: "1px dashed #f4a35d",
                         display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
                         gap: 6,
+                        background: "#ffe9d2",
+                        borderRadius: 8,
+                        padding: 4,
+                        marginBottom: 8,
                       }}
                     >
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#7a3e00" }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          height: 28,
+                          boxShadow: "none",
+                          borderRadius: 6,
+                          background: debugPanelTab === "follow" ? "#fff" : "transparent",
+                          borderColor: debugPanelTab === "follow" ? "#fdba74" : "transparent",
+                          color: debugPanelTab === "follow" ? "#9a4b00" : "#866f5d",
+                        }}
+                        onClick={() => setDebugPanelTab("follow")}
+                      >
                         Template Follow
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
-                        <select
-                          value={debugTemplateClass}
-                          onChange={(e) => setDebugTemplateClass(e.target.value)}
-                          style={{ height: 28, fontSize: 12 }}
-                        >
-                          <option value="">選択</option>
-                          {asChildren(
-                            classOptions.map((name, idx) => (
-                              <option key={`debug-class-${name}-${idx}`} value={name}>
-                                {name}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "#666" }}>テンプレ</span>
-                        <select
-                          value={debugTemplateName}
-                          onChange={(e) => setDebugTemplateName(e.target.value)}
-                          disabled={!debugTemplateClass || debugTemplateLoading}
-                          style={{ height: 28, fontSize: 12 }}
-                        >
-                          <option value="">
-                            {debugTemplateLoading ? "読み込み中..." : "選択"}
-                          </option>
-                          {asChildren(
-                            debugTemplateItems.map((item, idx) => (
-                              <option key={`debug-template-${item.name}-${idx}`} value={item.name}>
-                                {item.name}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                      </div>
-                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#555" }}>
-                        <input
-                          type="checkbox"
-                          checked={debugTemplateEnabled}
-                          onChange={(e) => setDebugTemplateEnabled(e.target.checked)}
-                          disabled={!debugTemplateClass || !debugTemplateName}
-                        />
-                        カーソル追従で表示（右下をカーソル先端に配置）
-                      </label>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          height: 28,
+                          boxShadow: "none",
+                          borderRadius: 6,
+                          background: debugPanelTab === "last" ? "#fff" : "transparent",
+                          borderColor: debugPanelTab === "last" ? "#fdba74" : "transparent",
+                          color: debugPanelTab === "last" ? "#9a4b00" : "#866f5d",
+                        }}
+                        onClick={() => setDebugPanelTab("last")}
+                      >
+                        Last Detection
+                      </button>
                     </div>
-                    {detectDebug && (
-                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Debug</div>
-                    )}
-                    {detectDebug?.clicked_image_xy && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                        click: {detectDebug.clicked_image_xy.x.toFixed(2)} ,{" "}
-                        {detectDebug.clicked_image_xy.y.toFixed(2)}
-                      </div>
-                    )}
-                    {detectDebug?.roi_bbox && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                        roi: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) → (
-                        {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
-                      </div>
-                    )}
-                    {debugOuterForView && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                        outer: {debugOuterForView.x}, {debugOuterForView.y},{" "}
-                        {debugOuterForView.w}×{debugOuterForView.h}
-                      </div>
-                    )}
-                    {debugTightForView && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        tight: {debugTightForView.x}, {debugTightForView.y},{" "}
-                        {debugTightForView.w}×{debugTightForView.h}
-                      </div>
-                    )}
-                    {detectDebug?.roi_click_xy && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
-                      </div>
-                    )}
-                    {debugMatchScoreForView !== undefined && debugOffsetForView && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        match score: {debugMatchScoreForView.toFixed(4)} / offset:{" "}
-                        {debugOffsetForView.x.toFixed(1)}, {debugOffsetForView.y.toFixed(1)}
-                      </div>
-                    )}
-                    {debugMatchScoreForView !== undefined && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        shape_ratio:{" "}
-                        {typeof debugShapeRatioForView === "number"
-                          ? debugShapeRatioForView.toFixed(4)
-                          : "-"}
-                      </div>
-                    )}
-                    {debugMatchModeForView && (
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>
-                        match mode: {debugMatchModeForView}
-                      </div>
-                    )}
-                    {coordDebug && (
-                      <div style={{ marginTop: detectDebug ? 10 : 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Coords</div>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                          screen: {coordDebug.screen.x.toFixed(2)}, {coordDebug.screen.y.toFixed(2)}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                          image: {coordDebug.image.x.toFixed(2)}, {coordDebug.image.y.toFixed(2)}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                          zoom: {coordDebug.zoom.toFixed(3)}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                          pan: {coordDebug.pan.x.toFixed(2)}, {coordDebug.pan.y.toFixed(2)}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
-                          dpr: {coordDebug.dpr.toFixed(2)}
-                        </div>
-                        {coordDebug.cssScale && (
-                          <div style={{ fontSize: 11, color: "#666" }}>
-                            cssScale: {coordDebug.cssScale.sx.toFixed(3)}, {coordDebug.cssScale.sy.toFixed(3)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-                      {(detectDebug?.roi_preview_marked_base64 || detectDebug?.roi_preview_base64) && (
-                        <img
-                          src={`data:image/png;base64,${
-                            detectDebug?.roi_preview_marked_base64 ||
-                            detectDebug?.roi_preview_base64 ||
-                            ""
-                          }`}
-                          alt="roi preview"
-                          style={{ width: "100%", border: "1px solid #e3e3e3", borderRadius: 4 }}
-                        />
-                      )}
+                    {debugPanelTab === "follow" && (
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "1fr 1fr",
                           gap: 6,
-                          alignItems: "stretch",
                         }}
                       >
-                        {detectDebug?.roi_edge_preview_base64 && (
-                          <div
-                            style={{
-                              width: "100%",
-                              aspectRatio: "1 / 1",
-                              border: "1px solid #e3e3e3",
-                              borderRadius: 4,
-                              overflow: "hidden",
-                            }}
+                        <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 11, color: "#666" }}>シリーズ</span>
+                          <select
+                            value={debugTemplateClass}
+                            onChange={(e) => setDebugTemplateClass(e.target.value)}
+                            style={{ height: 28, fontSize: 12 }}
                           >
-                            <img
-                              src={`data:image/png;base64,${detectDebug.roi_edge_preview_base64}`}
-                              alt="roi edges"
-                              style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "contain",
-                                display: "block",
-                              }}
-                            />
-                          </div>
+                            <option value="">選択</option>
+                            {asChildren(
+                              classOptions.map((name, idx) => (
+                                <option key={`debug-class-${name}-${idx}`} value={name}>
+                                  {name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 11, color: "#666" }}>テンプレ</span>
+                          <select
+                            value={debugTemplateName}
+                            onChange={(e) => setDebugTemplateName(e.target.value)}
+                            disabled={!debugTemplateClass || debugTemplateLoading}
+                            style={{ height: 28, fontSize: 12 }}
+                          >
+                            <option value="">
+                              {debugTemplateLoading ? "読み込み中..." : "選択"}
+                            </option>
+                            {asChildren(
+                              debugTemplateItems.map((item, idx) => (
+                                <option key={`debug-template-${item.name}-${idx}`} value={item.name}>
+                                  {item.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#555" }}>
+                          シリーズ/テンプレ選択時にカーソル追従で表示（右下をカーソル先端に配置）
+                        </div>
+                      </div>
+                    )}
+                    {debugPanelTab === "last" && (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#7a3e00" }}>
+                          Last Detection
+                        </div>
+                        {!lastDetectionSnapshot && (
+                          <div style={{ fontSize: 11, color: "#666" }}>まだ検出履歴がありません。</div>
                         )}
-                        {templatePreviewBase64 && (
-                          <div
-                            style={{
-                              width: "100%",
-                              aspectRatio: "1 / 1",
-                              border: "1px solid #e3e3e3",
-                              borderRadius: 4,
-                              overflow: "hidden",
-                              position: "relative",
-                            }}
-                          >
-                            <img
-                              src={`data:image/png;base64,${
-                                templatePreviewBase64 || ""
-                              }`}
-                              alt="template edges"
+                        {lastDetectionSnapshot && (
+                          <>
+                            {(() => {
+                              const viewClass =
+                                activeDetectedCandidate?.class_name || lastDetectionSnapshot.bestClass || "-";
+                              const viewScore =
+                                typeof activeDetectedCandidate?.score === "number" &&
+                                Number.isFinite(activeDetectedCandidate.score)
+                                  ? activeDetectedCandidate.score
+                                  : lastDetectionSnapshot.bestScore;
+                              const viewScale =
+                                typeof activeDetectedCandidate?.scale === "number" &&
+                                Number.isFinite(activeDetectedCandidate.scale)
+                                  ? activeDetectedCandidate.scale
+                                  : lastDetectionSnapshot.bestScale;
+                              const viewTemplate =
+                                activeDetectedCandidate?.template || lastDetectionSnapshot.bestTemplate || "-";
+                              const viewMatchMode =
+                                activeDetectedCandidate?.match_mode ||
+                                lastDetectionSnapshot.bestMatchMode ||
+                                "-";
+                              return (
+                                <>
+                            <div style={{ fontSize: 11, color: "#666" }}>
+                              mode: {lastDetectionSnapshot.mode === "hover" ? "Hover Detect" : "Click Detection"}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#666" }}>
+                              point: {lastDetectionSnapshot.point.x.toFixed(2)}, {lastDetectionSnapshot.point.y.toFixed(2)}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#666" }}>
+                              class: {viewClass} / conf:{" "}
+                              {typeof viewScore === "number"
+                                ? viewScore.toFixed(4)
+                                : "-"}{" "}
+                              / scale:{" "}
+                              {typeof viewScale === "number"
+                                ? viewScale.toFixed(3)
+                                : "-"}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#666" }}>
+                              template: {viewTemplate} / match: {viewMatchMode}
+                            </div>
+                            <div
                               style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "contain",
-                                display: "block",
+                                marginTop: 2,
+                                display: "grid",
+                                gap: 4,
+                                border: "1px solid #f5cda0",
+                                borderRadius: 6,
+                                background: "rgba(255,255,255,0.6)",
+                                padding: "6px 8px",
                               }}
-                            />
-                            {(selectedCandidate?.class_name || selectedAnnotation?.class_name) && (
-                              <div
-                                style={{
-                                  position: "absolute",
-                                  top: 4,
-                                  left: 4,
-                                  padding: "2px 6px",
-                                  borderRadius: 6,
-                                  background: "rgba(0,0,0,0.65)",
-                                  color: "#fff",
-                                  fontSize: 10,
-                                }}
-                              >
-                                {selectedCandidate?.class_name || selectedAnnotation?.class_name}
+                            >
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#7a3e00" }}>Detection Params</div>
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                roi_size: {lastDetectionSnapshot.roiSize} / topk: {lastDetectionSnapshot.topk}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                scale_min: {lastDetectionSnapshot.scaleMin.toFixed(2)} / scale_max:{" "}
+                                {lastDetectionSnapshot.scaleMax.toFixed(2)} / scale_steps:{" "}
+                                {lastDetectionSnapshot.scaleSteps}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                shape_ratio_threshold: {lastDetectionSnapshot.shapeRatioThreshold.toFixed(2)}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                exclude_mode: {lastDetectionSnapshot.excludeMode} / exclude_center:{" "}
+                                {lastDetectionSnapshot.excludeCenter ? "on" : "off"} / exclude_iou_threshold:{" "}
+                                {lastDetectionSnapshot.excludeIouThreshold.toFixed(2)}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                class_filter:{" "}
+                                {lastDetectionSnapshot.classFilter.length > 0
+                                  ? lastDetectionSnapshot.classFilter.join(", ")
+                                  : "(all)"}
+                              </div>
+                            </div>
+                            {detectDebug?.roi_bbox && (
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                roi bbox: ({detectDebug.roi_bbox.x1}, {detectDebug.roi_bbox.y1}) - (
+                                {detectDebug.roi_bbox.x2}, {detectDebug.roi_bbox.y2})
                               </div>
                             )}
-                            {typeof (selectedCandidate?.score ?? selectedAnnotation?.score) === "number" && (
-                              <div
-                                style={{
-                                  position: "absolute",
-                                  top: 4,
-                                  right: 4,
-                                  padding: "2px 6px",
-                                  borderRadius: 6,
-                                  background: "rgba(0,0,0,0.65)",
-                                  color: "#fff",
-                                  fontSize: 10,
-                                  fontVariantNumeric: "tabular-nums",
-                                }}
-                              >
-                                {(selectedCandidate?.score ?? selectedAnnotation?.score ?? 0).toFixed(3)}
+                            {detectDebug?.roi_click_xy && (
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                roi click: {detectDebug.roi_click_xy.x.toFixed(2)}, {detectDebug.roi_click_xy.y.toFixed(2)}
                               </div>
                             )}
-                          </div>
-                        )}
-                        {!templatePreviewBase64 && (
-                          <div
-                            style={{
-                              width: "100%",
-                              aspectRatio: "1 / 1",
-                              border: "1px dashed #e3e3e3",
-                              borderRadius: 4,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: 11,
-                              color: "#888",
-                              background: "#fafafa",
-                            }}
-                          >
-                            テンプレ未取得
-                          </div>
+                            {typeof detectDebug?.match_score === "number" && (
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                match_score: {detectDebug.match_score.toFixed(4)} / shape_ratio:{" "}
+                                {typeof detectDebug?.shape_ratio === "number"
+                                  ? detectDebug.shape_ratio.toFixed(4)
+                                  : "-"}
+                              </div>
+                            )}
+                            {detectDebug?.match_offset_in_roi && (
+                              <div style={{ fontSize: 11, color: "#666" }}>
+                                match_offset_in_roi: {detectDebug.match_offset_in_roi.x.toFixed(1)},{" "}
+                                {detectDebug.match_offset_in_roi.y.toFixed(1)}
+                              </div>
+                            )}
+                                </>
+                              );
+                            })()}
+                          </>
                         )}
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -6606,7 +6604,7 @@ export default function App() {
                       .map(([name, count]) => `${name}: ${count}`)
                       .join(" / ")}
               </div>
-              <div className="confirmedList">
+              <div className="confirmedList" ref={confirmedListRef}>
                 {sortedAnnotations.length === 0 && (
                   <div style={{ color: "var(--muted)" }}>確定アノテはまだありません。</div>
                 )}

@@ -47,6 +47,7 @@ type Props = {
     matched_class_name?: string;
     matched_template_scaled_base64?: string;
   } | null;
+  debugOverlayMode?: "bbox" | "template";
   debugRoiSize?: number;
   debugFollowTemplateUrl?: string | null;
   debugFollowTemplateLabel?: string;
@@ -92,6 +93,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   pendingManualBBox,
   onDebugCoords,
   debugOverlay,
+  debugOverlayMode,
   debugRoiSize,
   debugFollowTemplateUrl,
   debugFollowTemplateLabel,
@@ -789,6 +791,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       );
 
       if (debugOverlay) {
+        const useTemplateOverlayOnly = debugOverlayMode === "template";
         const drawDebugPoint = (pt: { x: number; y: number }, color: string) => {
           ctx.save();
           ctx.strokeStyle = color;
@@ -800,7 +803,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         };
         const debugPoint = debugHoverImagePoint || debugOverlay.clicked_image_xy || null;
         drawRoiOverlay(showRoiArea ? debugPoint : null, debugRoiSize);
-        if (debugOverlay.outer_bbox) {
+        if (debugOverlay.outer_bbox && !useTemplateOverlayOnly) {
           const b = debugOverlay.outer_bbox;
           drawBox(b.x, b.y, b.w, b.h, "#ffb300", baseLine * 1.4, true, 0.9, 0);
         }
@@ -828,7 +831,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
             }
             ctx.restore();
           }
-          drawBox(b.x, b.y, b.w, b.h, "#2962ff", baseLine * 1.8, false, 0.95, 0);
+          if (!useTemplateOverlayOnly) {
+            drawBox(b.x, b.y, b.w, b.h, "#2962ff", baseLine * 1.8, false, 0.95, 0);
+          }
         }
         if (debugOverlay.clicked_image_xy) {
           drawDebugPoint(debugOverlay.clicked_image_xy, "#d81b60");
@@ -939,6 +944,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     pendingManualBBox,
     scale,
     debugOverlay,
+    debugOverlayMode,
     debugRoiSize,
     debugPoints,
     debugFollowTemplateUrl,
