@@ -52,8 +52,11 @@ const DEFAULT_EXCLUDE_CENTER = true;
 const DEFAULT_EXCLUDE_IOU_THRESHOLD = 0.6;
 const DEFAULT_REFINE_CONTOUR = false;
 type AutoMethod = "combined" | "scaled_templates" | "scaled_templates_beta";
+type DetectionMode = "click" | "hover";
 
 const DEFAULT_AUTO_METHOD: AutoMethod = "combined";
+const DEFAULT_HOVER_DETECT_INTERVAL_MS = 180;
+const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 20;
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
@@ -208,10 +211,19 @@ export default function App() {
   const [showCandidates, setShowCandidates] = useState<boolean>(true);
   const [showAnnotations, setShowAnnotations] = useState<boolean>(true);
   const [showRoiArea, setShowRoiArea] = useState<boolean>(true);
+  const [detectionMode, setDetectionMode] = useState<DetectionMode>("click");
+  const [hoverDetectIntervalMs, setHoverDetectIntervalMs] = useState<number>(
+    DEFAULT_HOVER_DETECT_INTERVAL_MS
+  );
+  const [hoverRedetectDistancePx, setHoverRedetectDistancePx] = useState<number>(
+    DEFAULT_HOVER_REDETECT_DISTANCE_PX
+  );
   const canvasRef = useRef<ImageCanvasHandle | null>(null);
   const [lastClick, setLastClick] = useState<{ x: number; y: number } | null>(null);
   const [followupScanReady, setFollowupScanReady] = useState<boolean>(false);
   const followupScanPointRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverDetectTimerRef = useRef<number | null>(null);
+  const hoverLastDetectedPointRef = useRef<{ x: number; y: number } | null>(null);
   const [detectDebug, setDetectDebug] = useState<DetectPointResponse["debug"] | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
@@ -1192,6 +1204,11 @@ export default function App() {
   };
 
   const resetAnnotationWorkState = () => {
+    if (hoverDetectTimerRef.current) {
+      window.clearTimeout(hoverDetectTimerRef.current);
+      hoverDetectTimerRef.current = null;
+    }
+    hoverLastDetectedPointRef.current = null;
     setCandidates([]);
     setSelectedCandidateId(null);
     setAnnotations([]);
@@ -1766,6 +1783,11 @@ export default function App() {
     const nextPoint = computeNextScanPoint(basePoint);
     followupScanPointRef.current = nextPoint;
     setFollowupScanReady(Boolean(nextPoint));
+    if (detectionMode === "hover") {
+      setCandidates([]);
+      setSelectedCandidateId(null);
+      return;
+    }
     if (candidates.length > 0) {
       const index = candidates.findIndex((c) => c.id === selectedCandidate.id);
       if (index >= 0) {
@@ -1798,6 +1820,11 @@ export default function App() {
   };
 
   const clearDetectionState = () => {
+    if (hoverDetectTimerRef.current) {
+      window.clearTimeout(hoverDetectTimerRef.current);
+      hoverDetectTimerRef.current = null;
+    }
+    hoverLastDetectedPointRef.current = null;
     setSelectedCandidateId(null);
     setCandidates([]);
     setDetectDebug(null);
@@ -1920,6 +1947,67 @@ export default function App() {
     coordDebug,
     detectDebug,
     lastClick,
+  ]);
+
+  useEffect(() => {
+    if (detectionMode !== "hover") {
+      if (hoverDetectTimerRef.current) {
+        window.clearTimeout(hoverDetectTimerRef.current);
+        hoverDetectTimerRef.current = null;
+      }
+      hoverLastDetectedPointRef.current = null;
+    }
+  }, [detectionMode]);
+
+  useEffect(() => {
+    hoverLastDetectedPointRef.current = null;
+  }, [imageId, datasetSelectedName]);
+
+  useEffect(() => {
+    if (detectionMode !== "hover") return;
+    if (!coordDebug?.image || !imageId || !project || !imageSize) return;
+    if (busy || autoRunning || isCreatingManualBBox || annotationEditActiveRef.current) return;
+
+    const point = {
+      x: clamp(coordDebug.image.x, 0, imageSize.w - 1),
+      y: clamp(coordDebug.image.y, 0, imageSize.h - 1),
+    };
+    const last = hoverLastDetectedPointRef.current;
+    const minDist = Math.max(0, hoverRedetectDistancePx);
+    if (last) {
+      const dx = point.x - last.x;
+      const dy = point.y - last.y;
+      if (dx * dx + dy * dy < minDist * minDist) return;
+    }
+    if (hoverDetectTimerRef.current) {
+      window.clearTimeout(hoverDetectTimerRef.current);
+      hoverDetectTimerRef.current = null;
+    }
+    hoverDetectTimerRef.current = window.setTimeout(() => {
+      hoverDetectTimerRef.current = null;
+      if (busy || autoRunning || isCreatingManualBBox || annotationEditActiveRef.current) return;
+      hoverLastDetectedPointRef.current = point;
+      void handleClickPoint(point.x, point.y);
+    }, Math.max(30, Math.round(hoverDetectIntervalMs)));
+    return () => {
+      if (hoverDetectTimerRef.current) {
+        window.clearTimeout(hoverDetectTimerRef.current);
+        hoverDetectTimerRef.current = null;
+      }
+    };
+  }, [
+    detectionMode,
+    coordDebug?.image.x,
+    coordDebug?.image.y,
+    imageId,
+    project,
+    imageSize?.w,
+    imageSize?.h,
+    busy,
+    autoRunning,
+    isCreatingManualBBox,
+    hoverRedetectDistancePx,
+    hoverDetectIntervalMs,
   ]);
 
   useEffect(() => {
@@ -4299,7 +4387,7 @@ export default function App() {
                     ]);
                   }}
                   onClickPoint={(x, y) => {
-                    if (showDebug) return;
+                    if (showDebug || detectionMode === "hover") return;
                     void handleClickPoint(x, y);
                   }}
                   onCreateManualBBox={(bbox) => {
@@ -4581,128 +4669,204 @@ export default function App() {
             <div className="sectionCard">
               <div
                 style={{
-                  marginBottom: 4,
-                  padding: "6px 10px 2px",
+                  marginBottom: 2,
+                  padding: "4px 10px 0",
                   borderRadius: 10,
                   background: "transparent",
                   display: "grid",
-                  gap: 4,
+                  gap: 2,
                 }}
               >
-                <div style={{ display: "grid", gap: 4 }}>
-                  <span
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: "#0b3954",
-                      textDecoration: "underline",
-                      textUnderlineOffset: "3px",
-                    }}
-                  >
-                    クリック検出ステータス
-                  </span>
+                <div style={{ display: "grid", gap: 2 }}>
                   <div
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      minHeight: 20,
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#35506b",
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 6,
+                      background: "#dfe8ff",
+                      borderRadius: 8,
+                      padding: 4,
+                      marginBottom: 2,
                     }}
                   >
-                    <span
-                      title={activeDetectedCandidate?.class_name || "なし"}
-                      style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 30,
+                        fontSize: 13,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        background: detectionMode === "click" ? "#fff" : "transparent",
+                        borderColor: detectionMode === "click" ? "#a9c3ff" : "transparent",
+                        color: detectionMode === "click" ? "#1f4fbf" : "#546e7a",
+                      }}
+                      onClick={() => setDetectionMode("click")}
                     >
-                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}>CLASS : </span>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          minWidth: "16ch",
-                          minHeight: "1.8em",
-                          padding: "1px 8px",
-                          borderRadius: 6,
-                          border: "1px solid #9fb3c8",
-                          background: "#f6fbff",
-                          color: "#16324f",
-                          fontSize: 14,
-                          fontWeight: 700,
-                          lineHeight: "1.8em",
-                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
-                          boxSizing: "border-box",
-                        }}
-                      >
-                        {activeDetectedCandidate?.class_name || ""}
-                      </span>
-                    </span>
+                      Click Detection
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 30,
+                        fontSize: 13,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        background: detectionMode === "hover" ? "#fff" : "transparent",
+                        borderColor: detectionMode === "hover" ? "#a9c3ff" : "transparent",
+                        color: detectionMode === "hover" ? "#1f4fbf" : "#546e7a",
+                      }}
+                      onClick={() => setDetectionMode("hover")}
+                    >
+                      Hover Detect
+                    </button>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 18,
-                      minHeight: 20,
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#35506b",
-                    }}
-                  >
-                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}>CONF : </span>
-                      <span
+                  {detectionMode === "click" ? (
+                    <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                      <div
                         style={{
-                          display: "inline-block",
-                          minWidth: "6ch",
-                          minHeight: "1.8em",
-                          padding: "1px 8px",
-                          borderRadius: 6,
-                          border: "1px solid #9fb3c8",
-                          background: "#f6fbff",
-                          color: "#16324f",
-                          fontSize: 14,
-                          fontWeight: 700,
-                          lineHeight: "1.8em",
-                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
-                          boxSizing: "border-box",
+                          display: "grid",
+                          gridTemplateColumns: "2fr 1fr 1fr",
+                          gap: 8,
                         }}
                       >
-                        {activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
-                          ? activeDetectedCandidate.score.toFixed(3)
-                          : ""}
-                      </span>
-                    </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, lineHeight: "1.8em" }}> SCALE : </span>
-                      <span
+                        <span
+                          title={activeDetectedCandidate?.class_name || "なし"}
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color: activeDetectedCandidate?.class_name ? "#16324f" : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {activeDetectedCandidate?.class_name || "Class"}
+                        </span>
+                        <span
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color:
+                              activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
+                                ? "#16324f"
+                                : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            fontVariantNumeric: "tabular-nums",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
+                            ? activeDetectedCandidate.score.toFixed(3)
+                            : "Conf"}
+                        </span>
+                        <span
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color:
+                              activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
+                                ? "#16324f"
+                                : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            fontVariantNumeric: "tabular-nums",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
+                            ? activeDetectedCandidate.scale.toFixed(2)
+                            : "Scale"}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                      <div
                         style={{
-                          display: "inline-block",
-                          minWidth: "6ch",
-                          minHeight: "1.8em",
-                          padding: "1px 8px",
-                          borderRadius: 6,
-                          border: "1px solid #9fb3c8",
-                          background: "#f6fbff",
-                          color: "#16324f",
-                          fontSize: 14,
-                          fontWeight: 700,
-                          lineHeight: "1.8em",
-                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.85)",
-                          boxSizing: "border-box",
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
                         }}
                       >
-                        {activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
-                          ? activeDetectedCandidate.scale.toFixed(2)
-                          : ""}
-                      </span>
-                    </span>
-                  </div>
+                        <span style={{ fontSize: 12, color: "#455a64" }}>処理間隔</span>
+                        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
+                          <NumericInputWithButtons
+                            value={hoverDetectIntervalMs}
+                            onChange={(v) =>
+                              typeof v === "number" &&
+                              setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(v))))
+                            }
+                            min={30}
+                            max={3000}
+                            step={10}
+                            height={28}
+                            inputWidth={76}
+                            ariaLabel="hover detect interval"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
+                          <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>ms</span>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "104px 1fr",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 12, color: "#455a64" }}>再検出抑制距離</span>
+                        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
+                          <NumericInputWithButtons
+                            value={hoverRedetectDistancePx}
+                            onChange={(v) =>
+                              typeof v === "number" &&
+                              setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(v))))
+                            }
+                            min={0}
+                            max={500}
+                            step={1}
+                            height={28}
+                            inputWidth={76}
+                            ariaLabel="hover redetect distance"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
+                          <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>px</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div
                   style={{
                     display: "flex",
                     gap: 8,
-                    marginTop: 0,
+                    marginTop: 2,
                     marginBottom: 0,
                   }}
                 >
