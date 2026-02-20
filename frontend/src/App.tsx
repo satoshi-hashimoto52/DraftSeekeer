@@ -224,6 +224,8 @@ export default function App() {
   const followupScanPointRef = useRef<{ x: number; y: number } | null>(null);
   const hoverDetectTimerRef = useRef<number | null>(null);
   const hoverLastDetectedPointRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverStepHoldTimerRef = useRef<number | null>(null);
+  const hoverStepHoldIntervalRef = useRef<number | null>(null);
   const [detectDebug, setDetectDebug] = useState<DetectPointResponse["debug"] | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
@@ -1630,6 +1632,27 @@ export default function App() {
   const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
 
+  const stopHoverStepHold = () => {
+    if (hoverStepHoldTimerRef.current !== null) {
+      window.clearTimeout(hoverStepHoldTimerRef.current);
+      hoverStepHoldTimerRef.current = null;
+    }
+    if (hoverStepHoldIntervalRef.current !== null) {
+      window.clearInterval(hoverStepHoldIntervalRef.current);
+      hoverStepHoldIntervalRef.current = null;
+    }
+  };
+
+  const startHoverStepHold = (applyStep: () => void) => {
+    stopHoverStepHold();
+    applyStep();
+    hoverStepHoldTimerRef.current = window.setTimeout(() => {
+      hoverStepHoldIntervalRef.current = window.setInterval(() => {
+        applyStep();
+      }, 70);
+    }, 320);
+  };
+
   const computeNextScanPoint = (fromPoint: { x: number; y: number }) => {
     if (!imageSize) return null;
     const step = Math.max(1, Math.round(roiSize * 0.5));
@@ -2821,6 +2844,7 @@ export default function App() {
       if (interactionTimeoutRef.current) {
         window.clearTimeout(interactionTimeoutRef.current);
       }
+      stopHoverStepHold();
     };
   }, []);
 
@@ -4723,7 +4747,7 @@ export default function App() {
                     </button>
                   </div>
                   {detectionMode === "click" ? (
-                    <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                    <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
                       <div
                         style={{
                           display: "grid",
@@ -4800,7 +4824,81 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                    <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "2fr 1fr 1fr",
+                          gap: 8,
+                        }}
+                      >
+                        <span
+                          title={activeDetectedCandidate?.class_name || "なし"}
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color: activeDetectedCandidate?.class_name ? "#16324f" : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {activeDetectedCandidate?.class_name || "Class"}
+                        </span>
+                        <span
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color:
+                              activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
+                                ? "#16324f"
+                                : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            fontVariantNumeric: "tabular-nums",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {activeDetectedCandidate && typeof activeDetectedCandidate.score === "number"
+                            ? activeDetectedCandidate.score.toFixed(3)
+                            : "Conf"}
+                        </span>
+                        <span
+                          style={{
+                            height: 28,
+                            padding: "0 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d9e2ec",
+                            background: "#f3f8ff",
+                            color:
+                              activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
+                                ? "#16324f"
+                                : "#8aa0b5",
+                            fontSize: 13,
+                            fontWeight: 700,
+                            lineHeight: "28px",
+                            boxSizing: "border-box",
+                            fontVariantNumeric: "tabular-nums",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {activeDetectedCandidate && typeof activeDetectedCandidate.scale === "number"
+                            ? activeDetectedCandidate.scale.toFixed(2)
+                            : "Scale"}
+                        </span>
+                      </div>
                       <div
                         style={{
                           display: "grid",
@@ -4811,22 +4909,137 @@ export default function App() {
                       >
                         <span style={{ fontSize: 12, color: "#455a64" }}>処理間隔</span>
                         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
-                          <NumericInputWithButtons
-                            value={hoverDetectIntervalMs}
-                            onChange={(v) =>
-                              typeof v === "number" &&
-                              setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(v))))
-                            }
-                            min={30}
-                            max={3000}
-                            step={10}
-                            height={28}
-                            inputWidth={76}
-                            ariaLabel="hover detect interval"
-                            className="controlWrap"
-                            inputClassName="numInput"
-                            buttonClassName="stepBtn"
-                          />
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 0,
+                              height: 26,
+                              border: "1px solid #9fb3c8",
+                              borderRadius: 0,
+                              background: "#f1f1f1",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev - 10))
+                                  )
+                                );
+                              }}
+                              onMouseUp={stopHoverStepHold}
+                              onMouseLeave={stopHoverStepHold}
+                              onTouchStart={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev - 10))
+                                  )
+                                );
+                              }}
+                              onTouchEnd={stopHoverStepHold}
+                              onTouchCancel={stopHoverStepHold}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev - 10))
+                                  );
+                                }
+                              }}
+                              style={{
+                                width: 26,
+                                height: "100%",
+                                border: "none",
+                                borderRight: "1px solid #c6c6c6",
+                                background: "transparent",
+                                color: "#9e9e9e",
+                                fontSize: 16,
+                                lineHeight: 1,
+                                paddingBottom: 1,
+                                cursor: "pointer",
+                              }}
+                            >
+                              −
+                            </button>
+                            <input
+                              type="number"
+                              value={hoverDetectIntervalMs}
+                              onChange={(e) => {
+                                const next = Number(e.target.value);
+                                if (Number.isNaN(next)) return;
+                                setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(next))));
+                              }}
+                              onBlur={(e) => {
+                                const next = Number(e.target.value);
+                                if (Number.isNaN(next)) return;
+                                setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(next))));
+                              }}
+                              aria-label="hover detect interval"
+                              style={{
+                                width: 44,
+                                height: "100%",
+                                border: "none",
+                                borderRight: "1px solid #c6c6c6",
+                                background: "transparent",
+                                textAlign: "center",
+                                color: "#253b80",
+                                fontSize: 12,
+                                fontWeight: 500,
+                                boxSizing: "border-box",
+                                outline: "none",
+                                appearance: "textfield",
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev + 10))
+                                  )
+                                );
+                              }}
+                              onMouseUp={stopHoverStepHold}
+                              onMouseLeave={stopHoverStepHold}
+                              onTouchStart={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev + 10))
+                                  )
+                                );
+                              }}
+                              onTouchEnd={stopHoverStepHold}
+                              onTouchCancel={stopHoverStepHold}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setHoverDetectIntervalMs((prev) =>
+                                    Math.max(30, Math.min(3000, prev + 10))
+                                  );
+                                }
+                              }}
+                              style={{
+                                width: 26,
+                                height: "100%",
+                                border: "none",
+                                background: "transparent",
+                                color: "#9e9e9e",
+                                fontSize: 16,
+                                lineHeight: 1,
+                                paddingBottom: 1,
+                                cursor: "pointer",
+                              }}
+                            >
+                              +
+                            </button>
+                          </div>
                           <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>ms</span>
                         </div>
                       </div>
@@ -4840,22 +5053,137 @@ export default function App() {
                       >
                         <span style={{ fontSize: 12, color: "#455a64" }}>再検出抑制距離</span>
                         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
-                          <NumericInputWithButtons
-                            value={hoverRedetectDistancePx}
-                            onChange={(v) =>
-                              typeof v === "number" &&
-                              setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(v))))
-                            }
-                            min={0}
-                            max={500}
-                            step={1}
-                            height={28}
-                            inputWidth={76}
-                            ariaLabel="hover redetect distance"
-                            className="controlWrap"
-                            inputClassName="numInput"
-                            buttonClassName="stepBtn"
-                          />
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 0,
+                              height: 26,
+                              border: "1px solid #9fb3c8",
+                              borderRadius: 0,
+                              background: "#f1f1f1",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev - 1))
+                                  )
+                                );
+                              }}
+                              onMouseUp={stopHoverStepHold}
+                              onMouseLeave={stopHoverStepHold}
+                              onTouchStart={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev - 1))
+                                  )
+                                );
+                              }}
+                              onTouchEnd={stopHoverStepHold}
+                              onTouchCancel={stopHoverStepHold}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev - 1))
+                                  );
+                                }
+                              }}
+                              style={{
+                                width: 26,
+                                height: "100%",
+                                border: "none",
+                                borderRight: "1px solid #c6c6c6",
+                                background: "transparent",
+                                color: "#9e9e9e",
+                                fontSize: 16,
+                                lineHeight: 1,
+                                paddingBottom: 1,
+                                cursor: "pointer",
+                              }}
+                            >
+                              −
+                            </button>
+                            <input
+                              type="number"
+                              value={hoverRedetectDistancePx}
+                              onChange={(e) => {
+                                const next = Number(e.target.value);
+                                if (Number.isNaN(next)) return;
+                                setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(next))));
+                              }}
+                              onBlur={(e) => {
+                                const next = Number(e.target.value);
+                                if (Number.isNaN(next)) return;
+                                setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(next))));
+                              }}
+                              aria-label="hover redetect distance"
+                              style={{
+                                width: 44,
+                                height: "100%",
+                                border: "none",
+                                borderRight: "1px solid #c6c6c6",
+                                background: "transparent",
+                                textAlign: "center",
+                                color: "#253b80",
+                                fontSize: 12,
+                                fontWeight: 500,
+                                boxSizing: "border-box",
+                                outline: "none",
+                                appearance: "textfield",
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev + 1))
+                                  )
+                                );
+                              }}
+                              onMouseUp={stopHoverStepHold}
+                              onMouseLeave={stopHoverStepHold}
+                              onTouchStart={(e) => {
+                                e.preventDefault();
+                                startHoverStepHold(() =>
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev + 1))
+                                  )
+                                );
+                              }}
+                              onTouchEnd={stopHoverStepHold}
+                              onTouchCancel={stopHoverStepHold}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setHoverRedetectDistancePx((prev) =>
+                                    Math.max(0, Math.min(500, prev + 1))
+                                  );
+                                }
+                              }}
+                              style={{
+                                width: 26,
+                                height: "100%",
+                                border: "none",
+                                background: "transparent",
+                                color: "#9e9e9e",
+                                fontSize: 16,
+                                lineHeight: 1,
+                                paddingBottom: 1,
+                                cursor: "pointer",
+                              }}
+                            >
+                              +
+                            </button>
+                          </div>
                           <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>px</span>
                         </div>
                       </div>
@@ -4866,7 +5194,7 @@ export default function App() {
                   style={{
                     display: "flex",
                     gap: 8,
-                    marginTop: 2,
+                    marginTop: 8,
                     marginBottom: 0,
                   }}
                 >
