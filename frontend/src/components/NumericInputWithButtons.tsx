@@ -17,6 +17,7 @@ type Props = {
   className?: string;
   inputClassName?: string;
   buttonClassName?: string;
+  stylePreset?: "default" | "joined";
 };
 
 const clamp = (value: number, min?: number, max?: number) => {
@@ -41,6 +42,7 @@ export default function NumericInputWithButtons({
   className,
   inputClassName,
   buttonClassName,
+  stylePreset = "default",
 }: Props) {
   const holdTimerRef = React.useRef<number | null>(null);
   const holdIntervalRef = React.useRef<number | null>(null);
@@ -111,48 +113,190 @@ export default function NumericInputWithButtons({
   React.useEffect(() => {
     return () => stopHold();
   }, [stopHold]);
+  const normalizedHeight = 26;
+  const normalizedInputWidth = 44;
+  const normalizedButtonWidth = 26;
+  const unifiedFontSize = 13;
+  if (stylePreset === "default") {
+    return (
+      <div
+        className={className}
+        style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, maxWidth: "100%", minWidth: 0 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            height: normalizedHeight,
+            maxWidth: "100%",
+            border: "1px solid #9fb3c8",
+            borderRadius: 0,
+            background: disabled ? "#f5f5f5" : "#f1f1f1",
+            overflow: "hidden",
+          }}
+        >
+          <button
+            type="button"
+            disabled={disabled}
+            style={{
+              width: normalizedButtonWidth,
+              height: normalizedHeight,
+              border: "none",
+              borderRight: "1px solid #c6c6c6",
+              background: "transparent",
+              cursor: disabled ? "not-allowed" : "pointer",
+              color: disabled ? "#bdbdbd" : "#9e9e9e",
+              fontSize: unifiedFontSize,
+              lineHeight: 1,
+              paddingBottom: 1,
+              transition: "background 120ms ease",
+              touchAction: "manipulation",
+            }}
+            className={buttonClassName}
+            onMouseDown={(e) => {
+              if (disabled) return;
+              e.preventDefault();
+              startHold(-1);
+              (e.currentTarget.style.background = "#e9edf2");
+            }}
+            onMouseUp={(e) => {
+              stopHold();
+              e.currentTarget.style.background = "transparent";
+            }}
+            onMouseLeave={(e) => {
+              stopHold();
+              e.currentTarget.style.background = "transparent";
+            }}
+            onTouchStart={(e) => {
+              if (disabled) return;
+              startHold(-1);
+            }}
+            onTouchEnd={() => stopHold()}
+            onTouchCancel={() => stopHold()}
+            onKeyDown={(e) => {
+              if (disabled) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                applyDelta(-1);
+              }
+            }}
+          >
+            −
+          </button>
+          <input
+            type="number"
+            value={value}
+            min={min}
+            max={max}
+            step={step}
+            disabled={disabled}
+            aria-label={ariaLabel}
+            placeholder={placeholder}
+            onChange={handleInputChange}
+            onBlur={handleBlur}
+            onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+            style={{
+              width: normalizedInputWidth,
+              minWidth,
+              height: normalizedHeight,
+              padding: "0 8px",
+              border: "none",
+              borderRight: "1px solid #c6c6c6",
+              background: "transparent",
+              color: disabled ? "#888" : "#253b80",
+              textAlign: "center",
+              fontSize: unifiedFontSize,
+              fontWeight: 500,
+              outline: "none",
+              boxSizing: "border-box",
+              appearance: "textfield",
+            }}
+            className={inputClassName}
+          />
+          <button
+            type="button"
+            disabled={disabled}
+            style={{
+              width: normalizedButtonWidth,
+              height: normalizedHeight,
+              border: "none",
+              background: "transparent",
+              cursor: disabled ? "not-allowed" : "pointer",
+              color: disabled ? "#bdbdbd" : "#9e9e9e",
+              fontSize: unifiedFontSize,
+              lineHeight: 1,
+              paddingBottom: 1,
+              transition: "background 120ms ease",
+              touchAction: "manipulation",
+            }}
+            className={buttonClassName}
+            onMouseDown={(e) => {
+              if (disabled) return;
+              e.preventDefault();
+              startHold(1);
+              (e.currentTarget.style.background = "#e9edf2");
+            }}
+            onMouseUp={(e) => {
+              stopHold();
+              e.currentTarget.style.background = "transparent";
+            }}
+            onMouseLeave={(e) => {
+              stopHold();
+              e.currentTarget.style.background = "transparent";
+            }}
+            onTouchStart={(e) => {
+              if (disabled) return;
+              startHold(1);
+            }}
+            onTouchEnd={() => stopHold()}
+            onTouchCancel={() => stopHold()}
+            onKeyDown={(e) => {
+              if (disabled) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                applyDelta(1);
+              }
+            }}
+          >
+            +
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={className} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        placeholder={placeholder}
-        onChange={handleInputChange}
-        onBlur={handleBlur}
-        onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+    <div
+      className={className}
+      style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 6, maxWidth: "100%", minWidth: 0 }}
+    >
+      <div
         style={{
-          width: inputWidth,
-          minWidth,
-          flex: "1 1 auto",
-          height,
-          padding: "0 8px",
-          borderRadius: 6,
-          border: "1px solid #d9e2ec",
-          background: disabled ? "#f5f5f5" : "#fff",
-          color: disabled ? "#888" : "#111",
-          appearance: "textfield",
+          display: "flex",
+          alignItems: "center",
+          height: normalizedHeight,
+          maxWidth: "100%",
+          border: "1px solid #9fb3c8",
+          borderRadius: 0,
+          background: disabled ? "#f5f5f5" : "#f1f1f1",
+          overflow: "hidden",
         }}
-        className={inputClassName}
-      />
+      >
       <button
         type="button"
         disabled={disabled}
         style={{
-          width: height,
-          height,
-          borderRadius: 8,
-          border: "1px solid #d0d7de",
-          background: disabled ? "#f5f5f5" : "#fff",
+          width: normalizedButtonWidth,
+          height: normalizedHeight,
+          border: "none",
+          borderRight: "1px solid #c6c6c6",
+          background: "transparent",
           cursor: disabled ? "not-allowed" : "pointer",
-          fontSize: 16,
+          color: disabled ? "#bdbdbd" : "#9e9e9e",
+          fontSize: unifiedFontSize,
           lineHeight: 1,
-          transition: "background 120ms ease, box-shadow 120ms ease",
+          paddingBottom: 1,
+          transition: "background 120ms ease",
           touchAction: "manipulation",
         }}
         className={buttonClassName}
@@ -160,15 +304,15 @@ export default function NumericInputWithButtons({
           if (disabled) return;
           e.preventDefault();
           startHold(-1);
-          (e.currentTarget.style.background = "#f1f5f9");
+          (e.currentTarget.style.background = "#e9edf2");
         }}
         onMouseUp={(e) => {
           stopHold();
-          e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+          e.currentTarget.style.background = "transparent";
         }}
         onMouseLeave={(e) => {
           stopHold();
-          e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+          e.currentTarget.style.background = "transparent";
         }}
         onTouchStart={(e) => {
           if (disabled) return;
@@ -186,19 +330,50 @@ export default function NumericInputWithButtons({
       >
         −
       </button>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        onChange={handleInputChange}
+        onBlur={handleBlur}
+        onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+        style={{
+          width: normalizedInputWidth,
+          minWidth,
+          height: normalizedHeight,
+          padding: "0 8px",
+          border: "none",
+          borderRight: "1px solid #c6c6c6",
+          background: "transparent",
+          color: disabled ? "#888" : "#253b80",
+          textAlign: "center",
+          fontSize: unifiedFontSize,
+          fontWeight: 500,
+          outline: "none",
+          boxSizing: "border-box",
+          appearance: "textfield",
+        }}
+        className={inputClassName}
+      />
       <button
         type="button"
         disabled={disabled}
         style={{
-          width: height,
-          height,
-          borderRadius: 8,
-          border: "1px solid #d0d7de",
-          background: disabled ? "#f5f5f5" : "#fff",
+          width: normalizedButtonWidth,
+          height: normalizedHeight,
+          border: "none",
+          background: "transparent",
           cursor: disabled ? "not-allowed" : "pointer",
-          fontSize: 16,
+          color: disabled ? "#bdbdbd" : "#9e9e9e",
+          fontSize: unifiedFontSize,
           lineHeight: 1,
-          transition: "background 120ms ease, box-shadow 120ms ease",
+          paddingBottom: 1,
+          transition: "background 120ms ease",
           touchAction: "manipulation",
         }}
         className={buttonClassName}
@@ -206,15 +381,15 @@ export default function NumericInputWithButtons({
           if (disabled) return;
           e.preventDefault();
           startHold(1);
-          (e.currentTarget.style.background = "#f1f5f9");
+          (e.currentTarget.style.background = "#e9edf2");
         }}
         onMouseUp={(e) => {
           stopHold();
-          e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+          e.currentTarget.style.background = "transparent";
         }}
         onMouseLeave={(e) => {
           stopHold();
-          e.currentTarget.style.background = disabled ? "#f5f5f5" : "#fff";
+          e.currentTarget.style.background = "transparent";
         }}
         onTouchStart={(e) => {
           if (disabled) return;
@@ -232,6 +407,7 @@ export default function NumericInputWithButtons({
       >
         +
       </button>
+      </div>
     </div>
   );
 }

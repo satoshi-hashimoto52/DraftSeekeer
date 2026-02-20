@@ -224,8 +224,6 @@ export default function App() {
   const followupScanPointRef = useRef<{ x: number; y: number } | null>(null);
   const hoverDetectTimerRef = useRef<number | null>(null);
   const hoverLastDetectedPointRef = useRef<{ x: number; y: number } | null>(null);
-  const hoverStepHoldTimerRef = useRef<number | null>(null);
-  const hoverStepHoldIntervalRef = useRef<number | null>(null);
   const [detectDebug, setDetectDebug] = useState<DetectPointResponse["debug"] | null>(null);
   const [segEditMode, setSegEditMode] = useState<boolean>(false);
   const [showSegVertices, setShowSegVertices] = useState<boolean>(true);
@@ -967,90 +965,6 @@ export default function App() {
   const canExport = exportErrors.length === 0;
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (showDebug && debugTemplateEnabled) return;
-      if (!selectedCandidate || segEditMode) return;
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select") return;
-
-      let dx = 0;
-      let dy = 0;
-      const step = event.shiftKey ? 10 : 1;
-      if (event.key === "ArrowLeft") dx = -step;
-      if (event.key === "ArrowRight") dx = step;
-      if (event.key === "ArrowUp") dy = -step;
-      if (event.key === "ArrowDown") dy = step;
-      if (dx === 0 && dy === 0) return;
-
-      event.preventDefault();
-      setCandidates((prev) =>
-        prev.map((c) => {
-          if (c.id !== selectedCandidate.id) return c;
-          let nextX = c.bbox.x + dx;
-          let nextY = c.bbox.y + dy;
-          if (imageSize) {
-            nextX = Math.min(imageSize.w - c.bbox.w, Math.max(0, nextX));
-            nextY = Math.min(imageSize.h - c.bbox.h, Math.max(0, nextY));
-          }
-          return {
-            ...c,
-            bbox: { ...c.bbox, x: nextX, y: nextY },
-          };
-        })
-      );
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedCandidate, segEditMode, imageSize, showDebug, debugTemplateEnabled]);
-
-  useEffect(() => {
-    const handleDebugTemplateArrow = (event: KeyboardEvent) => {
-      if (!showDebug || !debugTemplateEnabled) return;
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      if (
-        tag === "input" ||
-        tag === "textarea" ||
-        tag === "select" ||
-        tag === "button" ||
-        target?.isContentEditable
-      ) {
-        return;
-      }
-      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
-      event.preventDefault();
-      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-        if (!classOptions.length || !debugTemplateClass) return;
-        const idx = Math.max(0, classOptions.indexOf(debugTemplateClass));
-        const nextIdx =
-          event.key === "ArrowUp"
-            ? (idx - 1 + classOptions.length) % classOptions.length
-            : (idx + 1) % classOptions.length;
-        setDebugTemplateClass(classOptions[nextIdx]);
-        return;
-      }
-      if (!debugTemplateItems.length || !debugTemplateName) return;
-      const idx = Math.max(0, debugTemplateItems.findIndex((item) => item.name === debugTemplateName));
-      const nextIdx =
-        event.key === "ArrowLeft"
-          ? (idx - 1 + debugTemplateItems.length) % debugTemplateItems.length
-          : (idx + 1) % debugTemplateItems.length;
-      setDebugTemplateName(debugTemplateItems[nextIdx].name);
-    };
-    window.addEventListener("keydown", handleDebugTemplateArrow);
-    return () => window.removeEventListener("keydown", handleDebugTemplateArrow);
-  }, [
-    showDebug,
-    debugTemplateEnabled,
-    classOptions,
-    debugTemplateClass,
-    debugTemplateItems,
-    debugTemplateName,
-  ]);
-
-  useEffect(() => {
     let mounted = true;
     document.body.style.margin = "0";
     document.body.style.overflow = "hidden";
@@ -1632,27 +1546,6 @@ export default function App() {
   const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
 
-  const stopHoverStepHold = () => {
-    if (hoverStepHoldTimerRef.current !== null) {
-      window.clearTimeout(hoverStepHoldTimerRef.current);
-      hoverStepHoldTimerRef.current = null;
-    }
-    if (hoverStepHoldIntervalRef.current !== null) {
-      window.clearInterval(hoverStepHoldIntervalRef.current);
-      hoverStepHoldIntervalRef.current = null;
-    }
-  };
-
-  const startHoverStepHold = (applyStep: () => void) => {
-    stopHoverStepHold();
-    applyStep();
-    hoverStepHoldTimerRef.current = window.setTimeout(() => {
-      hoverStepHoldIntervalRef.current = window.setInterval(() => {
-        applyStep();
-      }, 70);
-    }, 320);
-  };
-
   const computeNextScanPoint = (fromPoint: { x: number; y: number }) => {
     if (!imageSize) return null;
     const step = Math.max(1, Math.round(roiSize * 0.5));
@@ -1842,6 +1735,38 @@ export default function App() {
     setSelectedCandidateId(candidates[nextIndex].id);
   };
 
+  const handlePrevCandidate = () => {
+    if (candidates.length === 0) return;
+    const index = selectedCandidateId
+      ? candidates.findIndex((c) => c.id === selectedCandidateId)
+      : -1;
+    const prevIndex = index >= 0 ? (index - 1 + candidates.length) % candidates.length : candidates.length - 1;
+    setSelectedCandidateId(candidates[prevIndex].id);
+  };
+
+  const cycleDebugTemplateClass = (delta: 1 | -1) => {
+    if (!classOptions.length) return;
+    const currentIndex = debugTemplateClass ? classOptions.indexOf(debugTemplateClass) : -1;
+    const base = currentIndex >= 0 ? currentIndex : delta > 0 ? -1 : 0;
+    const nextIndex = (base + delta + classOptions.length) % classOptions.length;
+    const nextClass = classOptions[nextIndex];
+    if (nextClass === debugTemplateClass) return;
+    setDebugTemplateClass(nextClass);
+    setDebugTemplateName("");
+  };
+
+  const cycleDebugTemplateName = (delta: 1 | -1) => {
+    if (!debugTemplateClass || !debugTemplateItems.length) return;
+    const names = debugTemplateItems.map((item) => item.name);
+    const currentIndex = debugTemplateName ? names.indexOf(debugTemplateName) : -1;
+    const base = currentIndex >= 0 ? currentIndex : delta > 0 ? -1 : 0;
+    const nextIndex = (base + delta + names.length) % names.length;
+    const nextName = names[nextIndex];
+    if (!nextName || nextName === debugTemplateName) return;
+    setDebugTemplateName(nextName);
+    setDebugTemplateEnabled(true);
+  };
+
   const clearDetectionState = () => {
     if (hoverDetectTimerRef.current) {
       window.clearTimeout(hoverDetectTimerRef.current);
@@ -1898,7 +1823,29 @@ export default function App() {
       if (tag === "input" || tag === "textarea" || tag === "select") return;
 
       const key = event.key;
-      if (event.code === "BracketLeft" || key === "[") {
+      if (showDebug) {
+        if (event.code === "ArrowUp") {
+          event.preventDefault();
+          cycleDebugTemplateClass(-1);
+          return;
+        }
+        if (event.code === "ArrowDown") {
+          event.preventDefault();
+          cycleDebugTemplateClass(1);
+          return;
+        }
+        if (event.code === "ArrowLeft") {
+          event.preventDefault();
+          cycleDebugTemplateName(-1);
+          return;
+        }
+        if (event.code === "ArrowRight") {
+          event.preventDefault();
+          cycleDebugTemplateName(1);
+          return;
+        }
+      }
+      if (event.code === "ArrowDown") {
         event.preventDefault();
         setRoiSize((prev) => {
           const next = Math.max(10, prev - 10);
@@ -1910,7 +1857,7 @@ export default function App() {
         });
         return;
       }
-      if (event.code === "BracketRight" || key === "]") {
+      if (event.code === "ArrowUp") {
         event.preventDefault();
         setRoiSize((prev) => {
           const next = Math.min(2000, prev + 10);
@@ -1922,19 +1869,12 @@ export default function App() {
         });
         return;
       }
-      if (key === "f" || key === "F") {
-        if (!followupScanReady || busy) return;
-        const point = followupScanPointRef.current;
-        if (!point) return;
+      if (event.code === "ArrowLeft") {
         event.preventDefault();
-        canvasRef.current?.panTo(point.x, point.y);
-        setFollowupScanReady(false);
-        followupScanPointRef.current = null;
-        void handleClickPoint(point.x, point.y, { fromFollowup: true });
+        handlePrevCandidate();
         return;
       }
-      if (key === "n" || key === "N") {
-        // Allow recovery even when selectedCandidate is temporarily null.
+      if (event.code === "ArrowRight") {
         event.preventDefault();
         handleNextCandidate();
         return;
@@ -1964,6 +1904,11 @@ export default function App() {
     selectedCandidate,
     manualClassMissing,
     followupScanReady,
+    showDebug,
+    classOptions,
+    debugTemplateClass,
+    debugTemplateName,
+    debugTemplateItems,
     busy,
     autoRunning,
     candidates,
@@ -1973,21 +1918,21 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (detectionMode !== "hover") {
+    if (detectionMode !== "hover" || showDebug) {
       if (hoverDetectTimerRef.current) {
         window.clearTimeout(hoverDetectTimerRef.current);
         hoverDetectTimerRef.current = null;
       }
       hoverLastDetectedPointRef.current = null;
     }
-  }, [detectionMode]);
+  }, [detectionMode, showDebug]);
 
   useEffect(() => {
     hoverLastDetectedPointRef.current = null;
   }, [imageId, datasetSelectedName]);
 
   useEffect(() => {
-    if (detectionMode !== "hover") return;
+    if (detectionMode !== "hover" || showDebug) return;
     if (!coordDebug?.image || !imageId || !project || !imageSize) return;
     if (busy || autoRunning || isCreatingManualBBox || annotationEditActiveRef.current) return;
 
@@ -2020,6 +1965,7 @@ export default function App() {
     };
   }, [
     detectionMode,
+    showDebug,
     coordDebug?.image.x,
     coordDebug?.image.y,
     imageId,
@@ -2844,7 +2790,6 @@ export default function App() {
       if (interactionTimeoutRef.current) {
         window.clearTimeout(interactionTimeoutRef.current);
       }
-      stopHoverStepHold();
     };
   }, []);
 
@@ -3152,11 +3097,12 @@ export default function App() {
         }
         .rightPanel .controlWrap {
           display: flex;
-          flex-wrap: wrap;
+          flex-wrap: nowrap;
           gap: 8px;
           align-items: center;
           justify-content: flex-end;
           width: 100%;
+          min-width: 0;
         }
         .rightPanel .controlStack {
           display: flex;
@@ -3334,8 +3280,6 @@ export default function App() {
           cursor: pointer;
         }
         .rightPanel .numInput {
-          width: 84px !important;
-          max-width: 84px !important;
           text-align: center;
         }
         .rightPanel .midInput {
@@ -3344,8 +3288,6 @@ export default function App() {
           text-align: center;
         }
         .rightPanel .stepBtn {
-          width: 36px !important;
-          height: 36px !important;
         }
         .rightPanel .autoAdvanced {
           width: 100%;
@@ -4524,10 +4466,10 @@ export default function App() {
                       </button>
                     </div>
                     <div style={{ marginTop: 6, lineHeight: 1.45 }}>
-                      <div>[ / ] : ROIサイズ - / +</div>
-                      <div>N : 次候補 / Enter : 確定</div>
-                      <div>Del or Esc : 候補クリア</div>
-                      <div>Shift+Drag : 手動BBox</div>
+      <div>↑ / ↓ : ROIサイズ + / -</div>
+      <div>← / → : 候補切替 / Enter : 確定</div>
+      <div>Del or Esc : 候補クリア</div>
+      <div>Shift+Drag : 手動BBox</div>
                     </div>
                   </div>
                 )}
@@ -4909,137 +4851,23 @@ export default function App() {
                       >
                         <span style={{ fontSize: 12, color: "#455a64" }}>処理間隔</span>
                         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 0,
-                              height: 26,
-                              border: "1px solid #9fb3c8",
-                              borderRadius: 0,
-                              background: "#f1f1f1",
-                              overflow: "hidden",
-                            }}
-                          >
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev - 10))
-                                  )
-                                );
-                              }}
-                              onMouseUp={stopHoverStepHold}
-                              onMouseLeave={stopHoverStepHold}
-                              onTouchStart={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev - 10))
-                                  )
-                                );
-                              }}
-                              onTouchEnd={stopHoverStepHold}
-                              onTouchCancel={stopHoverStepHold}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev - 10))
-                                  );
-                                }
-                              }}
-                              style={{
-                                width: 26,
-                                height: "100%",
-                                border: "none",
-                                borderRight: "1px solid #c6c6c6",
-                                background: "transparent",
-                                color: "#9e9e9e",
-                                fontSize: 16,
-                                lineHeight: 1,
-                                paddingBottom: 1,
-                                cursor: "pointer",
-                              }}
-                            >
-                              −
-                            </button>
-                            <input
-                              type="number"
-                              value={hoverDetectIntervalMs}
-                              onChange={(e) => {
-                                const next = Number(e.target.value);
-                                if (Number.isNaN(next)) return;
-                                setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(next))));
-                              }}
-                              onBlur={(e) => {
-                                const next = Number(e.target.value);
-                                if (Number.isNaN(next)) return;
-                                setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(next))));
-                              }}
-                              aria-label="hover detect interval"
-                              style={{
-                                width: 44,
-                                height: "100%",
-                                border: "none",
-                                borderRight: "1px solid #c6c6c6",
-                                background: "transparent",
-                                textAlign: "center",
-                                color: "#253b80",
-                                fontSize: 12,
-                                fontWeight: 500,
-                                boxSizing: "border-box",
-                                outline: "none",
-                                appearance: "textfield",
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev + 10))
-                                  )
-                                );
-                              }}
-                              onMouseUp={stopHoverStepHold}
-                              onMouseLeave={stopHoverStepHold}
-                              onTouchStart={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev + 10))
-                                  )
-                                );
-                              }}
-                              onTouchEnd={stopHoverStepHold}
-                              onTouchCancel={stopHoverStepHold}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  setHoverDetectIntervalMs((prev) =>
-                                    Math.max(30, Math.min(3000, prev + 10))
-                                  );
-                                }
-                              }}
-                              style={{
-                                width: 26,
-                                height: "100%",
-                                border: "none",
-                                background: "transparent",
-                                color: "#9e9e9e",
-                                fontSize: 16,
-                                lineHeight: 1,
-                                paddingBottom: 1,
-                                cursor: "pointer",
-                              }}
-                            >
-                              +
-                            </button>
-                          </div>
+                          <NumericInputWithButtons
+                            value={hoverDetectIntervalMs}
+                            onChange={(v) =>
+                              typeof v === "number" &&
+                              setHoverDetectIntervalMs(Math.max(30, Math.min(3000, Math.round(v))))
+                            }
+                            min={30}
+                            max={3000}
+                            step={10}
+                            height={26}
+                            inputWidth={44}
+                            ariaLabel="hover detect interval"
+                            stylePreset="joined"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
                           <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>ms</span>
                         </div>
                       </div>
@@ -5053,137 +4881,23 @@ export default function App() {
                       >
                         <span style={{ fontSize: 12, color: "#455a64" }}>再検出抑制距離</span>
                         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6 }}>
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 0,
-                              height: 26,
-                              border: "1px solid #9fb3c8",
-                              borderRadius: 0,
-                              background: "#f1f1f1",
-                              overflow: "hidden",
-                            }}
-                          >
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev - 1))
-                                  )
-                                );
-                              }}
-                              onMouseUp={stopHoverStepHold}
-                              onMouseLeave={stopHoverStepHold}
-                              onTouchStart={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev - 1))
-                                  )
-                                );
-                              }}
-                              onTouchEnd={stopHoverStepHold}
-                              onTouchCancel={stopHoverStepHold}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev - 1))
-                                  );
-                                }
-                              }}
-                              style={{
-                                width: 26,
-                                height: "100%",
-                                border: "none",
-                                borderRight: "1px solid #c6c6c6",
-                                background: "transparent",
-                                color: "#9e9e9e",
-                                fontSize: 16,
-                                lineHeight: 1,
-                                paddingBottom: 1,
-                                cursor: "pointer",
-                              }}
-                            >
-                              −
-                            </button>
-                            <input
-                              type="number"
-                              value={hoverRedetectDistancePx}
-                              onChange={(e) => {
-                                const next = Number(e.target.value);
-                                if (Number.isNaN(next)) return;
-                                setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(next))));
-                              }}
-                              onBlur={(e) => {
-                                const next = Number(e.target.value);
-                                if (Number.isNaN(next)) return;
-                                setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(next))));
-                              }}
-                              aria-label="hover redetect distance"
-                              style={{
-                                width: 44,
-                                height: "100%",
-                                border: "none",
-                                borderRight: "1px solid #c6c6c6",
-                                background: "transparent",
-                                textAlign: "center",
-                                color: "#253b80",
-                                fontSize: 12,
-                                fontWeight: 500,
-                                boxSizing: "border-box",
-                                outline: "none",
-                                appearance: "textfield",
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev + 1))
-                                  )
-                                );
-                              }}
-                              onMouseUp={stopHoverStepHold}
-                              onMouseLeave={stopHoverStepHold}
-                              onTouchStart={(e) => {
-                                e.preventDefault();
-                                startHoverStepHold(() =>
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev + 1))
-                                  )
-                                );
-                              }}
-                              onTouchEnd={stopHoverStepHold}
-                              onTouchCancel={stopHoverStepHold}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  setHoverRedetectDistancePx((prev) =>
-                                    Math.max(0, Math.min(500, prev + 1))
-                                  );
-                                }
-                              }}
-                              style={{
-                                width: 26,
-                                height: "100%",
-                                border: "none",
-                                background: "transparent",
-                                color: "#9e9e9e",
-                                fontSize: 16,
-                                lineHeight: 1,
-                                paddingBottom: 1,
-                                cursor: "pointer",
-                              }}
-                            >
-                              +
-                            </button>
-                          </div>
+                          <NumericInputWithButtons
+                            value={hoverRedetectDistancePx}
+                            onChange={(v) =>
+                              typeof v === "number" &&
+                              setHoverRedetectDistancePx(Math.max(0, Math.min(500, Math.round(v))))
+                            }
+                            min={0}
+                            max={500}
+                            step={1}
+                            height={26}
+                            inputWidth={44}
+                            ariaLabel="hover redetect distance"
+                            stylePreset="joined"
+                            className="controlWrap"
+                            inputClassName="numInput"
+                            buttonClassName="stepBtn"
+                          />
                           <span style={{ fontSize: 12, color: "#607d8b", minWidth: 18 }}>px</span>
                         </div>
                       </div>
@@ -5241,8 +4955,8 @@ export default function App() {
                     }}
                   >
                     <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-                      <span>次</span>
-                      <span style={{ fontSize: 10, fontWeight: 600 }}>(N)</span>
+                      <span>候補</span>
+                      <span style={{ fontSize: 10, fontWeight: 600 }}>(←/→)</span>
                     </span>
                   </button>
                 </div>
@@ -5603,8 +5317,8 @@ export default function App() {
                     </div>
                   </div>
                   </div>
-                  <div className="formRow" style={{ marginBottom: 8 }}>
-                    <span style={{ fontSize: 12 }}>分割</span>
+                  <div className="formRow" style={{ marginBottom: 8, alignItems: "start" }}>
+                    <span style={{ fontSize: 12, height: 26, lineHeight: "26px" }}>分割</span>
                     <div style={{ width: "100%", display: "grid", gap: 6 }}>
                       <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
                         <input
@@ -5776,8 +5490,8 @@ export default function App() {
                       <option value="any_class">any_class</option>
                     </select>
                   </label>
-                  <div className="formRow" style={{ marginBottom: 8 }}>
-                    <span style={{ fontSize: 12 }}>IoU</span>
+                  <div className="formRow" style={{ marginBottom: 8, alignItems: "start" }}>
+                    <span style={{ fontSize: 12, height: 26, lineHeight: "26px" }}>IoU</span>
                     <div style={{ width: "100%", display: "grid", gap: 6 }}>
                       <div className="controlWrap" style={{ justifyContent: "flex-start" }}>
                         <input
@@ -6500,20 +6214,10 @@ export default function App() {
                         </div>
                       </div>
                       <div className="controlWrap" title="±0.01">
-                        <input
-                          className="paramSlider"
-                          type="range"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={autoThreshold}
-                          onChange={(e) => setAutoThreshold(Number(e.target.value))}
-                          style={{ maxWidth: 200 }}
-                        />
                         <NumericInputWithButtons
                           value={autoThreshold}
                           onChange={(v) => typeof v === "number" && setAutoThreshold(v)}
-                          min={0}
+                          min={0.1}
                           max={1}
                           step={0.01}
                           height={32}
@@ -6648,7 +6352,7 @@ export default function App() {
                             },
                             {
                               key: "scaled_templates",
-                              label: "Template Mode（テンプレ探索型）",
+                              label: "Template 1（テンプレ探索型）",
                               help: "タイル/ROI内の matchTemplate スコアで判定。",
                               detail:
                                 "Template Mode: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.5）し、各タイル中心ROIでテンプレート照合を実行。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
@@ -6658,8 +6362,8 @@ export default function App() {
                             },
                             {
                               key: "scaled_templates_beta",
-                              label: "Template（等倍率優先・β）",
-                              help: "1.0x付近から交互に探索し、先に閾値到達した倍率を優先。",
+                              label: "Template 2（等倍率優先）",
+                              help: "1.0x優先の matchTemplate スコア判定。",
                               detail:
                                 "Template β: スケール探索順を1.0x中心にして外側へ広げる方式。タイル/ROI内で早期ヒットした倍率を優先して採用します。既存Template Modeは保持したまま、新方式を試験利用するためのβモードです。",
                               recommend: "推奨 0.7~0.8",
@@ -6696,15 +6400,24 @@ export default function App() {
                                     applyAutoMethodDefaults(item.key as AutoMethod)
                                   }
                                 />
-                                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
-                                    <span style={{ fontWeight: 700, color: item.accent, flex: 1, minWidth: 0 }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                                  <div
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "minmax(0, 1fr) auto",
+                                      alignItems: "center",
+                                      columnGap: 6,
+                                      width: "100%",
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 700, color: item.accent, minWidth: 0 }}>
                                       {item.label}
                                     </span>
                                     <span
                                       className="badge"
                                       style={{
-                                        marginLeft: "auto",
+                                        justifySelf: "end",
+                                        whiteSpace: "nowrap",
                                         borderColor: "#a5d6a7",
                                         background: "#e8f5e9",
                                         color: "#2e7d32",
@@ -6721,30 +6434,44 @@ export default function App() {
                             );
                           })}
                         </div>
-                        <div className="formRow">
-                          <span style={{ fontSize: 13, fontWeight: 700, alignSelf: "center" }}>探索間隔</span>
-                          <div className="controlWrap" title="±1">
-                            <div style={{ display: "flex", flexWrap: "nowrap", gap: 6, alignItems: "center" }}>
-                              <NumericInputWithButtons
-                                value={autoStride ?? ""}
-                                onChange={(v) => setAutoStride(v === "" ? null : v)}
-                                min={1}
-                                step={1}
-                                height={32}
-                                inputWidth={120}
-                                ariaLabel="auto stride"
-                                placeholder="推奨 auto / 32–128"
-                                className="controlWrap noWrapRow"
-                                inputClassName={`midInput ${strideDanger ? "dangerInput" : strideWarn ? "warnInput" : ""}`}
-                                buttonClassName="stepBtn"
-                              />
+                        <div className="formRow" style={{ alignItems: "start" }}>
+                          <div style={{ display: "grid", gap: 2 }}>
+                            <span
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                height: 32,
+                                lineHeight: "32px",
+                              }}
+                            >
+                              探索間隔
+                            </span>
+                            <span style={{ fontSize: 10, color: "#d32f2f", lineHeight: 1.2 }}>
+                              推奨：auto (未入力)
+                            </span>
+                          </div>
+                          <div className="controlWrap" title="±1" style={{ display: "grid", justifyItems: "end", gap: 4 }}>
+                            <NumericInputWithButtons
+                              value={autoStride ?? ""}
+                              onChange={(v) => setAutoStride(v === "" ? null : v)}
+                              min={1}
+                              step={1}
+                              height={32}
+                              inputWidth={120}
+                              ariaLabel="auto stride"
+                              placeholder="Auto / 32"
+                              className="noWrapRow"
+                              inputClassName={`midInput ${strideDanger ? "dangerInput" : strideWarn ? "warnInput" : ""}`}
+                              buttonClassName="stepBtn"
+                            />
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+                              <span className="badge">推奨 auto / 32–128</span>
+                              {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
+                              {strideDanger && <span className="badge badgeDanger">Danger</span>}
+                              {typeof autoStride === "number" && autoStride <= 0 && (
+                                <span className="badge badgeDanger">入力が不正です</span>
+                              )}
                             </div>
-                            <span className="badge">推奨 auto / 32–128</span>
-                            {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
-                            {strideDanger && <span className="badge badgeDanger">Danger</span>}
-                            {typeof autoStride === "number" && autoStride <= 0 && (
-                              <span className="badge badgeDanger">入力が不正です</span>
-                            )}
                           </div>
                         </div>
                     </div>

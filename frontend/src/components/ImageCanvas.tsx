@@ -494,6 +494,39 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         ctx.restore();
       };
 
+      const drawFixedScreenLabelAtImage = (
+        x: number,
+        y: number,
+        text: string,
+        color: string,
+        alpha = 1,
+        bgFill = "rgba(20, 24, 32, 0.40)"
+      ) => {
+        const sx = dpr * scale * (x + panOffset.x);
+        const sy = dpr * scale * (y + panOffset.y);
+        const fontPx = Math.max(10, Math.round(28 * dpr));
+        const paddingX = Math.max(3, Math.round(4 * dpr));
+        const paddingY = Math.max(3, Math.round(2 * dpr));
+        const labelH = fontPx + paddingY * 2;
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = alpha;
+        ctx.font = `${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
+        const metrics = ctx.measureText(text);
+        const labelW = Math.ceil(metrics.width + paddingX * 2);
+        const bx = Math.max(0, Math.min(canvas.width - labelW, Math.round(sx)));
+        const by = Math.max(0, Math.min(canvas.height - labelH, Math.round(sy - labelH - 2 * dpr)));
+        ctx.fillStyle = bgFill;
+        ctx.fillRect(bx, by, labelW, labelH);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(1, 0.8 * dpr);
+        ctx.strokeRect(bx, by, labelW, labelH);
+        ctx.fillStyle = color;
+        ctx.fillText(text, bx + paddingX, by + paddingY + fontPx - Math.round(1 * dpr));
+        ctx.restore();
+      };
+
       const lineScale = Math.max(1, scale);
       const drawBox = (
         x: number,
@@ -709,9 +742,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const y1 = Math.max(0, Math.round(point.y - half));
         const x2 = Math.min(img.width, Math.round(point.x + half));
         const y2 = Math.min(img.height, Math.round(point.y + half));
-        drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
-        // Label outside ROI: top-left outside area
-        drawLabel(x1, y1, `ROI AREA, ${Math.round(size)}\u00B2 px`, "#e53935", 0.95, "rgba(0, 0, 0, 0)");
+        drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 2.6, true, 0.9, 0);
+        // Keep ROI label at fixed on-screen size regardless of zoom scale.
+        drawFixedScreenLabelAtImage(
+          x1,
+          y1,
+          `ROI AREA, ${Math.round(size)}\u00B2 px`,
+          "#e53935",
+          0.95,
+          "rgba(0, 0, 0, 0)"
+        );
       };
 
       drawRoiOverlay(
