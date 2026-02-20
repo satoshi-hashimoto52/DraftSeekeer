@@ -52,6 +52,7 @@ type Props = {
   debugFollowTemplateLabel?: string;
   roiOverlayPoint?: { x: number; y: number } | null;
   roiOverlaySize?: number;
+  showRoiArea: boolean;
 };
 
 export type ImageCanvasHandle = {
@@ -95,6 +96,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   debugFollowTemplateLabel,
   roiOverlayPoint,
   roiOverlaySize,
+  showRoiArea,
 }: Props,
   ref
 ) {
@@ -166,6 +168,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     image: { x: number; y: number };
   } | null>(null);
   const [debugHoverImagePoint, setDebugHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
+  const [showRoiOverlay, setShowRoiOverlay] = useState(true);
   const [debugTemplateDrawVersion, setDebugTemplateDrawVersion] = useState(0);
   const debugTemplateImageRef = useRef<HTMLImageElement | null>(null);
   const [debugMatchTemplateDrawVersion, setDebugMatchTemplateDrawVersion] = useState(0);
@@ -708,10 +711,13 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const y2 = Math.min(img.height, Math.round(point.y + half));
         drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 1.6, true, 0.9, 0);
         // Label outside ROI: top-left outside area
-        drawLabel(x1, y1, "ROI AREA", "#e53935", 0.95, "rgba(0, 0, 0, 0)");
+        drawLabel(x1, y1, `ROI AREA, ${Math.round(size)}\u00B2 px`, "#e53935", 0.95, "rgba(0, 0, 0, 0)");
       };
 
-      drawRoiOverlay(debugHoverImagePoint || roiOverlayPoint, roiOverlaySize);
+      drawRoiOverlay(
+        showRoiArea && showRoiOverlay ? debugHoverImagePoint || roiOverlayPoint : null,
+        roiOverlaySize
+      );
 
       if (debugOverlay) {
         const drawDebugPoint = (pt: { x: number; y: number }, color: string) => {
@@ -723,8 +729,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.stroke();
           ctx.restore();
         };
-        const debugPoint = debugOverlay.clicked_image_xy || null;
-        drawRoiOverlay(debugPoint, debugRoiSize);
+        const debugPoint = debugHoverImagePoint || debugOverlay.clicked_image_xy || null;
+        drawRoiOverlay(showRoiArea ? debugPoint : null, debugRoiSize);
         if (debugOverlay.outer_bbox) {
           const b = debugOverlay.outer_bbox;
           drawBox(b.x, b.y, b.w, b.h, "#ffb300", baseLine * 1.4, true, 0.9, 0);
@@ -761,8 +767,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       }
       if (debugFollowTemplateUrl && debugHoverImagePoint && debugTemplateImageRef.current) {
         const tpl = debugTemplateImageRef.current;
-        const drawX = debugHoverImagePoint.x - tpl.width;
-        const drawY = debugHoverImagePoint.y - tpl.height;
+        const drawX = debugHoverImagePoint.x - tpl.width / 2;
+        const drawY = debugHoverImagePoint.y - tpl.height / 2;
         ctx.save();
         ctx.globalAlpha = 1;
         ctx.imageSmoothingEnabled = false;
@@ -772,7 +778,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.font = `${Math.max(12, baseLine * 2.2)}px sans-serif`;
           const labelX = drawX;
           const labelY = drawY + tpl.height + 14;
-          ctx.fillStyle = "rgba(255,32,32,0.96)";
+          ctx.fillStyle = "#00FF00";
           ctx.strokeStyle = "rgba(0,0,0,0.75)";
           ctx.lineWidth = 2;
           ctx.strokeText(text, labelX, labelY);
@@ -780,19 +786,24 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         }
         ctx.restore();
       }
-      if ((debugOverlay || onDebugCoords) && debugPoints) {
-        const dpr = getDpr();
+      const isDebugMode = !!debugOverlay || typeof debugRoiSize === "number" || !!debugFollowTemplateUrl;
+      if (isDebugMode && debugPoints) {
+        const rect = canvas.getBoundingClientRect();
+        const rx = rect.width > 0 ? canvas.width / rect.width : 1;
+        const ry = rect.height > 0 ? canvas.height / rect.height : 1;
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.strokeStyle = "#ff1744";
         ctx.lineWidth = Math.max(1, baseLine * 1.4);
-        const sx = debugPoints.screen.x * dpr;
-        const sy = debugPoints.screen.y * dpr;
+        const sx = debugPoints.screen.x * rx;
+        const sy = debugPoints.screen.y * ry;
+        const armX = 8 * rx;
+        const armY = 8 * ry;
         ctx.beginPath();
-        ctx.moveTo(sx - 8 * dpr, sy);
-        ctx.lineTo(sx + 8 * dpr, sy);
-        ctx.moveTo(sx, sy - 8 * dpr);
-        ctx.lineTo(sx, sy + 8 * dpr);
+        ctx.moveTo(sx - armX, sy);
+        ctx.lineTo(sx + armX, sy);
+        ctx.moveTo(sx, sy - armY);
+        ctx.lineTo(sx, sy + armY);
         ctx.stroke();
         ctx.restore();
 
@@ -844,6 +855,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugFollowTemplateLabel,
     roiOverlayPoint,
     roiOverlaySize,
+    showRoiArea,
+    showRoiOverlay,
     debugHoverImagePoint,
     debugTemplateDrawVersion,
     debugMatchTemplateDrawVersion,
@@ -889,6 +902,12 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     const screen = getScreenCoords(event);
     if (!screen) return null;
     return screenToImage(screen);
+  };
+
+  const isInsideImage = (point: { x: number; y: number }) => {
+    const img = imgRef.current;
+    if (!img) return false;
+    return point.x >= 0 && point.y >= 0 && point.x <= img.width && point.y <= img.height;
   };
 
   const findVertexIndex = (x: number, y: number) => {
@@ -1054,6 +1073,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       !editMode
     ) {
       const coords = getImageCoords(event);
+      if (coords && isInsideImage(coords)) {
+        setShowRoiOverlay(true);
+      }
       const selectedAnn = getSelectedAnnotation();
       if (coords && selectedAnn) {
         const hit = hitTestSelectedAnnotation(coords.x, coords.y);
@@ -1349,8 +1371,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     }
     if (!editMode) {
       const coords = getImageCoords(event);
-      if (coords) updateCursorByHandle(coords.x, coords.y);
-      setDebugHoverImagePoint(coords ? { x: coords.x, y: coords.y } : null);
+      const inside = !!(coords && isInsideImage(coords));
+      if (inside && coords) {
+        updateCursorByHandle(coords.x, coords.y);
+        setDebugHoverImagePoint({ x: coords.x, y: coords.y });
+        setShowRoiOverlay(true);
+      } else {
+        setCursorStyle(imageUrl ? "crosshair" : "default");
+        setDebugHoverImagePoint(null);
+        setShowRoiOverlay(false);
+      }
       if (coords && onDebugCoords) {
         const screen = getScreenCoords(event);
         if (screen) {
@@ -1566,6 +1596,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           if (imageUrl) handleMouseUp();
           setCursorStyle(imageUrl ? "crosshair" : "default");
           setDebugHoverImagePoint(null);
+          setShowRoiOverlay(false);
         }}
         style={{
           position: "absolute",

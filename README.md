@@ -44,7 +44,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```bash
 cd frontend
 npm install
-pm run dev -- --host 127.0.0.1 --port 5173
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 ---
 

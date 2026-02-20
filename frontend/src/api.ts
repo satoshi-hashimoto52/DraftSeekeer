@@ -364,6 +364,16 @@ export function buildTemplateOverlayRedImageUrl(
   )}/${encodeURIComponent(templateName)}/overlay-red`;
 }
 
+export function buildTemplateOverlayBlueImageUrl(
+  project: string,
+  className: string,
+  templateName: string
+): string {
+  return `${API_BASE}/templates/${encodeURIComponent(project)}/${encodeURIComponent(
+    className
+  )}/${encodeURIComponent(templateName)}/overlay-blue`;
+}
+
 export async function clearProjectAnnotations(project_name: string): Promise<{ ok: boolean; deleted: number }> {
   const res = await fetch(`${API_BASE}/annotations/clear`, {
     method: "POST",

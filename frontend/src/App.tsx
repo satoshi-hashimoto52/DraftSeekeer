@@ -15,7 +15,7 @@ import {
   fetchTemplateClassItems,
   buildTemplateImageUrl,
   buildTemplateBinaryImageUrl,
-  buildTemplateOverlayRedImageUrl,
+  buildTemplateOverlayBlueImageUrl,
   clearProjectAnnotations,
   segmentCandidate,
   toCandidates,
@@ -207,6 +207,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showCandidates, setShowCandidates] = useState<boolean>(true);
   const [showAnnotations, setShowAnnotations] = useState<boolean>(true);
+  const [showRoiArea, setShowRoiArea] = useState<boolean>(true);
   const canvasRef = useRef<ImageCanvasHandle | null>(null);
   const [lastClick, setLastClick] = useState<{ x: number; y: number } | null>(null);
   const [followupScanReady, setFollowupScanReady] = useState<boolean>(false);
@@ -331,7 +332,7 @@ export default function App() {
   }, [templateGalleryPreviewNaturalSize]);
   const debugTemplateImageUrl = useMemo(() => {
     if (!debugTemplateEnabled || !project || !debugTemplateClass || !debugTemplateName) return null;
-    return buildTemplateOverlayRedImageUrl(project, debugTemplateClass, debugTemplateName);
+    return buildTemplateOverlayBlueImageUrl(project, debugTemplateClass, debugTemplateName);
   }, [debugTemplateEnabled, project, debugTemplateClass, debugTemplateName]);
   const applyAutoMethodDefaults = (method: AutoMethod) => {
     setAutoMethod(method);
@@ -4297,7 +4298,10 @@ export default function App() {
                       })),
                     ]);
                   }}
-                  onClickPoint={handleClickPoint}
+                  onClickPoint={(x, y) => {
+                    if (showDebug) return;
+                    void handleClickPoint(x, y);
+                  }}
                   onCreateManualBBox={(bbox) => {
                     setPendingManualBBox(bbox);
                     setPendingManualClass("");
@@ -4364,11 +4368,12 @@ export default function App() {
                   shouldIgnoreCanvasClick={() => isCreatingManualBBox || !!pendingManualBBox}
                 onDebugCoords={setCoordDebug}
                 debugOverlay={showDebug ? detectDebug || null : null}
-                debugRoiSize={showDebug ? roiSize : undefined}
+                debugRoiSize={showDebug && showRoiArea ? roiSize : undefined}
                 debugFollowTemplateUrl={showDebug ? debugTemplateImageUrl : null}
                 debugFollowTemplateLabel={showDebug && debugTemplateEnabled ? debugTemplateClass : ""}
-                roiOverlayPoint={lastClick}
-                roiOverlaySize={roiSize}
+                roiOverlayPoint={showDebug ? null : lastClick}
+                roiOverlaySize={showDebug ? undefined : roiSize}
+                showRoiArea={showRoiArea}
               />
                 {showHints && imageUrl && (
                   <div
@@ -5313,6 +5318,58 @@ export default function App() {
                     <span style={{ fontSize: 12 }}>輪郭でBBox補正</span>
                   </label>
                   <div style={{ height: 1, background: "#eee", margin: "4px 0 8px" }} />
+                  <div
+                    role="button"
+                    aria-pressed={showRoiArea}
+                    onClick={() => setShowRoiArea((prev) => !prev)}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto auto",
+                      alignItems: "center",
+                      gap: 10,
+                      height: 28,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: "#455a64" }}>ROI AAREA を表示</span>
+                    <span
+                      style={{
+                        width: 34,
+                        height: 18,
+                        borderRadius: 999,
+                        background: showRoiArea ? "#e53935" : "#cfd8dc",
+                        position: "relative",
+                        transition: "background 120ms ease",
+                        display: "inline-block",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "#fff",
+                          position: "absolute",
+                          top: 2,
+                          left: showRoiArea ? 18 : 2,
+                          transition: "left 120ms ease",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 28,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: showRoiArea ? "#455a64" : "#90a4ae",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {showRoiArea ? "ON" : "OFF"}
+                    </span>
+                  </div>
                   <div
                     role="button"
                     aria-pressed={showCandidates}
