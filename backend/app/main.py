@@ -58,6 +58,8 @@ from .schemas import (
     AutoAnnotationItem,
     DatasetImportResponse,
     DatasetInfo,
+    ProjectAnnotationStatsResponse,
+    ProjectAnnotationClassStats,
     DatasetSelectRequest,
     ProjectCreateRequest,
     LoadAnnotationsResponse,
@@ -754,6 +756,128 @@ def get_dataset(project_name: str) -> DatasetInfo:
         bbox_count=stats["bbox_count"],
         seg_count=stats["seg_count"],
         updated_at=stats["updated_at"],
+    )
+
+
+@app.get("/dataset/{project_name}/annotation-stats", response_model=ProjectAnnotationStatsResponse)
+def get_project_annotation_stats(project_name: str) -> ProjectAnnotationStatsResponse:
+    project_dir = _project_dir(project_name)
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail="project not found")
+
+    annotations_dir = _project_annotations_dir(project_name)
+    if not annotations_dir.exists():
+        return ProjectAnnotationStatsResponse(project_name=project_name, rows=[], total_confirmed=0, updated_at=None)
+
+    stats_by_class: Dict[str, Dict[str, object]] = {}
+    total_confirmed = 0
+    latest_ts = 0.0
+
+    def _ensure_class(class_name: str) -> Dict[str, object]:
+        if class_name not in stats_by_class:
+            stats_by_class[class_name] = {
+                "count": 0,
+                "bbox_min_area": None,
+                "bbox_min_w": None,
+                "bbox_min_h": None,
+                "bbox_max_area": None,
+                "bbox_max_w": None,
+                "bbox_max_h": None,
+                "score_min": None,
+                "score_max": None,
+                "scale_min": None,
+                "scale_max": None,
+                "templates": {},
+            }
+        return stats_by_class[class_name]
+
+    for ann_path in annotations_dir.glob("*.json"):
+        try:
+            data = json.loads(ann_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        try:
+            latest_ts = max(latest_ts, ann_path.stat().st_mtime)
+        except Exception:
+            pass
+        if not isinstance(data, list):
+            continue
+        for ann in data:
+            if not isinstance(ann, dict):
+                continue
+            class_name = str(ann.get("class_name") or "").strip()
+            if not class_name:
+                continue
+
+            row = _ensure_class(class_name)
+            row["count"] = int(row["count"]) + 1
+            total_confirmed += 1
+
+            bbox = ann.get("bbox")
+            if isinstance(bbox, dict):
+                try:
+                    w = float(bbox.get("w", 0))
+                    h = float(bbox.get("h", 0))
+                    if w > 0 and h > 0:
+                        area = int(round(w * h))
+                        if row["bbox_min_area"] is None or area < int(row["bbox_min_area"]):
+                            row["bbox_min_area"] = area
+                            row["bbox_min_w"] = int(round(w))
+                            row["bbox_min_h"] = int(round(h))
+                        if row["bbox_max_area"] is None or area > int(row["bbox_max_area"]):
+                            row["bbox_max_area"] = area
+                            row["bbox_max_w"] = int(round(w))
+                            row["bbox_max_h"] = int(round(h))
+                except Exception:
+                    pass
+
+            score = ann.get("score")
+            if isinstance(score, (int, float)):
+                s = float(score)
+                row["score_min"] = s if row["score_min"] is None else min(float(row["score_min"]), s)
+                row["score_max"] = s if row["score_max"] is None else max(float(row["score_max"]), s)
+
+            scale = ann.get("scale")
+            if isinstance(scale, (int, float)):
+                sc = float(scale)
+                row["scale_min"] = sc if row["scale_min"] is None else min(float(row["scale_min"]), sc)
+                row["scale_max"] = sc if row["scale_max"] is None else max(float(row["scale_max"]), sc)
+
+            template_name = str(ann.get("template_name") or "").strip()
+            if template_name:
+                templates = row["templates"]
+                if isinstance(templates, dict):
+                    templates[template_name] = int(templates.get(template_name, 0)) + 1
+
+    rows: List[ProjectAnnotationClassStats] = []
+    for class_name in sorted(stats_by_class.keys()):
+        row = stats_by_class[class_name]
+        templates = row.get("templates") if isinstance(row.get("templates"), dict) else {}
+        top_template = None
+        if isinstance(templates, dict) and templates:
+            top_template = sorted(templates.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[0][0]
+        rows.append(
+            ProjectAnnotationClassStats(
+                class_name=class_name,
+                confirmed_count=int(row["count"]),
+                bbox_min_w=int(row["bbox_min_w"]) if row["bbox_min_w"] is not None else None,
+                bbox_min_h=int(row["bbox_min_h"]) if row["bbox_min_h"] is not None else None,
+                bbox_max_w=int(row["bbox_max_w"]) if row["bbox_max_w"] is not None else None,
+                bbox_max_h=int(row["bbox_max_h"]) if row["bbox_max_h"] is not None else None,
+                score_min=float(row["score_min"]) if row["score_min"] is not None else None,
+                score_max=float(row["score_max"]) if row["score_max"] is not None else None,
+                scale_min=float(row["scale_min"]) if row["scale_min"] is not None else None,
+                scale_max=float(row["scale_max"]) if row["scale_max"] is not None else None,
+                top_template_name=top_template,
+            )
+        )
+
+    updated_at = datetime.fromtimestamp(latest_ts).isoformat() if latest_ts > 0 else None
+    return ProjectAnnotationStatsResponse(
+        project_name=project_name,
+        rows=rows,
+        total_confirmed=total_confirmed,
+        updated_at=updated_at,
     )
 
 

@@ -261,6 +261,27 @@ class DatasetInfo(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ProjectAnnotationClassStats(BaseModel):
+    class_name: str
+    confirmed_count: int
+    bbox_min_w: Optional[int] = None
+    bbox_min_h: Optional[int] = None
+    bbox_max_w: Optional[int] = None
+    bbox_max_h: Optional[int] = None
+    score_min: Optional[float] = None
+    score_max: Optional[float] = None
+    scale_min: Optional[float] = None
+    scale_max: Optional[float] = None
+    top_template_name: Optional[str] = None
+
+
+class ProjectAnnotationStatsResponse(BaseModel):
+    project_name: str
+    rows: List[ProjectAnnotationClassStats]
+    total_confirmed: int = 0
+    updated_at: Optional[str] = None
+
+
 class DatasetSelectRequest(BaseModel):
     project_name: Optional[str] = None
     dataset_id: Optional[str] = None

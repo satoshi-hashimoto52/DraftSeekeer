@@ -31,7 +31,9 @@ import {
   createDatasetProject,
   deleteDatasetProject,
   autoAnnotate,
+  fetchProjectAnnotationStats,
   shutdownApp,
+  ProjectAnnotationStatsResponse,
 } from "./api.ts";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas.tsx";
 import NumericInputWithButtons from "./components/NumericInputWithButtons.tsx";
@@ -59,6 +61,8 @@ const DEFAULT_AUTO_METHOD: AutoMethod = "combined";
 const DEFAULT_HOVER_DETECT_INTERVAL_MS = 120;
 const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 10;
 const DEBUG_TEMPLATE_SCALE_STEP = 0.01;
+const PROJECT_STATS_POPUP_W = 760;
+const PROJECT_STATS_POPUP_H = 380;
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
@@ -131,6 +135,19 @@ export default function App() {
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
   const [projectList, setProjectList] = useState<DatasetInfo[]>([]);
+  const [hoverProjectStatsAnchor, setHoverProjectStatsAnchor] = useState<{
+    projectName: string;
+    rect: { left: number; top: number; right: number; bottom: number };
+  } | null>(null);
+  const hoverProjectStatsTimerRef = useRef<number | null>(null);
+  const [projectStatsPopupPos, setProjectStatsPopupPos] = useState<{ left: number; top: number } | null>(null);
+  const projectStatsDragRef = useRef<{ active: boolean; dx: number; dy: number }>({
+    active: false,
+    dx: 0,
+    dy: 0,
+  });
+  const [projectStatsByName, setProjectStatsByName] = useState<Record<string, ProjectAnnotationStatsResponse>>({});
+  const [projectStatsLoadingName, setProjectStatsLoadingName] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState<string>("");
   const [newProjectFiles, setNewProjectFiles] = useState<FileList | null>(null);
   const [datasetSelectedName, setDatasetSelectedName] = useState<string | null>(null);
@@ -459,6 +476,48 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Project list failed");
     }
+  };
+
+  const handleProjectCardHoverEnter = async (
+    projectName: string,
+    rect: { left: number; top: number; right: number; bottom: number }
+  ) => {
+    if (hoverProjectStatsTimerRef.current !== null) {
+      window.clearTimeout(hoverProjectStatsTimerRef.current);
+      hoverProjectStatsTimerRef.current = null;
+    }
+    hoverProjectStatsTimerRef.current = window.setTimeout(() => {
+      setHoverProjectStatsAnchor({ projectName, rect });
+      hoverProjectStatsTimerRef.current = null;
+    }, 1000);
+    if (projectStatsByName[projectName] || projectStatsLoadingName === projectName) return;
+    setProjectStatsLoadingName(projectName);
+    try {
+      const stats = await fetchProjectAnnotationStats(projectName);
+      setProjectStatsByName((prev) => ({ ...prev, [projectName]: stats }));
+    } catch {
+      setProjectStatsByName((prev) => ({
+        ...prev,
+        [projectName]: {
+          project_name: projectName,
+          rows: [],
+          total_confirmed: 0,
+          updated_at: null,
+        },
+      }));
+    } finally {
+      setProjectStatsLoadingName((prev) => (prev === projectName ? null : prev));
+    }
+  };
+
+  const getProjectStatsPopupDefaultPos = (anchor: {
+    rect: { left: number; top: number; right: number; bottom: number };
+  }) => {
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1600;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 900;
+    const left = Math.max(16, Math.min(vw - PROJECT_STATS_POPUP_W - 16, anchor.rect.right + 10));
+    const top = Math.max(16, Math.min(vh - PROJECT_STATS_POPUP_H - 16, anchor.rect.top - 18));
+    return { left, top };
   };
 
   const refreshTemplateStateForProject = async (targetProject: string) => {
@@ -1339,6 +1398,11 @@ export default function App() {
     setSelectedCandidateId(null);
     setAnnotations([]);
     setSelectedAnnotationId(null);
+    // Invalidate cached per-project annotation stats so hover popup reloads fresh data.
+    setProjectStatsByName({});
+    setProjectStatsLoadingName(null);
+    // Refresh home project summary cards (counts/updated_at).
+    void refreshProjectList();
   };
 
   const handleCreateProject = async () => {
@@ -2438,6 +2502,7 @@ export default function App() {
 
 
   const handleSelectAnnotation = (annotation: Annotation) => {
+    allowAnnotationAutoScrollRef.current = true;
     setSelectedAnnotationId(annotation.id);
     setSegEditMode(false);
     setSelectedVertexIndex(null);
@@ -2661,6 +2726,16 @@ export default function App() {
     setTemplateGalleryPreviewName(null);
     setTemplateGalleryPreviewNaturalSize(null);
   };
+  const moveTemplatePreview = (delta: 1 | -1) => {
+    if (!templateGalleryPreviewName || templateGalleryItems.length === 0) return;
+    const currentIndex = templateGalleryItems.findIndex((item) => item.name === templateGalleryPreviewName);
+    if (currentIndex < 0) return;
+    const nextIndex = (currentIndex + delta + templateGalleryItems.length) % templateGalleryItems.length;
+    const next = templateGalleryItems[nextIndex];
+    if (!next) return;
+    setTemplateGalleryPreviewName(next.name);
+    setTemplateGalleryPreviewNaturalSize(null);
+  };
   const closeTemplateGallery = () => {
     closeTemplatePreview();
     setTemplateGalleryOpen(false);
@@ -2703,6 +2778,30 @@ export default function App() {
       // ignore
     }
   }, [viewState]);
+
+  useEffect(() => {
+    if (viewState.view !== "home") {
+      if (hoverProjectStatsTimerRef.current !== null) {
+        window.clearTimeout(hoverProjectStatsTimerRef.current);
+        hoverProjectStatsTimerRef.current = null;
+      }
+      setHoverProjectStatsAnchor(null);
+      setProjectStatsPopupPos(null);
+    }
+  }, [viewState.view]);
+
+  useEffect(() => {
+    setProjectStatsPopupPos(null);
+  }, [hoverProjectStatsAnchor?.projectName]);
+
+  useEffect(() => {
+    return () => {
+      if (hoverProjectStatsTimerRef.current !== null) {
+        window.clearTimeout(hoverProjectStatsTimerRef.current);
+        hoverProjectStatsTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!datasetId || !datasetInfo) return;
@@ -4161,6 +4260,7 @@ export default function App() {
                     justifyContent: "center",
                     padding: 14,
                     minHeight: 0,
+                    position: "relative",
                   }}
                 >
                   <img
@@ -4183,6 +4283,58 @@ export default function App() {
                       imageRendering: "pixelated",
                     }}
                   />
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    onClick={() => moveTemplatePreview(-1)}
+                    style={{
+                      position: "absolute",
+                      left: 16,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      borderRadius: 999,
+                      borderColor: "rgba(255,255,255,0.62)",
+                      color: templateGalleryPreviewTextColor,
+                      background: "rgba(10, 18, 32, 0.35)",
+                      boxShadow: "none",
+                      fontSize: 20,
+                      fontWeight: 700,
+                      lineHeight: 1,
+                    }}
+                    aria-label="前のテンプレート"
+                    title="前へ"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    onClick={() => moveTemplatePreview(1)}
+                    style={{
+                      position: "absolute",
+                      right: 16,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      borderRadius: 999,
+                      borderColor: "rgba(255,255,255,0.62)",
+                      color: templateGalleryPreviewTextColor,
+                      background: "rgba(10, 18, 32, 0.35)",
+                      boxShadow: "none",
+                      fontSize: 20,
+                      fontWeight: 700,
+                      lineHeight: 1,
+                    }}
+                    aria-label="次のテンプレート"
+                    title="次へ"
+                  >
+                    ›
+                  </button>
                 </div>
               </div>
             </>
@@ -6963,6 +7115,21 @@ export default function App() {
             {asChildren(projectList.map((p, idx) => (
               <div
                 key={`${p.project_name || "project"}-${idx}`}
+                onMouseEnter={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  void handleProjectCardHoverEnter(p.project_name, {
+                    left: rect.left,
+                    top: rect.top,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                  });
+                }}
+                onMouseLeave={() => {
+                  if (hoverProjectStatsTimerRef.current !== null) {
+                    window.clearTimeout(hoverProjectStatsTimerRef.current);
+                    hoverProjectStatsTimerRef.current = null;
+                  }
+                }}
                 style={{
                   border: "1px solid rgba(255,255,255,0.62)",
                   borderRadius: 12,
@@ -7025,6 +7192,229 @@ export default function App() {
               <div style={{ color: "#666" }}>プロジェクトがありません。</div>
             )}
           </div>
+          {hoverProjectStatsAnchor && (
+            <div
+              style={{
+                position: "fixed",
+                left:
+                  projectStatsPopupPos?.left ??
+                  getProjectStatsPopupDefaultPos(hoverProjectStatsAnchor).left,
+                top:
+                  projectStatsPopupPos?.top ??
+                  getProjectStatsPopupDefaultPos(hoverProjectStatsAnchor).top,
+                width: "min(760px, calc(100vw - 32px))",
+                maxHeight: "min(380px, calc(100vh - 32px))",
+                borderRadius: 16,
+                border: "1px solid rgba(255,255,255,0.38)",
+                background:
+                  "linear-gradient(160deg, rgba(255,255,255,0.14) 0%, rgba(238,247,255,0.10) 52%, rgba(228,242,255,0.08) 100%)",
+                boxShadow:
+                  "0 24px 60px rgba(9, 18, 34, 0.30), inset 0 1px 0 rgba(255,255,255,0.48), inset 0 -1px 0 rgba(255,255,255,0.14)",
+                backdropFilter: "blur(22px) saturate(145%)",
+                zIndex: 20,
+                overflow: "hidden",
+                display: "grid",
+                gridTemplateRows: "auto 1fr",
+                pointerEvents: "auto",
+              }}
+            >
+              <div
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  const base =
+                    projectStatsPopupPos ?? getProjectStatsPopupDefaultPos(hoverProjectStatsAnchor);
+                  projectStatsDragRef.current = {
+                    active: true,
+                    dx: e.clientX - base.left,
+                    dy: e.clientY - base.top,
+                  };
+                  const onMove = (ev: MouseEvent) => {
+                    if (!projectStatsDragRef.current.active) return;
+                    const vw = window.innerWidth;
+                    const vh = window.innerHeight;
+                    const nextLeft = Math.max(
+                      16,
+                      Math.min(vw - PROJECT_STATS_POPUP_W - 16, ev.clientX - projectStatsDragRef.current.dx)
+                    );
+                    const nextTop = Math.max(
+                      16,
+                      Math.min(vh - PROJECT_STATS_POPUP_H - 16, ev.clientY - projectStatsDragRef.current.dy)
+                    );
+                    setProjectStatsPopupPos({ left: nextLeft, top: nextTop });
+                  };
+                  const onUp = () => {
+                    projectStatsDragRef.current.active = false;
+                    window.removeEventListener("mousemove", onMove);
+                    window.removeEventListener("mouseup", onUp);
+                  };
+                  window.addEventListener("mousemove", onMove);
+                  window.addEventListener("mouseup", onUp);
+                }}
+                style={{
+                  padding: "10px 12px",
+                  borderBottom: "1px solid rgba(255,255,255,0.30)",
+                  background:
+                    "linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.08) 100%)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  color: "#111",
+                  cursor: "move",
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 700 }}>
+                  確定アノテーション統計: {hoverProjectStatsAnchor.projectName}
+                </span>
+                <span style={{ fontSize: 11 }}>
+                  合計: {projectStatsByName[hoverProjectStatsAnchor.projectName]?.total_confirmed ?? 0}
+                </span>
+                <button
+                  type="button"
+                  className="btn btnGhost"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setHoverProjectStatsAnchor(null)}
+                  style={{
+                    height: 24,
+                    padding: "0 8px",
+                    color: "#111",
+                    borderColor: "rgba(0,0,0,0.18)",
+                    background: "rgba(255,255,255,0.24)",
+                    boxShadow: "none",
+                    fontSize: 11,
+                  }}
+                >
+                  閉じる
+                </button>
+              </div>
+              <div
+                style={{
+                  padding: 10,
+                  overflow: "auto",
+                  color: "#111",
+                  background:
+                    "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(235,245,255,0.06) 100%)",
+                }}
+              >
+                {projectStatsLoadingName === hoverProjectStatsAnchor.projectName &&
+                !projectStatsByName[hoverProjectStatsAnchor.projectName] ? (
+                  <div style={{ fontSize: 12 }}>読み込み中...</div>
+                ) : (
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      fontSize: 11,
+                      background: "rgba(255,255,255,0.18)",
+                      border: "1px solid rgba(255,255,255,0.28)",
+                      borderRadius: 10,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <thead>
+                      <tr>
+                        {["シリーズ", "確定総数", "BBoxサイズ (W x H)", "確信度", "スケール", "最頻テンプレ"].map((h) => (
+                          <th
+                            key={`stat-header-${h}`}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.12)",
+                              background: "rgba(255,255,255,0.16)",
+                              color: "#111",
+                              fontWeight: 700,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(projectStatsByName[hoverProjectStatsAnchor.projectName]?.rows || []).map((row) => (
+                        <tr key={`stat-row-${hoverProjectStatsAnchor.projectName}-${row.class_name}`}>
+                          <td style={{ padding: "6px 8px", borderBottom: "1px solid rgba(20,20,20,0.10)" }}>
+                            {row.class_name}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.10)",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {row.confirmed_count}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.10)",
+                              fontVariantNumeric: "tabular-nums",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {typeof row.bbox_min_w === "number" &&
+                            typeof row.bbox_min_h === "number" &&
+                            typeof row.bbox_max_w === "number" &&
+                            typeof row.bbox_max_h === "number"
+                              ? row.confirmed_count <= 1
+                                ? `${row.bbox_min_w} × ${row.bbox_min_h}`
+                                : `${row.bbox_min_w} × ${row.bbox_min_h} ~ ${row.bbox_max_w} × ${row.bbox_max_h}`
+                              : "-"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.10)",
+                              fontVariantNumeric: "tabular-nums",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {typeof row.score_min === "number" && typeof row.score_max === "number"
+                              ? `${row.score_min.toFixed(3)} - ${row.score_max.toFixed(3)}`
+                              : "-"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.10)",
+                              fontVariantNumeric: "tabular-nums",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {typeof row.scale_min === "number" && typeof row.scale_max === "number"
+                              ? `${row.scale_min.toFixed(2)} - ${row.scale_max.toFixed(2)}`
+                              : "-"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              borderBottom: "1px solid rgba(20,20,20,0.10)",
+                              whiteSpace: "nowrap",
+                              maxWidth: 220,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                            title={row.top_template_name || "-"}
+                          >
+                            {row.top_template_name || "-"}
+                          </td>
+                        </tr>
+                      ))}
+                      {(projectStatsByName[hoverProjectStatsAnchor.projectName]?.rows || []).length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ padding: "10px 8px", color: "#333" }}>
+                            確定アノテーションがありません。
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
             </div>
           </div>
         </div>

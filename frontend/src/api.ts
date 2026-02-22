@@ -217,6 +217,27 @@ export type DatasetImageEntry = {
   height?: number | null;
 };
 
+export type ProjectAnnotationClassStats = {
+  class_name: string;
+  confirmed_count: number;
+  bbox_min_w?: number | null;
+  bbox_min_h?: number | null;
+  bbox_max_w?: number | null;
+  bbox_max_h?: number | null;
+  score_min?: number | null;
+  score_max?: number | null;
+  scale_min?: number | null;
+  scale_max?: number | null;
+  top_template_name?: string | null;
+};
+
+export type ProjectAnnotationStatsResponse = {
+  project_name: string;
+  rows: ProjectAnnotationClassStats[];
+  total_confirmed: number;
+  updated_at?: string | null;
+};
+
 export type AutoAnnotateRequest = {
   image_id: string;
   project: string;
@@ -593,6 +614,17 @@ export async function createDatasetProject(project_name: string): Promise<Datase
     throw new Error(text || "Project create failed");
   }
   return (await res.json()) as DatasetInfo;
+}
+
+export async function fetchProjectAnnotationStats(
+  project_name: string
+): Promise<ProjectAnnotationStatsResponse> {
+  const res = await fetch(`${API_BASE}/dataset/${encodeURIComponent(project_name)}/annotation-stats`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Annotation stats fetch failed");
+  }
+  return (await res.json()) as ProjectAnnotationStatsResponse;
 }
 
 export async function deleteDatasetProject(project_name: string): Promise<{ ok: boolean }> {
