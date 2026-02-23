@@ -109,6 +109,8 @@ BBOX_PAD_DEFAULT_TOP = 0
 BBOX_PAD_DEFAULT_BOTTOM = 0
 BBOX_PAD_MAP: Dict[str, Dict[str, int]] = {}
 AUTO_MAX_TEMPLATES_PER_CLASS = 60
+MANUAL_SCORE_RAW_WEIGHT = 0.2
+MANUAL_SCORE_SHAPE_WEIGHT = 0.8
 
 
 def _get_project_class_names(project: str) -> List[str]:
@@ -1442,7 +1444,10 @@ def detect_point(payload: DetectPointRequest) -> DetectPointResponse:
             continue
         if shape_ratio < shape_ratio_threshold:
             continue
-        weighted_score = 0.4 * raw_match_score + 0.6 * shape_ratio
+        weighted_score = (
+            MANUAL_SCORE_RAW_WEIGHT * raw_match_score
+            + MANUAL_SCORE_SHAPE_WEIGHT * shape_ratio
+        )
         if weighted_score < score_floor:
             continue
         if _point_in_box_with_margin(payload.x, payload.y, m.outer_bbox):
