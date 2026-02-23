@@ -826,7 +826,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
               offCtx.globalCompositeOperation = "destination-in";
               offCtx.drawImage(debugMatchTemplateImageRef.current, 0, 0, off.width, off.height);
               offCtx.globalCompositeOperation = "source-over";
-              ctx.globalAlpha = 0.92;
+              ctx.globalAlpha = 0.4;
               ctx.drawImage(off, b.x, b.y, b.w, b.h);
             }
             ctx.restore();
