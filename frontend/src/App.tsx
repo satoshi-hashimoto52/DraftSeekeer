@@ -329,6 +329,7 @@ export default function App() {
   const annotationRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const allowAnnotationAutoScrollRef = useRef<boolean>(false);
   const confirmedListRef = useRef<HTMLDivElement | null>(null);
+  const templatePreviewRepeatTimerRef = useRef<number | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const exportDirInputRef = useRef<HTMLInputElement | null>(null);
   const [coordDebug, setCoordDebug] = useState<{
@@ -348,6 +349,7 @@ export default function App() {
   >([]);
   const [templateGalleryLoading, setTemplateGalleryLoading] = useState<boolean>(false);
   const [templateGalleryPreviewName, setTemplateGalleryPreviewName] = useState<string | null>(null);
+  const templateGalleryPreviewNameRef = useRef<string | null>(null);
   const [templateGalleryPreviewNaturalSize, setTemplateGalleryPreviewNaturalSize] = useState<
     { w: number; h: number } | null
   >(null);
@@ -2727,16 +2729,31 @@ export default function App() {
     setTemplateGalleryPreviewNaturalSize(null);
   };
   const moveTemplatePreview = (delta: 1 | -1) => {
-    if (!templateGalleryPreviewName || templateGalleryItems.length === 0) return;
-    const currentIndex = templateGalleryItems.findIndex((item) => item.name === templateGalleryPreviewName);
+    const currentName = templateGalleryPreviewNameRef.current;
+    if (!currentName || templateGalleryItems.length === 0) return;
+    const currentIndex = templateGalleryItems.findIndex((item) => item.name === currentName);
     if (currentIndex < 0) return;
     const nextIndex = (currentIndex + delta + templateGalleryItems.length) % templateGalleryItems.length;
     const next = templateGalleryItems[nextIndex];
-    if (!next) return;
+    if (!next || next.name === currentName) return;
     setTemplateGalleryPreviewName(next.name);
     setTemplateGalleryPreviewNaturalSize(null);
   };
+  const stopTemplatePreviewRepeat = () => {
+    if (templatePreviewRepeatTimerRef.current !== null) {
+      window.clearInterval(templatePreviewRepeatTimerRef.current);
+      templatePreviewRepeatTimerRef.current = null;
+    }
+  };
+  const startTemplatePreviewRepeat = (delta: 1 | -1) => {
+    stopTemplatePreviewRepeat();
+    moveTemplatePreview(delta);
+    templatePreviewRepeatTimerRef.current = window.setInterval(() => {
+      moveTemplatePreview(delta);
+    }, 70);
+  };
   const closeTemplateGallery = () => {
+    stopTemplatePreviewRepeat();
     closeTemplatePreview();
     setTemplateGalleryOpen(false);
   };
@@ -2795,7 +2812,22 @@ export default function App() {
   }, [hoverProjectStatsAnchor?.projectName]);
 
   useEffect(() => {
+    templateGalleryPreviewNameRef.current = templateGalleryPreviewName;
+  }, [templateGalleryPreviewName]);
+
+  useEffect(() => {
+    const onStop = () => stopTemplatePreviewRepeat();
+    window.addEventListener("pointerup", onStop);
+    window.addEventListener("blur", onStop);
     return () => {
+      window.removeEventListener("pointerup", onStop);
+      window.removeEventListener("blur", onStop);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopTemplatePreviewRepeat();
       if (hoverProjectStatsTimerRef.current !== null) {
         window.clearTimeout(hoverProjectStatsTimerRef.current);
         hoverProjectStatsTimerRef.current = null;
@@ -4286,7 +4318,16 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btnGhost"
-                    onClick={() => moveTemplatePreview(-1)}
+                    onPointerDown={() => startTemplatePreviewRepeat(-1)}
+                    onPointerUp={stopTemplatePreviewRepeat}
+                    onPointerCancel={stopTemplatePreviewRepeat}
+                    onPointerLeave={stopTemplatePreviewRepeat}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        moveTemplatePreview(-1);
+                      }
+                    }}
                     style={{
                       position: "absolute",
                       left: 16,
@@ -4312,7 +4353,16 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btnGhost"
-                    onClick={() => moveTemplatePreview(1)}
+                    onPointerDown={() => startTemplatePreviewRepeat(1)}
+                    onPointerUp={stopTemplatePreviewRepeat}
+                    onPointerCancel={stopTemplatePreviewRepeat}
+                    onPointerLeave={stopTemplatePreviewRepeat}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        moveTemplatePreview(1);
+                      }
+                    }}
                     style={{
                       position: "absolute",
                       right: 16,
