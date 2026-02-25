@@ -317,6 +317,7 @@ class AutoAnnotateRequest(BaseModel):
     roi_size: Optional[int] = None
     project_name: Optional[str] = None
     image_key: Optional[str] = None
+    progress_id: Optional[str] = None
 
 
 class AutoAnnotationItem(BaseModel):
@@ -327,9 +328,27 @@ class AutoAnnotationItem(BaseModel):
     scale: Optional[float] = None
 
 
+class AutoAnnotateClassProgress(BaseModel):
+    class_name: str
+    confirmed_count: int
+    pre_detect_count: int
+
+
 class AutoAnnotateResponse(BaseModel):
     added_count: int
     rejected_count: int
     threshold: float
     created_annotations: Optional[List[AutoAnnotationItem]] = None
+    class_progress: Optional[List[AutoAnnotateClassProgress]] = None
     preview_image_url: Optional[str] = None
+
+
+class AutoAnnotateProgressResponse(BaseModel):
+    progress_id: str
+    status: str
+    current: int
+    total: int
+    percent: int
+    class_progress: Optional[List[AutoAnnotateClassProgress]] = None
+    message: Optional[str] = None
+    updated_at: Optional[float] = None

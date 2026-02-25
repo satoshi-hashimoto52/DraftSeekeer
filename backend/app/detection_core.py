@@ -9,7 +9,7 @@ filter by threshold, and export annotations.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 
 import cv2
 import numpy as np
@@ -157,6 +157,7 @@ def annotate_all(
     scale_max: float = 1.5,
     scale_steps: int = 12,
     stride: int | None = None,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> dict:
     """Run full-image template matching and export annotations.
 
@@ -239,7 +240,15 @@ def annotate_all(
     black_match_threshold = 0.69
     nms_threshold = 0.8
 
+    scales = _iter_scales()
+    total_steps = max(
+        1,
+        int(sum(len(tpls) for tpls in templates_by_class.values()) * len(scales)),
+    )
+    step = 0
+
     candidates: List[Dict] = []
+    pre_detect_by_class: Dict[str, int] = {}
     for class_name, tpls in templates_by_class.items():
         for tpl in tpls:
             tpl_gray = tpl.image_gray
@@ -247,8 +256,11 @@ def annotate_all(
                 continue
             template_bin_base = np.zeros_like(tpl_gray, dtype=np.uint8)
             template_bin_base[tpl_gray < 128] = 255
-            for scale in _iter_scales():
+            for scale in scales:
                 if scale <= 0:
+                    step += 1
+                    if progress_callback is not None:
+                        progress_callback(step, total_steps, class_name, 0)
                     continue
                 th, tw = template_bin_base.shape[:2]
                 resized = cv2.resize(
@@ -258,14 +270,24 @@ def annotate_all(
                 )
                 rh, rw = resized.shape[:2]
                 if rh <= 1 or rw <= 1:
+                    step += 1
+                    if progress_callback is not None:
+                        progress_callback(step, total_steps, class_name, 0)
                     continue
                 if rh > height or rw > width:
+                    step += 1
+                    if progress_callback is not None:
+                        progress_callback(step, total_steps, class_name, 0)
                     continue
                 black_coords = np.column_stack(np.where(resized > 0))
                 if black_coords.size == 0:
+                    step += 1
+                    if progress_callback is not None:
+                        progress_callback(step, total_steps, class_name, 0)
                     continue
                 result = cv2.matchTemplate(image_bin, resized, cv2.TM_CCORR_NORMED)
                 ys, xs = np.where(result >= match_threshold)
+                hit_count = 0
                 for (x, y) in zip(xs, ys):
                     patch = image_bin[y : y + rh, x : x + rw]
                     if patch.shape[0] != rh or patch.shape[1] != rw:
@@ -288,6 +310,11 @@ def annotate_all(
                             "scale": float(scale),
                         }
                     )
+                    pre_detect_by_class[class_name] = pre_detect_by_class.get(class_name, 0) + 1
+                    hit_count += 1
+                step += 1
+                if progress_callback is not None:
+                    progress_callback(step, total_steps, class_name, hit_count)
 
     confirmed = _nms(candidates, nms_threshold)
 
@@ -302,6 +329,7 @@ def annotate_all(
         "image": str(image_path),
         "threshold": threshold,
         "total_candidates": len(candidates),
+        "pre_detect_by_class": pre_detect_by_class,
         "confirmed": confirmed,
         "export": export_payload,
     }
@@ -320,6 +348,7 @@ def annotate_all_manual(
     scale_order: str = "linear",
     stop_on_first_hit: bool = False,
     precompute_scaled_templates: bool = True,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> dict:
     """Run full-image template matching using raw match scores only.
 
@@ -340,6 +369,10 @@ def annotate_all_manual(
     required_roi = _required_roi_size_for_templates(templates_by_class, scale_min)
     tile_size = max(64, int(roi_size), required_roi)
     stride = max(1, int(stride if stride is not None else tile_size * 0.5))
+    tiles_x = max(1, (width + stride - 1) // stride)
+    tiles_y = max(1, (height + stride - 1) // stride)
+    total_steps = max(1, int(tiles_x * tiles_y))
+    step = 0
     # Precompute scaled templates once per request (same behavior, less repeated work).
     prepared_edge: Dict[str, List[PreparedScaledTemplate]] | None = None
     prepared_bin: Dict[str, List[PreparedScaledTemplate]] | None = None
@@ -354,29 +387,48 @@ def annotate_all_manual(
         )
     # Keep more candidates per tile to reduce early misses before global dedup.
     max_per_tile = 120
+    class_names = list(templates_by_class.keys())
+    total_steps = max(1, int(len(class_names) * tiles_x * tiles_y))
     candidates: List[Candidate] = []
-    for x0, y0, x1, y1 in _iter_tiles(width, height, tile_size, stride):
-        tile = img[y0:y1, x0:x1]
-        if tile.size == 0:
-            continue
-        candidates.extend(
-            _match_tile(
+    pre_detect_by_class: Dict[str, int] = {}
+    for class_name in class_names:
+        class_templates = {class_name: templates_by_class.get(class_name, [])}
+        class_prepared_edge = (
+            {class_name: prepared_edge.get(class_name, [])} if prepared_edge is not None else None
+        )
+        class_prepared_bin = (
+            {class_name: prepared_bin.get(class_name, [])} if prepared_bin is not None else None
+        )
+        for x0, y0, x1, y1 in _iter_tiles(width, height, tile_size, stride):
+            tile = img[y0:y1, x0:x1]
+            if tile.size == 0:
+                step += 1
+                if progress_callback is not None:
+                    progress_callback(step, total_steps, class_name, 0)
+                continue
+            tile_candidates = _match_tile(
                 tile,
                 x0,
                 y0,
-                templates_by_class,
+                class_templates,
                 scale_min,
                 scale_max,
                 scale_steps,
                 max_per_tile,
                 roi_size,
                 threshold,
-                prepared_edge=prepared_edge,
-                prepared_bin=prepared_bin,
+                prepared_edge=class_prepared_edge,
+                prepared_bin=class_prepared_bin,
                 scale_order=scale_order,
                 stop_on_first_hit=stop_on_first_hit,
             )
-        )
+            candidates.extend(tile_candidates)
+            hit_count = len(tile_candidates)
+            if hit_count > 0:
+                pre_detect_by_class[class_name] = pre_detect_by_class.get(class_name, 0) + hit_count
+            step += 1
+            if progress_callback is not None:
+                progress_callback(step, total_steps, class_name, hit_count)
 
     scored = [
         {
@@ -405,6 +457,7 @@ def annotate_all_manual(
         "image": str(image_path),
         "threshold": threshold,
         "total_candidates": len(scored),
+        "pre_detect_by_class": pre_detect_by_class,
         "confirmed": confirmed,
         "export": export_payload,
     }
@@ -420,6 +473,7 @@ def annotate_all_manual_equal_scale_beta(
     scale_max: float = 1.5,
     scale_steps: int = 12,
     stride: int | None = None,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> dict:
     """Beta mode: prioritize 1.0x scale and expand outward."""
     return annotate_all_manual(
@@ -432,6 +486,7 @@ def annotate_all_manual_equal_scale_beta(
         scale_max=scale_max,
         scale_steps=scale_steps,
         stride=stride,
+        progress_callback=progress_callback,
         scale_order="center_out",
         stop_on_first_hit=True,
         precompute_scaled_templates=False,

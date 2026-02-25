@@ -251,12 +251,18 @@ export type AutoAnnotateRequest = {
   stride?: number;
   project_name?: string;
   image_key?: string;
+  progress_id?: string;
 };
 
 export type AutoAnnotateResponse = {
   added_count: number;
   rejected_count: number;
   threshold: number;
+  class_progress?: {
+    class_name: string;
+    confirmed_count: number;
+    pre_detect_count: number;
+  }[];
   created_annotations?: {
     class_name: string;
     bbox: { x: number; y: number; w: number; h: number };
@@ -265,6 +271,21 @@ export type AutoAnnotateResponse = {
     scale?: number;
   }[];
   preview_image_url?: string | null;
+};
+
+export type AutoAnnotateProgressResponse = {
+  progress_id: string;
+  status: "running" | "done" | "error" | string;
+  current: number;
+  total: number;
+  percent: number;
+  class_progress?: {
+    class_name: string;
+    confirmed_count: number;
+    pre_detect_count: number;
+  }[];
+  message?: string | null;
+  updated_at?: number | null;
 };
 
 export async function autoAnnotate(
@@ -282,6 +303,18 @@ export async function autoAnnotate(
   }
 
   return (await res.json()) as AutoAnnotateResponse;
+}
+
+export async function fetchAutoAnnotateProgress(
+  progressId: string,
+  signal?: AbortSignal
+): Promise<AutoAnnotateProgressResponse> {
+  const res = await fetch(`${API_BASE}/annotate/auto/progress/${encodeURIComponent(progressId)}`, { signal });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Auto annotate progress fetch failed");
+  }
+  return (await res.json()) as AutoAnnotateProgressResponse;
 }
 
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {

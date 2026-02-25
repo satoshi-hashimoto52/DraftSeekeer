@@ -31,6 +31,7 @@ import {
   createDatasetProject,
   deleteDatasetProject,
   autoAnnotate,
+  fetchAutoAnnotateProgress,
   fetchProjectAnnotationStats,
   shutdownApp,
   ProjectAnnotationStatsResponse,
@@ -320,10 +321,15 @@ export default function App() {
     rejected: number;
     threshold: number;
     elapsedMs: number;
+    classProgress: { className: string; confirmed: number; preDetect: number }[];
   } | null>(null);
   const [autoProgress, setAutoProgress] = useState<number>(0);
+  const [autoProgressId, setAutoProgressId] = useState<string>("");
+  const [autoRuntimeClassProgress, setAutoRuntimeClassProgress] = useState<
+    { className: string; confirmed: number; preDetect: number }[]
+  >([]);
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
-  const autoProgressTimerRef = useRef<number | null>(null);
+  const autoProgressPollRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
   const [editingAnnotationClassId, setEditingAnnotationClassId] = useState<string | null>(null);
   const annotationRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -592,6 +598,26 @@ export default function App() {
     () => selectedCandidate || candidates[0] || null,
     [selectedCandidate, candidates]
   );
+  const roiOverlayConfidence = useMemo(() => {
+    if (
+      activeDetectedCandidate &&
+      typeof activeDetectedCandidate.score === "number" &&
+      Number.isFinite(activeDetectedCandidate.score)
+    ) {
+      return activeDetectedCandidate.score;
+    }
+    if (detectDebug && typeof detectDebug.match_score === "number" && Number.isFinite(detectDebug.match_score)) {
+      return detectDebug.match_score;
+    }
+    if (
+      lastDetectionSnapshot &&
+      typeof lastDetectionSnapshot.bestScore === "number" &&
+      Number.isFinite(lastDetectionSnapshot.bestScore)
+    ) {
+      return lastDetectionSnapshot.bestScore;
+    }
+    return null;
+  }, [activeDetectedCandidate, detectDebug, lastDetectionSnapshot]);
 
   const isManualSelected = useMemo(
     () => selectedCandidate?.source === "manual",
@@ -1217,6 +1243,7 @@ export default function App() {
     setLastAutoAddedIds([]);
     setAutoResult(null);
     setAutoProgress(0);
+    setAutoProgressId("");
     setAutoRunning(false);
     setAutoPanelOpen(false);
     setShowExportDrawer(false);
@@ -2396,6 +2423,46 @@ export default function App() {
     }
   };
 
+  const stopAutoProgressPolling = () => {
+    if (autoProgressPollRef.current !== null) {
+      window.clearInterval(autoProgressPollRef.current);
+      autoProgressPollRef.current = null;
+    }
+  };
+
+  const startAutoProgressPolling = (progressId: string) => {
+    stopAutoProgressPolling();
+    let requesting = false;
+    autoProgressPollRef.current = window.setInterval(async () => {
+      if (requesting) return;
+      requesting = true;
+      try {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 800);
+        const p = await fetchAutoAnnotateProgress(progressId, controller.signal);
+        window.clearTimeout(timeout);
+        const next = Math.max(0, Math.min(100, Math.round(p.percent)));
+        setAutoProgress(next);
+        if (Array.isArray(p.class_progress) && p.class_progress.length > 0) {
+          setAutoRuntimeClassProgress(
+            p.class_progress.map((row) => ({
+              className: row.class_name,
+              confirmed: row.confirmed_count,
+              preDetect: row.pre_detect_count,
+            }))
+          );
+        }
+        if (p.status === "done" || p.status === "error") {
+          stopAutoProgressPolling();
+        }
+      } catch {
+        // keep polling until main request settles
+      } finally {
+        requesting = false;
+      }
+    }, 400);
+  };
+
   const handleAutoAnnotate = async () => {
     if (!imageId || !datasetId || !datasetSelectedName || !project) {
       setError("画像またはプロジェクトが選択されていません");
@@ -2406,16 +2473,12 @@ export default function App() {
     setAutoResult(null);
     setLastAutoAddedIds([]);
     setAutoProgress(0);
-    if (autoProgressTimerRef.current) {
-      window.clearInterval(autoProgressTimerRef.current);
-    }
-    autoProgressTimerRef.current = window.setInterval(() => {
-      setAutoProgress((prev) => {
-        if (prev >= 90) return 90;
-        return prev + 5;
-      });
-    }, 400);
+    setAutoRuntimeClassProgress([]);
+    const progressId = `auto-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    setAutoProgressId(progressId);
+    startAutoProgressPolling(progressId);
     const startedAt = performance.now();
+    let completed = false;
     try {
       const clipped = Math.max(0, Math.min(1, autoThreshold));
       const strideValue = autoStride && autoStride > 0 ? autoStride : undefined;
@@ -2432,12 +2495,18 @@ export default function App() {
         stride: strideValue,
         project_name: datasetId,
         image_key: datasetSelectedName,
+        progress_id: progressId,
       });
       setAutoResult({
         added: res.added_count,
         rejected: res.rejected_count,
         threshold: res.threshold,
         elapsedMs: Math.max(0, performance.now() - startedAt),
+        classProgress: (res.class_progress || []).map((row) => ({
+          className: row.class_name,
+          confirmed: row.confirmed_count,
+          preDetect: row.pre_detect_count,
+        })),
       });
       if (res.created_annotations && res.created_annotations.length > 0) {
         const createdAt = new Date().toISOString();
@@ -2481,15 +2550,13 @@ export default function App() {
         autoClassFilter: [...autoClassFilter],
         autoStride,
       });
+      completed = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto annotate failed");
     } finally {
       setAutoRunning(false);
-      setAutoProgress(100);
-      if (autoProgressTimerRef.current) {
-        window.clearInterval(autoProgressTimerRef.current);
-        autoProgressTimerRef.current = null;
-      }
+      stopAutoProgressPolling();
+      setAutoProgress(completed ? 100 : 0);
     }
   };
 
@@ -2978,6 +3045,7 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      stopAutoProgressPolling();
       if (interactionTimeoutRef.current) {
         window.clearTimeout(interactionTimeoutRef.current);
       }
@@ -2994,6 +3062,58 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showExportDrawer]);
+
+  const autoProgressClamped = Math.max(0, Math.min(100, autoProgress));
+  const templateClassCountMap = useMemo(() => {
+    const selected = templateProjects.find((p) => p.name === project);
+    const map: Record<string, number> = {};
+    if (!selected) return map;
+    for (const row of selected.classes || []) {
+      map[row.class_name] = Math.max(0, Number(row.count) || 0);
+    }
+    return map;
+  }, [templateProjects, project]);
+  const autoOverlaySeriesRows = useMemo(() => {
+    if (autoRunning) {
+      if (autoRuntimeClassProgress.length > 0) {
+        const activeRows = autoRuntimeClassProgress
+          .filter((row) => row.preDetect > 0 || row.confirmed > 0)
+          .sort(
+            (a, b) =>
+              b.preDetect - a.preDetect ||
+              b.confirmed - a.confirmed ||
+              a.className.localeCompare(b.className)
+          );
+        if (activeRows.length > 0) return activeRows.slice(0, 3);
+        return autoRuntimeClassProgress.slice(0, 3);
+      }
+      return detectionTargetClasses.slice(0, 3).map((className) => ({
+        className,
+        confirmed: 0,
+        preDetect: 0,
+      }));
+    }
+    if (autoResult?.classProgress && autoResult.classProgress.length > 0) {
+      return [...autoResult.classProgress]
+        .sort(
+          (a, b) =>
+            b.preDetect - a.preDetect ||
+            b.confirmed - a.confirmed ||
+            a.className.localeCompare(b.className)
+        )
+        .slice(0, 3);
+    }
+    const ratio = autoProgressClamped / 100;
+    return detectionTargetClasses.slice(0, 3).map((className) => {
+      const total = Math.max(0, templateClassCountMap[className] || 0);
+      const estimated = Math.min(total, Math.floor(total * ratio));
+      return {
+        className,
+        confirmed: estimated,
+        preDetect: total,
+      };
+    });
+  }, [autoRunning, autoRuntimeClassProgress, autoResult, detectionTargetClasses, autoProgressClamped, templateClassCountMap]);
 
   return (
     <div
@@ -3155,6 +3275,166 @@ export default function App() {
         .btn:focus-visible {
           outline: 2px solid rgba(53, 196, 255, 0.5);
           outline-offset: 2px;
+        }
+        @keyframes autoCloudSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes autoCloudDotPulse {
+          0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+          40% { opacity: 1; transform: translateY(-1px); }
+        }
+        @keyframes autoCloudStripeMove {
+          from { background-position: 0 0; }
+          to { background-position: 28px 0; }
+        }
+        .autoCloudCard {
+          width: min(100%, 380px);
+          min-width: 0;
+          max-width: calc(100% - 16px);
+          border-radius: 14px;
+          border: 1px solid rgba(16, 45, 86, 0.22);
+          background: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(240,246,255,0.95) 100%);
+          box-shadow: 0 10px 24px rgba(6, 23, 52, 0.16);
+          padding: 10px 11px;
+          display: grid;
+          gap: 8px;
+          align-content: start;
+          font-family: "IBM Plex Sans", system-ui, sans-serif;
+          color: #0b1f3a;
+          box-sizing: border-box;
+          overflow: hidden;
+        }
+        .autoCloudLayout {
+          display: grid;
+          grid-template-columns: 138px minmax(0, 1fr);
+          align-items: start;
+          gap: 10px;
+          min-width: 0;
+        }
+        .autoCloudDonutWrap {
+          position: relative;
+          width: 138px;
+          height: 138px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+        }
+        .autoCloudDonutCenter {
+          position: absolute;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          pointer-events: none;
+        }
+        .autoCloudDonutLabel {
+          text-align: center;
+          color: #102d56;
+          white-space: nowrap;
+        }
+        .autoCloudDonutLabelSmall {
+          font-size: 10px;
+          font-weight: 700;
+          line-height: 1.1;
+          opacity: 0.85;
+        }
+        .autoCloudDonutLabelBig {
+          margin-top: 1px;
+          font-size: 28px;
+          line-height: 1;
+          font-weight: 800;
+          font-variant-numeric: tabular-nums;
+        }
+        .autoCloudMain {
+          min-width: 0;
+          display: grid;
+          gap: 5px;
+        }
+        .autoCloudHead {
+          display: flex;
+          align-items: baseline;
+          justify-content: flex-start;
+          gap: 6px;
+        }
+        .autoCloudTitle {
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.1px;
+          color: #102d56;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          min-width: 0;
+        }
+        .autoCloudRing {
+          width: 13px;
+          height: 13px;
+          border: 2px solid rgba(34, 105, 198, 0.25);
+          border-top-color: #1f66d1;
+          border-radius: 50%;
+          animation: autoCloudSpin 1s linear infinite;
+        }
+        .autoCloudMode {
+          font-size: 11px;
+          font-weight: 700;
+          color: #2457a6;
+          background: rgba(36, 87, 166, 0.1);
+          border: 1px solid rgba(36, 87, 166, 0.22);
+          border-radius: 999px;
+          padding: 2px 8px;
+          white-space: nowrap;
+          width: fit-content;
+        }
+        .autoCloudStatus {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 13px;
+          color: #395d89;
+          font-weight: 600;
+          white-space: nowrap;
+        }
+        .autoCloudDots span {
+          display: inline-block;
+          animation: autoCloudDotPulse 1s ease-in-out infinite;
+        }
+        .autoCloudDots span:nth-child(2) { animation-delay: 0.15s; }
+        .autoCloudDots span:nth-child(3) { animation-delay: 0.3s; }
+        .autoCloudSeries {
+          display: grid;
+          gap: 2px;
+          min-width: 0;
+        }
+        .autoCloudProgressId {
+          font-size: 10px;
+          color: #46658f;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .autoCloudSeriesRow {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          align-items: baseline;
+          gap: 8px;
+          color: #183863;
+        }
+        .autoCloudSeriesName {
+          font-size: 15px;
+          font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .autoCloudSeriesCount {
+          font-size: 15px;
+          font-weight: 700;
+          color: #0f2d58;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 108px;
         }
         .sectionTitle {
           display: flex;
@@ -3492,10 +3772,34 @@ export default function App() {
           width: 100%;
           max-width: 100%;
           box-sizing: border-box;
+          position: relative;
         }
         .rightPanel .autoAdvanced .autoMethodHelp {
           white-space: normal;
           overflow-wrap: anywhere;
+        }
+        .rightPanel .autoAdvanced .autoMethodTooltip {
+          position: absolute;
+          left: 12px;
+          right: 12px;
+          top: calc(100% + 6px);
+          z-index: 30;
+          display: none;
+          pointer-events: none;
+          padding: 8px 10px;
+          border-radius: 8px;
+          border: 1px solid #c6d6ef;
+          background: rgba(255, 255, 255, 0.98);
+          color: #243f63;
+          font-size: 11px;
+          line-height: 1.4;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          box-shadow: 0 8px 18px rgba(18, 35, 61, 0.16);
+        }
+        .rightPanel .autoAdvanced .autoMethodCard:hover .autoMethodTooltip,
+        .rightPanel .autoAdvanced .autoMethodCard:focus-within .autoMethodTooltip {
+          display: block;
         }
         .noWrapRow {
           flex-wrap: nowrap !important;
@@ -4699,6 +5003,7 @@ export default function App() {
                 }
                 roiOverlayPoint={showDebug ? null : lastClick}
                 roiOverlaySize={showDebug ? undefined : roiSize}
+                roiOverlayConfidence={roiOverlayConfidence}
                 showRoiArea={showRoiArea}
               />
                 {showHints && imageUrl && (
@@ -4792,12 +5097,14 @@ export default function App() {
               padding: "16px 16px 6px",
               minHeight: 0,
               overflowY: "auto",
+              overflowX: "hidden",
               scrollbarGutter: "stable both-edges",
               display: "flex",
               flexDirection: "column",
               gap: 10,
               opacity: isCanvasInteracting ? 0.6 : 1,
-              transition: "opacity 160ms ease",
+              filter: autoRunning ? "saturate(0.8)" : "none",
+              transition: "opacity 160ms ease, filter 160ms ease",
               position: "relative",
             }}
           >
@@ -4806,27 +5113,94 @@ export default function App() {
                 style={{
                   position: "absolute",
                   inset: 0,
-                  background: "rgba(140,140,140,0.25)",
-                  backdropFilter: "blur(1px)",
-                  zIndex: 2,
+                  background:
+                    "linear-gradient(180deg, rgba(230,236,245,0.46) 0%, rgba(207,218,232,0.52) 100%)",
+                  backdropFilter: "blur(2px)",
+                  zIndex: 50,
                   display: "flex",
                   alignItems: "flex-start",
-                  justifyContent: "flex-end",
-                  padding: 10,
-                  fontSize: 12,
-                  color: "#0b1f3a",
-                  fontWeight: 600,
+                  justifyContent: "flex-start",
+                  padding: "10px 8px",
                   pointerEvents: "auto",
                 }}
               >
-                全自動アノテーション{" "}
-                {autoMethod === "combined"
-                  ? "Fusion Mode"
-                  : autoMethod === "scaled_templates"
-                    ? "Template Mode"
-                    : "Template β"}{" "}
-                実行中…{" "}
-                {autoProgress}%
+                <div className="autoCloudCard">
+                  <div className="autoCloudLayout">
+                    <div className="autoCloudDonutWrap">
+                      <svg width="138" height="138" viewBox="0 0 150 150" aria-hidden="true">
+                        <circle
+                          cx="75"
+                          cy="75"
+                          r="50"
+                          fill="none"
+                          stroke="rgba(20, 45, 86, 0.12)"
+                          strokeWidth="18"
+                        />
+                        <circle
+                          cx="75"
+                          cy="75"
+                          r="50"
+                          fill="none"
+                          stroke="#103261"
+                          strokeWidth="18"
+                          strokeLinecap="round"
+                          strokeDasharray={String(2 * Math.PI * 50)}
+                          strokeDashoffset={String((2 * Math.PI * 50) * (1 - autoProgressClamped / 100))}
+                          transform="rotate(-90 75 75)"
+                          style={{ transition: "stroke-dashoffset 120ms linear" }}
+                        />
+                      </svg>
+                      <div className="autoCloudDonutCenter">
+                        <div className="autoCloudDonutLabel">
+                          <div className="autoCloudDonutLabelSmall">Progress</div>
+                          <div className="autoCloudDonutLabelBig">{autoProgressClamped}%</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="autoCloudMain">
+                      <div className="autoCloudHead">
+                        <div className="autoCloudTitle">
+                          <span className="autoCloudRing" />
+                          全自動アノテーション
+                        </div>
+                      </div>
+                      <span className="autoCloudMode">
+                        {autoMethod === "combined"
+                          ? "Fusion Mode"
+                          : autoMethod === "scaled_templates"
+                            ? "Template Mode"
+                            : "Template β"}
+                      </span>
+                      <div className="autoCloudStatus">
+                        実行中
+                        <span className="autoCloudDots" aria-hidden="true">
+                          <span>•</span>
+                          <span>•</span>
+                          <span>•</span>
+                        </span>
+                      </div>
+                      {autoProgressId ? (
+                        <div className="autoCloudProgressId">id: {autoProgressId}</div>
+                      ) : null}
+                      <div className="autoCloudSeries">
+                        {asChildren(
+                          autoOverlaySeriesRows.map((row) => (
+                            <div key={`auto-cloud-series-${row.className}`} className="autoCloudSeriesRow">
+                              <div className="autoCloudSeriesName">{row.className}</div>
+                              <div className="autoCloudSeriesCount">
+                                {autoRunning
+                                  ? "検出中"
+                                  : row.confirmed > 0
+                                    ? `${row.confirmed}/${row.preDetect}`
+                                    : `${row.preDetect}`}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             {pendingManualBBox && (
@@ -6568,30 +6942,30 @@ export default function App() {
                           {[
                             {
                               key: "combined",
-                              label: "Fusion Mode（画像解析型）",
+                              label: "Fusion Mode",
                               help: "二値化 + match + 黒線一致率 + NMS で判定。",
                               detail:
-                                "Fusion Mode: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
+                                "Fusion Mode（画像解析型）: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
                               recommend: "推奨 0.6~0.7",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
                             {
                               key: "scaled_templates",
-                              label: "Template 1（テンプレ探索型）",
-                              help: "タイル/ROI内の matchTemplate スコアで判定。",
+                              label: "Equal Scale Expand Mode",
+                              help: "1.0x中心→外側拡張でタイル探索判定。",
                               detail:
-                                "Template Mode: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.5）し、各タイル中心ROIでテンプレート照合を実行。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
+                                "Equal Scale Expand Mode（等倍外側探索型）: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.5）し、各タイル中心ROIでテンプレート照合を実行。倍率探索は 1.0x を中心に外側へ拡張（例: 1.0→0.9→1.1→0.8→1.2...）。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
                               recommend: "推奨 0.7~0.8",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
                             {
                               key: "scaled_templates_beta",
-                              label: "Template 2（等倍率優先）",
-                              help: "1.0x優先の matchTemplate スコア判定。",
+                              label: "Equal Scale Quick Mode",
+                              help: "1.0x中心外側探索 + 早期ヒット優先。",
                               detail:
-                                "Template β: スケール探索順を1.0x中心にして外側へ広げる方式。タイル/ROI内で早期ヒットした倍率を優先して採用します。既存Template Modeは保持したまま、新方式を試験利用するためのβモードです。",
+                                "Equal Scale Quick Mode（等倍早期探索型）: スケール探索順を1.0x中心にして外側へ広げる方式。タイル/ROI内でしきい値を満たすヒットが出た時点で、その倍率を優先して早期採用するモードです。",
                               recommend: "推奨 0.7~0.8",
                               accent: "#00897b",
                               bg: "#e0f2f1",
@@ -6616,7 +6990,6 @@ export default function App() {
                                   flexWrap: "wrap",
                                   boxSizing: "border-box",
                                 }}
-                                title={item.detail}
                               >
                                 <input
                                   type="radio"
@@ -6656,6 +7029,7 @@ export default function App() {
                                     {item.help}
                                   </span>
                                 </div>
+                                <div className="autoMethodTooltip">{item.detail}</div>
                               </label>
                             );
                           })}

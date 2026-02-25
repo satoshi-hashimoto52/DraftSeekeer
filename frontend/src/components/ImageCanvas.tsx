@@ -54,6 +54,7 @@ type Props = {
   debugFollowTemplateScale?: number;
   roiOverlayPoint?: { x: number; y: number } | null;
   roiOverlaySize?: number;
+  roiOverlayConfidence?: number | null;
   showRoiArea: boolean;
 };
 
@@ -100,6 +101,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   debugFollowTemplateScale,
   roiOverlayPoint,
   roiOverlaySize,
+  roiOverlayConfidence,
   showRoiArea,
 }: Props,
   ref
@@ -764,7 +766,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 
       const drawRoiOverlay = (
         point: { x: number; y: number } | null | undefined,
-        size: number | undefined
+        size: number | undefined,
+        confidence: number | null | undefined
       ) => {
         if (!point || typeof size !== "number" || !imgRef.current) return;
         const img = imgRef.current;
@@ -773,13 +776,16 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const y1 = Math.max(0, Math.round(point.y - half));
         const x2 = Math.min(img.width, Math.round(point.x + half));
         const y2 = Math.min(img.height, Math.round(point.y + half));
-        drawBox(x1, y1, x2 - x1, y2 - y1, "#e53935", baseLine * 2.6, true, 0.9, 0);
+        const score = typeof confidence === "number" && Number.isFinite(confidence) ? confidence : null;
+        const roiColor =
+          score !== null && score >= 0.8 ? "#39ff14" : score !== null && score >= 0.7 ? "#ffb300" : "#e53935";
+        drawBox(x1, y1, x2 - x1, y2 - y1, roiColor, baseLine * 2.6, true, 0.9, 0);
         // Keep ROI label at fixed on-screen size regardless of zoom scale.
         drawFixedScreenLabelAtImage(
           x1,
           y1,
           `ROI AREA, ${Math.round(size)}\u00B2 px`,
-          "#e53935",
+          roiColor,
           0.95,
           "rgba(0, 0, 0, 0)"
         );
@@ -787,7 +793,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
 
       drawRoiOverlay(
         showRoiArea && showRoiOverlay ? debugHoverImagePoint || roiOverlayPoint : null,
-        roiOverlaySize
+        roiOverlaySize,
+        roiOverlayConfidence
       );
 
       if (debugOverlay) {
@@ -802,7 +809,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
           ctx.restore();
         };
         const debugPoint = debugHoverImagePoint || debugOverlay.clicked_image_xy || null;
-        drawRoiOverlay(showRoiArea ? debugPoint : null, debugRoiSize);
+        drawRoiOverlay(showRoiArea ? debugPoint : null, debugRoiSize, roiOverlayConfidence);
         if (debugOverlay.outer_bbox && !useTemplateOverlayOnly) {
           const b = debugOverlay.outer_bbox;
           drawBox(b.x, b.y, b.w, b.h, "#ffb300", baseLine * 1.4, true, 0.9, 0);

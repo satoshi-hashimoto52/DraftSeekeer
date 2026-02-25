@@ -55,6 +55,8 @@ from .schemas import (
     DetectResult,
     AutoAnnotateRequest,
     AutoAnnotateResponse,
+    AutoAnnotateClassProgress,
+    AutoAnnotateProgressResponse,
     AutoAnnotationItem,
     DatasetImportResponse,
     DatasetInfo,
@@ -111,6 +113,8 @@ BBOX_PAD_MAP: Dict[str, Dict[str, int]] = {}
 AUTO_MAX_TEMPLATES_PER_CLASS = 60
 MANUAL_SCORE_RAW_WEIGHT = 0.2
 MANUAL_SCORE_SHAPE_WEIGHT = 0.8
+AUTO_PROGRESS_STORE: Dict[str, Dict[str, object]] = {}
+AUTO_PROGRESS_LOCK = threading.Lock()
 
 
 def _get_project_class_names(project: str) -> List[str]:
@@ -162,6 +166,38 @@ def _split_counts(total: int, ratios: List[int]) -> List[int]:
         counts[idx] += 1
         remaining -= 1
     return counts
+
+
+def _set_auto_progress(
+    progress_id: str,
+    *,
+    status: str,
+    current: int,
+    total: int,
+    class_progress: Optional[List[Dict[str, object]]] = None,
+    message: Optional[str] = None,
+) -> None:
+    total_n = max(1, int(total))
+    current_n = max(0, min(int(current), total_n))
+    percent = int(round((current_n / total_n) * 100))
+    with AUTO_PROGRESS_LOCK:
+        AUTO_PROGRESS_STORE[progress_id] = {
+            "status": status,
+            "current": current_n,
+            "total": total_n,
+            "percent": percent,
+            "class_progress": class_progress if class_progress is not None else [],
+            "message": message,
+            "updated_at": time.time(),
+        }
+
+
+def _get_auto_progress(progress_id: str) -> Optional[Dict[str, object]]:
+    with AUTO_PROGRESS_LOCK:
+        data = AUTO_PROGRESS_STORE.get(progress_id)
+        if data is None:
+            return None
+        return dict(data)
 
 
 def _load_matching_table(dataset_dir: Path) -> List[dict]:
@@ -1910,6 +1946,31 @@ def export_yolo(payload: ExportYoloRequest) -> ExportYoloResponse:
     return ExportYoloResponse(ok=True, saved_path=str(output_path), text_preview=preview)
 
 
+@app.get("/annotate/auto/progress/{progress_id}", response_model=AutoAnnotateProgressResponse)
+def get_auto_annotate_progress(progress_id: str) -> AutoAnnotateProgressResponse:
+    data = _get_auto_progress(progress_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="progress not found")
+    return AutoAnnotateProgressResponse(
+        progress_id=progress_id,
+        status=str(data.get("status", "unknown")),
+        current=int(data.get("current", 0) or 0),
+        total=int(data.get("total", 1) or 1),
+        percent=int(data.get("percent", 0) or 0),
+        class_progress=[
+            AutoAnnotateClassProgress(
+                class_name=str(row.get("class_name", "")),
+                confirmed_count=int(row.get("confirmed_count", 0) or 0),
+                pre_detect_count=int(row.get("pre_detect_count", 0) or 0),
+            )
+            for row in (data.get("class_progress") or [])
+            if isinstance(row, dict) and str(row.get("class_name", ""))
+        ],
+        message=str(data.get("message")) if data.get("message") is not None else None,
+        updated_at=float(data.get("updated_at")) if data.get("updated_at") is not None else None,
+    )
+
+
 @app.post("/annotate/auto", response_model=AutoAnnotateResponse)
 def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
     if payload.threshold < 0.0 or payload.threshold > 1.0:
@@ -1924,6 +1985,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         raise HTTPException(status_code=400, detail="stride must be > 0")
     if payload.roi_size is not None and payload.roi_size <= 0:
         raise HTTPException(status_code=400, detail="roi_size must be > 0")
+    progress_id = (payload.progress_id or "").strip()
     try:
         _read_image_bgr(payload.image_id)
     except FileNotFoundError:
@@ -1944,6 +2006,20 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         project_templates,
         AUTO_MAX_TEMPLATES_PER_CLASS,
     )
+    class_total_map = {k: len(v) for k, v in project_templates.items()}
+    class_runtime_map = {
+        class_name: {"class_name": class_name, "confirmed_count": 0, "pre_detect_count": 0}
+        for class_name in sorted(class_total_map.keys())
+    }
+    if progress_id:
+        _set_auto_progress(
+            progress_id,
+            status="running",
+            current=0,
+            total=1,
+            class_progress=list(class_runtime_map.values()),
+            message="準備中",
+        )
 
     image_path = None
     tmp_path = None
@@ -1962,6 +2038,25 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
 
     try:
         method = payload.method
+        core_total = 1
+
+        def _progress(current: int, total: int, class_name: str, hit_count: int) -> None:
+            nonlocal core_total
+            core_total = max(1, int(total))
+            if class_name:
+                row = class_runtime_map.get(class_name)
+                if row is not None and hit_count > 0:
+                    row["pre_detect_count"] = int(row["pre_detect_count"]) + int(hit_count)
+            if progress_id:
+                _set_auto_progress(
+                    progress_id,
+                    status="running",
+                    current=max(0, min(int(current), core_total)),
+                    total=core_total,
+                    class_progress=list(class_runtime_map.values()),
+                    message="検出中",
+                )
+
         if payload.mode in ("auto", "manual"):
             method = "scaled_templates" if payload.mode == "manual" else "combined"
         if method == "scaled_templates":
@@ -1975,6 +2070,8 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
                 stride=payload.stride,
+                scale_order="center_out",
+                progress_callback=_progress if progress_id else None,
             )
         elif method == "scaled_templates_beta":
             result = annotate_all_manual_equal_scale_beta(
@@ -1987,6 +2084,7 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
                 stride=payload.stride,
+                progress_callback=_progress if progress_id else None,
             )
         else:
             result = annotate_all(
@@ -1999,11 +2097,17 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
                 stride=payload.stride,
+                progress_callback=_progress if progress_id else None,
             )
     except Exception as exc:
+        if progress_id:
+            _set_auto_progress(progress_id, status="error", current=0, total=1, message=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     confirmed = result.get("confirmed", [])
+    pre_detect_by_class = result.get("pre_detect_by_class") or {}
+    if not isinstance(pre_detect_by_class, dict):
+        pre_detect_by_class = {}
 
     def _dedup_any_overlap(cands: list) -> list:
         if not cands:
@@ -2206,12 +2310,48 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         )
         for c in confirmed
     ]
+    confirmed_by_class: Dict[str, int] = {}
+    for c in confirmed:
+        name = str(c.get("class_name", "") or "")
+        if not name:
+            continue
+        confirmed_by_class[name] = confirmed_by_class.get(name, 0) + 1
+    class_names = sorted(
+        set(pre_detect_by_class.keys()) | set(confirmed_by_class.keys()),
+        key=lambda n: (-int(confirmed_by_class.get(n, 0)), -int(pre_detect_by_class.get(n, 0)), n),
+    )
+    class_progress = [
+        AutoAnnotateClassProgress(
+            class_name=name,
+            confirmed_count=int(confirmed_by_class.get(name, 0)),
+            pre_detect_count=int(pre_detect_by_class.get(name, 0)),
+        )
+        for name in class_names
+    ]
+
+    if progress_id:
+        _set_auto_progress(
+            progress_id,
+            status="done",
+            current=1,
+            total=1,
+            class_progress=[
+                {
+                    "class_name": row.class_name,
+                    "confirmed_count": row.confirmed_count,
+                    "pre_detect_count": row.pre_detect_count,
+                }
+                for row in class_progress
+            ],
+            message="完了",
+        )
 
     return AutoAnnotateResponse(
         added_count=added_count,
         rejected_count=rejected_count,
         threshold=payload.threshold,
         created_annotations=created,
+        class_progress=class_progress,
         preview_image_url=None,
     )
 
