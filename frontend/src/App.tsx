@@ -67,7 +67,7 @@ const PROJECT_STATS_POPUP_H = 380;
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
-  scaled_templates_beta: 0.7,
+  scaled_templates_beta: 0.8,
 };
 
 function TemplateLockIcon({ unlocked }: { unlocked: boolean }) {
@@ -370,6 +370,7 @@ export default function App() {
   const [debugTemplateScale, setDebugTemplateScale] = useState<number>(1);
   const prevDebugTemplateClassRef = useRef<string>("");
   const [classScoreVisibility, setClassScoreVisibility] = useState<Record<string, number>>({});
+  const [classScaleVisibility, setClassScaleVisibility] = useState<Record<string, number>>({});
   const templateGalleryTextColor = "rgba(72, 132, 255, 0.92)";
   const templateGalleryPreviewTextColor = "rgba(214, 236, 255, 0.98)";
   const didAutoRestoreRef = useRef(false);
@@ -538,6 +539,7 @@ export default function App() {
     setClassOptions(classes);
     setAutoClassFilter(classes);
     setClassScoreVisibility({});
+    setClassScaleVisibility({});
     setTemplateClassPreviews({});
     setColorMap((prev) => {
       const defaults = buildColorMapFromClasses(classes);
@@ -674,11 +676,20 @@ export default function App() {
   }, [annotations]);
 
   const classAnnotationStats = useMemo(() => {
-    const stats: Record<string, { count: number; minScore: number | null; maxScore: number | null }> = {};
+    const stats: Record<
+      string,
+      {
+        count: number;
+        minScore: number | null;
+        maxScore: number | null;
+        minScale: number | null;
+        maxScale: number | null;
+      }
+    > = {};
     for (const ann of annotations) {
       const key = ann.class_name;
       if (!stats[key]) {
-        stats[key] = { count: 0, minScore: null, maxScore: null };
+        stats[key] = { count: 0, minScore: null, maxScore: null, minScale: null, maxScale: null };
       }
       stats[key].count += 1;
       if (typeof ann.score === "number" && Number.isFinite(ann.score)) {
@@ -686,6 +697,12 @@ export default function App() {
           stats[key].minScore === null ? ann.score : Math.min(stats[key].minScore, ann.score);
         stats[key].maxScore =
           stats[key].maxScore === null ? ann.score : Math.max(stats[key].maxScore, ann.score);
+      }
+      if (typeof ann.scale === "number" && Number.isFinite(ann.scale)) {
+        stats[key].minScale =
+          stats[key].minScale === null ? ann.scale : Math.min(stats[key].minScale, ann.scale);
+        stats[key].maxScale =
+          stats[key].maxScale === null ? ann.scale : Math.max(stats[key].maxScale, ann.scale);
       }
     }
     return stats;
@@ -740,6 +757,51 @@ export default function App() {
       return { ...prev, [className]: floorScore };
     });
   };
+  const syncClassScaleVisibilityForClasses = (
+    nextAnnotations: Annotation[],
+    classNames: string[]
+  ) => {
+    if (classNames.length === 0) return;
+    const targets = new Set(classNames.filter(Boolean));
+    if (targets.size === 0) return;
+    setClassScaleVisibility((prev) => {
+      const next = { ...prev };
+      targets.forEach((className) => {
+        const classItems = nextAnnotations.filter((ann) => ann.class_name === className);
+        if (classItems.length <= 1) {
+          delete next[className];
+          return;
+        }
+        const scales = classItems
+          .map((ann) => ann.scale)
+          .filter((s): s is number => typeof s === "number" && Number.isFinite(s));
+        if (scales.length === 0) {
+          delete next[className];
+          return;
+        }
+        const minScale = Math.min(...scales);
+        const maxScale = Math.max(...scales);
+        const minTrunc = Math.floor(minScale * 100) / 100;
+        const maxTrunc = Math.floor(maxScale * 100) / 100;
+        if (!(maxTrunc > minTrunc)) {
+          delete next[className];
+          return;
+        }
+        next[className] = minTrunc;
+      });
+      return next;
+    });
+  };
+  const ensureClassScaleVisibilityIncludes = (className: string, scale?: number) => {
+    if (!className || typeof scale !== "number" || !Number.isFinite(scale)) return;
+    const floorScale = Math.floor(scale * 100) / 100;
+    setClassScaleVisibility((prev) => {
+      const current = prev[className];
+      if (typeof current !== "number") return prev;
+      if (floorScale >= current) return prev;
+      return { ...prev, [className]: floorScale };
+    });
+  };
 
   useEffect(() => {
     setClassScoreVisibility((prev) => {
@@ -769,6 +831,33 @@ export default function App() {
   }, [classOptions, classAnnotationStats]);
 
   useEffect(() => {
+    setClassScaleVisibility((prev) => {
+      const next: Record<string, number> = {};
+      const classNames = new Set<string>([...classOptions, ...Object.keys(classAnnotationStats)]);
+      classNames.forEach((className) => {
+        const stats = classAnnotationStats[className];
+        const minScale = stats?.minScale;
+        const maxScale = stats?.maxScale;
+        const hasRange =
+          (stats?.count || 0) > 1 &&
+          typeof minScale === "number" &&
+          typeof maxScale === "number" &&
+          Number.isFinite(minScale) &&
+          Number.isFinite(maxScale);
+        if (!hasRange) return;
+        const minTrunc = Math.floor(minScale * 100) / 100;
+        const maxTrunc = Math.floor(maxScale * 100) / 100;
+        if (!(maxTrunc > minTrunc)) return;
+        const prevValue = prev[className];
+        const base = typeof prevValue === "number" ? prevValue : minTrunc;
+        const clamped = Math.min(maxTrunc, Math.max(minTrunc, Math.floor(base * 100) / 100));
+        next[className] = clamped;
+      });
+      return next;
+    });
+  }, [classOptions, classAnnotationStats]);
+
+  useEffect(() => {
     if (checkedAnnotationIds.length === 0) return;
     const currentIds = new Set(annotations.map((a) => a.id));
     const next = checkedAnnotationIds.filter((id) => currentIds.has(id));
@@ -779,12 +868,27 @@ export default function App() {
 
   const canvasAnnotations = useMemo(() => {
     return filteredAnnotations.filter((ann) => {
-      const threshold = classScoreVisibility[ann.class_name];
-      if (typeof threshold !== "number") return true;
-      if (typeof ann.score !== "number" || !Number.isFinite(ann.score)) return true;
-      return ann.score >= threshold;
+      const scoreThreshold = classScoreVisibility[ann.class_name];
+      if (
+        typeof scoreThreshold === "number" &&
+        typeof ann.score === "number" &&
+        Number.isFinite(ann.score) &&
+        ann.score < scoreThreshold
+      ) {
+        return false;
+      }
+      const scaleThreshold = classScaleVisibility[ann.class_name];
+      if (
+        typeof scaleThreshold === "number" &&
+        typeof ann.scale === "number" &&
+        Number.isFinite(ann.scale) &&
+        ann.scale < scaleThreshold
+      ) {
+        return false;
+      }
+      return true;
     });
-  }, [filteredAnnotations, classScoreVisibility]);
+  }, [filteredAnnotations, classScoreVisibility, classScaleVisibility]);
 
   useEffect(() => {
     if (annotationFilterClass === "all") return;
@@ -875,6 +979,7 @@ export default function App() {
       });
       if (prevClass !== null && prevClass !== nextClass) {
         syncClassScoreVisibilityForClasses(next, [prevClass, nextClass]);
+        syncClassScaleVisibilityForClasses(next, [prevClass, nextClass]);
       }
       return next;
     });
@@ -963,12 +1068,19 @@ export default function App() {
   const roiDanger = roiSize < 100 || roiSize > 1200;
   const roiWarn = roiSize < 200 || roiSize > 600;
   const shapeRatioDanger = shapeRatioThreshold < 0.5 || shapeRatioThreshold > 0.7;
-  const autoThresholdDanger = autoThreshold < 0.3;
-  const autoThresholdWarn = autoThreshold < 0.6 || autoThreshold > 0.85;
+  const autoThresholdDanger =
+    autoMethod === "scaled_templates_beta" ? autoThreshold < 0.7 : autoThreshold < 0.3;
+  const autoThresholdWarn =
+    autoMethod === "scaled_templates_beta"
+      ? autoThreshold < 0.8 || autoThreshold > 0.98
+      : autoThreshold < 0.6 || autoThreshold > 0.85;
   const strideDanger =
     typeof autoStride === "number" && (autoStride < 16 || autoStride > 256);
   const strideWarn =
     typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
+  const autoUsesStride = autoMethod === "scaled_templates";
+  const autoUsesRoi = autoMethod !== "scaled_templates_beta";
+  const autoDisablesRoiUi = autoMethod === "scaled_templates_beta";
   const scaleMinLabel = scaleMin.toFixed(2);
   const scaleMaxLabel = scaleMax.toFixed(2);
 
@@ -1351,6 +1463,7 @@ export default function App() {
         setAutoClassFilter([]);
         setTemplateClassPreviews({});
         setClassScoreVisibility({});
+        setClassScaleVisibility({});
       }
       const info = await fetchDataset(projectName);
       setDatasetId(projectName);
@@ -1816,6 +1929,7 @@ export default function App() {
       },
     ]);
     ensureClassScoreVisibilityIncludes(confirmedClassName, confirmedScore);
+    ensureClassScaleVisibilityIncludes(confirmedClassName, selectedCandidate.scale);
     allowAnnotationAutoScrollRef.current = true;
     setSelectedAnnotationId(createdId);
     const basePoint = lastClick || {
@@ -2164,6 +2278,7 @@ export default function App() {
           const next = prev.filter((a) => a.id !== selectedAnnotationId);
           if (removed?.class_name) {
             syncClassScoreVisibilityForClasses(next, [removed.class_name]);
+            syncClassScaleVisibilityForClasses(next, [removed.class_name]);
           }
           return next;
         });
@@ -2487,12 +2602,12 @@ export default function App() {
         project,
         threshold: clipped,
         method: autoMethod,
-        roi_size: roiSize,
         class_filter: autoClassFilter,
         scale_min: scaleMin,
         scale_max: scaleMax,
         scale_steps: scaleSteps,
-        stride: strideValue,
+        ...(autoUsesRoi ? { roi_size: roiSize } : {}),
+        ...(autoUsesStride ? { stride: strideValue } : {}),
         project_name: datasetId,
         image_key: datasetSelectedName,
         progress_id: progressId,
@@ -3751,6 +3866,60 @@ export default function App() {
             radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
             linear-gradient(180deg, #7fb5ff 0%, #2b74ff 100%);
           box-shadow: 0 3px 8px rgba(32, 67, 140, 0.35), 0 0 0 1px rgba(43,116,255,0.2);
+          cursor: pointer;
+        }
+        .classScaleSlider {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 100%;
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(237,250,248,0.92));
+          border: 1px solid rgba(132, 188, 176, 0.62);
+          box-shadow:
+            inset 0 1px 2px rgba(255,255,255,0.86),
+            inset 0 -1px 2px rgba(44, 122, 108, 0.15),
+            0 1px 2px rgba(27, 92, 82, 0.12);
+        }
+        .classScaleSlider::-webkit-slider-runnable-track {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(38, 166, 154, 0.28), rgba(38, 166, 154, 0.75));
+        }
+        .classScaleSlider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 16px;
+          height: 16px;
+          margin-top: -6px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #64d8cb 0%, #26a69a 100%);
+          box-shadow: 0 3px 8px rgba(17, 86, 76, 0.32), 0 0 0 1px rgba(38,166,154,0.2);
+          cursor: pointer;
+        }
+        .classScaleSlider::-moz-range-track {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(38, 166, 154, 0.28), rgba(38, 166, 154, 0.75));
+          border: 1px solid rgba(132, 188, 176, 0.62);
+        }
+        .classScaleSlider::-moz-range-progress {
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(38, 166, 154, 0.45), rgba(38, 166, 154, 0.9));
+        }
+        .classScaleSlider::-moz-range-thumb {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          border: 1px solid rgba(255,255,255,0.95);
+          background:
+            radial-gradient(circle at 34% 30%, rgba(255,255,255,0.95) 0 20%, rgba(255,255,255,0) 45%),
+            linear-gradient(180deg, #64d8cb 0%, #26a69a 100%);
+          box-shadow: 0 3px 8px rgba(17, 86, 76, 0.32), 0 0 0 1px rgba(38,166,154,0.2);
           cursor: pointer;
         }
         .rightPanel .numInput {
@@ -5168,8 +5337,8 @@ export default function App() {
                         {autoMethod === "combined"
                           ? "Fusion Mode"
                           : autoMethod === "scaled_templates"
-                            ? "Template Mode"
-                            : "Template β"}
+                            ? "Equal Scale Expand Mode"
+                            : "Global Precision Mode"}
                       </span>
                       <div className="autoCloudStatus">
                         実行中
@@ -5763,13 +5932,17 @@ export default function App() {
                           gridTemplateColumns: "104px 1fr",
                           alignItems: "center",
                           gap: 8,
+                          opacity: autoDisablesRoiUi ? 0.45 : 1,
                         }}
                       >
                         <span style={{ fontSize: 12, fontWeight: 600 }}>ROIサイズ</span>
                         <div className="controlWrap" style={{ justifyContent: "flex-end" }}>
                           <NumericInputWithButtons
                             value={roiSize}
-                            onChange={(v) => typeof v === "number" && setRoiSize(v)}
+                            onChange={(v) => {
+                              if (autoDisablesRoiUi) return;
+                              if (typeof v === "number") setRoiSize(v);
+                            }}
                             min={10}
                             step={10}
                             height={32}
@@ -5778,6 +5951,7 @@ export default function App() {
                             className="controlWrap"
                             inputClassName="numInput"
                             buttonClassName="stepBtn"
+                            disabled={autoDisablesRoiUi}
                           />
                         </div>
                       </div>
@@ -5787,9 +5961,12 @@ export default function App() {
                           gridTemplateColumns: "104px 1fr",
                           alignItems: "center",
                           gap: 8,
+                          opacity: autoDisablesRoiUi ? 0.45 : 1,
                         }}
                       >
-                        <span style={{ fontSize: 11, color: "#666" }}>手動/自動で共通</span>
+                        <span style={{ fontSize: 11, color: "#666" }}>
+                          {autoDisablesRoiUi ? "Global Precisionでは未使用" : "手動/自動で共通"}
+                        </span>
                         <div className="hintText" style={{ justifyContent: "flex-end" }}>
                           <span className="badge">推奨 200–600</span>
                           {roiWarn && !roiDanger && <span className="badge badgeDanger">注意</span>}
@@ -6422,6 +6599,31 @@ export default function App() {
                                     typeof stats?.maxScore === "number"
                                       ? `${stats.minScore.toFixed(3)} ~ ${stats.maxScore.toFixed(3)}`
                                       : "-";
+                                  const hasScaleRange =
+                                    (stats?.count || 0) > 1 &&
+                                    typeof stats?.minScale === "number" &&
+                                    typeof stats?.maxScale === "number" &&
+                                    Number.isFinite(stats.minScale) &&
+                                    Number.isFinite(stats.maxScale);
+                                  const minScaleTrunc = hasScaleRange
+                                    ? Math.floor((stats?.minScale || 0) * 100) / 100
+                                    : null;
+                                  const maxScaleTrunc = hasScaleRange
+                                    ? Math.floor((stats?.maxScale || 0) * 100) / 100
+                                    : null;
+                                  const hasScaleSlider =
+                                    hasScaleRange &&
+                                    minScaleTrunc !== null &&
+                                    maxScaleTrunc !== null &&
+                                    maxScaleTrunc > minScaleTrunc;
+                                  const scaleSliderValue = hasScaleSlider
+                                    ? classScaleVisibility[className] ?? minScaleTrunc
+                                    : null;
+                                  const scaleText =
+                                    typeof stats?.minScale === "number" &&
+                                    typeof stats?.maxScale === "number"
+                                      ? `${stats.minScale.toFixed(2)} ~ ${stats.maxScale.toFixed(2)}`
+                                      : "-";
                                   return (
                                     <div
                                       key={`class-card-${className}`}
@@ -6514,6 +6716,57 @@ export default function App() {
                                             </div>
                                           </div>
                                         )}
+                                        <div style={{ fontSize: 12, color: "#546e7a", marginTop: hasSlider ? 2 : 0 }}>
+                                          スケール: {scaleText}
+                                        </div>
+                                        {hasScaleSlider &&
+                                          scaleSliderValue !== null &&
+                                          minScaleTrunc !== null &&
+                                          maxScaleTrunc !== null && (
+                                            <div style={{ display: "grid", gap: 4, marginTop: 2 }}>
+                                              <div
+                                                style={{
+                                                  display: "grid",
+                                                  gridTemplateColumns: "1fr auto",
+                                                  alignItems: "center",
+                                                  gap: 8,
+                                                }}
+                                              >
+                                                <input
+                                                  className="classScaleSlider"
+                                                  type="range"
+                                                  min={minScaleTrunc}
+                                                  max={maxScaleTrunc}
+                                                  step={0.01}
+                                                  value={scaleSliderValue}
+                                                  onChange={(e) => {
+                                                    const raw = Number(e.target.value);
+                                                    const next = Math.floor(raw * 100) / 100;
+                                                    setClassScaleVisibility((prev) => ({
+                                                      ...prev,
+                                                      [className]: Math.min(
+                                                        maxScaleTrunc,
+                                                        Math.max(minScaleTrunc, next)
+                                                      ),
+                                                    }));
+                                                  }}
+                                                  style={{ width: "100%" }}
+                                                />
+                                                <span
+                                                  style={{
+                                                    fontSize: 11,
+                                                    fontWeight: 700,
+                                                    color: "#385672",
+                                                    minWidth: 38,
+                                                    textAlign: "right",
+                                                    fontVariantNumeric: "tabular-nums",
+                                                  }}
+                                                >
+                                                  {scaleSliderValue.toFixed(2)}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          )}
                                       </div>
                                       <input
                                         type="color"
@@ -6648,8 +6901,13 @@ export default function App() {
                             )}
                           </select>
                         </div>
-                        <div style={{ fontSize: 11, color: "#555" }}>
-                          シリーズ/テンプレ選択時にカーソル追従で表示（右下をカーソル先端に配置）
+                        <div style={{ fontSize: 11, color: "#555", display: "grid", gap: 2 }}>
+                          <div>I: テンプレート表示を拡大 (+0.01)</div>
+                          <div>O: テンプレート表示を縮小 (-0.01)</div>
+                          <div>↑: シリーズ切り替え (前)</div>
+                          <div>↓: シリーズ切り替え (次)</div>
+                          <div>←: 同シリーズ内のテンプレート画像を戻る</div>
+                          <div>→: 同シリーズ内のテンプレート画像を進む</div>
                         </div>
                       </div>
                     )}
@@ -6962,11 +7220,11 @@ export default function App() {
                             },
                             {
                               key: "scaled_templates_beta",
-                              label: "Equal Scale Quick Mode",
-                              help: "1.0x中心外側探索 + 早期ヒット優先。",
+                              label: "Global Precision Mode",
+                              help: "ROIなし全画面テンプレ探索で精度優先。",
                               detail:
-                                "Equal Scale Quick Mode（等倍早期探索型）: スケール探索順を1.0x中心にして外側へ広げる方式。タイル/ROI内でしきい値を満たすヒットが出た時点で、その倍率を優先して早期採用するモードです。",
-                              recommend: "推奨 0.7~0.8",
+                                "Global Precision Mode（精度最優先型）: ROIを使わず画像全域でテンプレート探索を行います。スケールは1.0x中心の外側拡張順（例: 1.0→0.9→1.1...）で全探索し、クリック検出と同じ重み（raw/shape）で確信度を算出します。処理は重いですが精度を優先します。",
+                              recommend: "推奨 0.8以上",
                               accent: "#00897b",
                               bg: "#e0f2f1",
                             },
@@ -7034,45 +7292,57 @@ export default function App() {
                             );
                           })}
                         </div>
-                        <div className="formRow" style={{ alignItems: "start" }}>
-                          <div style={{ display: "grid", gap: 2 }}>
-                            <span
-                              style={{
-                                fontSize: 13,
-                                fontWeight: 700,
-                                height: 32,
-                                lineHeight: "32px",
-                              }}
-                            >
-                              探索間隔
-                            </span>
-                            <span style={{ fontSize: 10, color: "#d32f2f", lineHeight: 1.2 }}>
-                              推奨：auto (未入力)
-                            </span>
-                          </div>
-                          <div className="controlWrap" title="±1" style={{ display: "grid", justifyItems: "end", gap: 4 }}>
-                            <NumericInputWithButtons
-                              value={autoStride ?? ""}
-                              onChange={(v) => setAutoStride(v === "" ? null : v)}
-                              min={1}
-                              step={1}
-                              height={32}
-                              inputWidth={120}
-                              ariaLabel="auto stride"
-                              placeholder="Auto / 32"
-                              className="noWrapRow"
-                              inputClassName={`midInput ${strideDanger ? "dangerInput" : strideWarn ? "warnInput" : ""}`}
-                              buttonClassName="stepBtn"
-                            />
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
-                              <span className="badge">推奨 auto / 32–128</span>
-                              {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
-                              {strideDanger && <span className="badge badgeDanger">Danger</span>}
-                              {typeof autoStride === "number" && autoStride <= 0 && (
-                                <span className="badge badgeDanger">入力が不正です</span>
-                              )}
+                        {autoUsesStride ? (
+                          <div className="formRow" style={{ alignItems: "start" }}>
+                            <div style={{ display: "grid", gap: 2 }}>
+                              <span
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: 700,
+                                  height: 32,
+                                  lineHeight: "32px",
+                                }}
+                              >
+                                探索間隔
+                              </span>
+                              <span style={{ fontSize: 10, color: "#d32f2f", lineHeight: 1.2 }}>
+                                推奨：auto (未入力)
+                              </span>
+                            </div>
+                            <div className="controlWrap" title="±1" style={{ display: "grid", justifyItems: "end", gap: 4 }}>
+                              <NumericInputWithButtons
+                                value={autoStride ?? ""}
+                                onChange={(v) => setAutoStride(v === "" ? null : v)}
+                                min={1}
+                                step={1}
+                                height={32}
+                                inputWidth={120}
+                                ariaLabel="auto stride"
+                                placeholder="Auto / 32"
+                                className="noWrapRow"
+                                inputClassName={`midInput ${strideDanger ? "dangerInput" : strideWarn ? "warnInput" : ""}`}
+                                buttonClassName="stepBtn"
+                              />
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "flex-end" }}>
+                                <span className="badge">推奨 auto / 32–128</span>
+                                {strideWarn && !strideDanger && <span className="badge badgeDanger">注意</span>}
+                                {strideDanger && <span className="badge badgeDanger">Danger</span>}
+                                {typeof autoStride === "number" && autoStride <= 0 && (
+                                  <span className="badge badgeDanger">入力が不正です</span>
+                                )}
+                              </div>
                             </div>
                           </div>
+                        ) : null}
+                        <div style={{ fontSize: 11, color: "#607d8b" }}>
+                          使用パラメータ:
+                          {" "}
+                          {autoMethod === "combined"
+                            ? "確信度閾値 / ROIサイズ / スケール"
+                            : autoMethod === "scaled_templates"
+                              ? "確信度閾値 / ROIサイズ / スケール / 探索間隔"
+                              : "確信度閾値 / スケール"}
+                          {!autoUsesRoi ? "（ROI関連は未使用）" : ""}
                         </div>
                     </div>
                   </div>
@@ -7147,6 +7417,7 @@ export default function App() {
                       );
                       const next = prev.filter((a) => !checkedAnnotationIds.includes(a.id));
                       syncClassScoreVisibilityForClasses(next, Array.from(removedClasses));
+                      syncClassScaleVisibilityForClasses(next, Array.from(removedClasses));
                       return next;
                     });
                     if (selectedAnnotationId && checkedAnnotationIds.includes(selectedAnnotationId)) {
@@ -7378,6 +7649,7 @@ export default function App() {
                         setAnnotations((prev) => {
                           const next = prev.filter((item) => item.id !== a.id);
                           syncClassScoreVisibilityForClasses(next, [a.class_name]);
+                          syncClassScaleVisibilityForClasses(next, [a.class_name]);
                           return next;
                         });
                         if (selectedAnnotationId === a.id) {

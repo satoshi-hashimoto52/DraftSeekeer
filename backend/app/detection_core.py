@@ -19,6 +19,8 @@ from .matching import (
     PreparedScaledTemplate,
     match_templates,
     prepare_scaled_templates,
+    preprocess_binary_inv,
+    preprocess_edge,
 )
 from .templates import TemplateImage
 from .annotation_exporter import export_annotations
@@ -491,3 +493,195 @@ def annotate_all_manual_equal_scale_beta(
         stop_on_first_hit=True,
         precompute_scaled_templates=False,
     )
+
+
+def annotate_all_global_precision(
+    image_path: Path,
+    templates: list,
+    threshold: float,
+    output_format: str,  # 'yolo' or 'coco'
+    scale_min: float = 0.5,
+    scale_max: float = 1.5,
+    scale_steps: int = 12,
+    raw_weight: float = 0.2,
+    shape_weight: float = 0.8,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
+) -> dict:
+    """Precision-first global template search (no ROI, full-image matching).
+
+    This mode scans all scaled templates over the full image.
+    Scoring follows manual-click style weighting: raw*raw_weight + shape*shape_weight.
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        raise ValueError(f"failed to read image: {image_path}")
+
+    if isinstance(templates, dict):
+        templates_by_class = templates
+    else:
+        templates_by_class = _group_templates(templates)
+
+    image_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    image_edge = preprocess_edge(image_gray)
+    image_bin = preprocess_binary_inv(image_gray)
+
+    prepared_edge, prepared_bin = prepare_scaled_templates(
+        templates_by_class,
+        scale_min=scale_min,
+        scale_max=scale_max,
+        scale_steps=scale_steps,
+        trim_template_margin=True,
+        scale_order="center_out",
+    )
+
+    def _foreground_match_ratio(template_proc: np.ndarray, patch_proc: np.ndarray) -> float:
+        if (
+            template_proc is None
+            or patch_proc is None
+            or template_proc.size == 0
+            or patch_proc.size == 0
+            or template_proc.shape != patch_proc.shape
+        ):
+            return 0.0
+        fg = template_proc > 0
+        fg_count = int(np.count_nonzero(fg))
+        if fg_count <= 0:
+            return 0.0
+        matched = int(np.count_nonzero(patch_proc[fg] > 0))
+        return float(matched / fg_count)
+
+    def _extract_peaks(result: np.ndarray, min_score: float, limit: int = 120) -> List[Tuple[int, int, float]]:
+        if result is None or result.size == 0:
+            return []
+        # Keep local maxima only to reduce dense duplicate points.
+        dil = cv2.dilate(result, np.ones((3, 3), dtype=np.uint8))
+        mask = (result >= float(min_score)) & (result >= dil - 1e-8)
+        ys, xs = np.where(mask)
+        if ys.size == 0:
+            return []
+        vals = result[ys, xs]
+        order = np.argsort(vals)[::-1]
+        if limit > 0:
+            order = order[:limit]
+        return [(int(xs[i]), int(ys[i]), float(vals[i])) for i in order]
+
+    def _nms(cands: List[Dict], iou_threshold: float) -> List[Dict]:
+        if not cands:
+            return []
+        sorted_cands = sorted(cands, key=lambda c: c["final_score"], reverse=True)
+        kept: List[Dict] = []
+        for cand in sorted_cands:
+            x1, y1, w1, h1 = cand["bbox"]
+            x2 = x1 + w1
+            y2 = y1 + h1
+            overlap = False
+            for kept_c in kept:
+                kx1, ky1, kw, kh = kept_c["bbox"]
+                kx2 = kx1 + kw
+                ky2 = ky1 + kh
+                inter_w = max(0, min(x2, kx2) - max(x1, kx1))
+                inter_h = max(0, min(y2, ky2) - max(y1, ky1))
+                inter = inter_w * inter_h
+                if inter <= 0:
+                    continue
+                union = w1 * h1 + kw * kh - inter
+                iou = inter / union if union > 0 else 0.0
+                if iou >= iou_threshold:
+                    overlap = True
+                    break
+            if not overlap:
+                kept.append(cand)
+        return kept
+
+    min_raw_score = max(0.0, min(1.0, (float(threshold) - float(shape_weight)) / max(1e-6, float(raw_weight))))
+    total_steps = max(1, int(sum(len(items) for items in prepared_edge.values())))
+    step = 0
+    candidates: List[Dict] = []
+    pre_detect_by_class: Dict[str, int] = {}
+
+    for class_name in sorted(prepared_edge.keys()):
+        edge_items = prepared_edge.get(class_name, [])
+        bin_lookup: Dict[str, PreparedScaledTemplate] = {
+            f"{item.template_name}::{item.scale:.6f}": item
+            for item in (prepared_bin.get(class_name, []) or [])
+        }
+        for item in edge_items:
+            step += 1
+            hit_count = 0
+            scaled = item.scaled
+            if scaled is None or scaled.size == 0:
+                if progress_callback is not None:
+                    progress_callback(step, total_steps, class_name, 0)
+                continue
+            th, tw = scaled.shape[:2]
+            if th <= 1 or tw <= 1 or th > image_edge.shape[0] or tw > image_edge.shape[1]:
+                if progress_callback is not None:
+                    progress_callback(step, total_steps, class_name, 0)
+                continue
+
+            def _collect_from(image_proc: np.ndarray, template_proc: np.ndarray, mode: str) -> int:
+                nonlocal candidates
+                local_hits = 0
+                result = cv2.matchTemplate(image_proc, template_proc, cv2.TM_CCOEFF_NORMED)
+                peaks = _extract_peaks(result, min_raw_score, limit=120)
+                for x, y, raw_score in peaks:
+                    patch = image_proc[y : y + th, x : x + tw]
+                    if patch.shape[0] != th or patch.shape[1] != tw:
+                        continue
+                    shape_ratio = _foreground_match_ratio(template_proc, patch)
+                    # Keep the same gating policy as click detection.
+                    if shape_ratio <= raw_score:
+                        continue
+                    weighted_score = float(raw_weight * raw_score + shape_weight * shape_ratio)
+                    if weighted_score < float(threshold):
+                        continue
+                    tx, ty, _tw_tight, _th_tight = item.tight_bbox
+                    outer_x = int(round(x - (tx * item.scale)))
+                    outer_y = int(round(y - (ty * item.scale)))
+                    outer_w = int(round(item.outer_bbox[2] * item.scale))
+                    outer_h = int(round(item.outer_bbox[3] * item.scale))
+                    candidates.append(
+                        {
+                            "class_name": class_name,
+                            "bbox": (int(x), int(y), int(tw), int(th)),
+                            "edge_score": float(raw_score),
+                            "contour_score": 0.0,
+                            "layout_score": 0.0,
+                            "shape_score": float(shape_ratio),
+                            "final_score": float(weighted_score),
+                            "template_name": item.template_name,
+                            "scale": float(item.scale),
+                            "mode": mode,
+                            "outer_bbox": (outer_x, outer_y, outer_w, outer_h),
+                        }
+                    )
+                    local_hits += 1
+                return local_hits
+
+            hit_count = _collect_from(image_edge, scaled, "edge")
+            if hit_count <= 0:
+                bin_item = bin_lookup.get(f"{item.template_name}::{item.scale:.6f}")
+                if bin_item is not None and bin_item.scaled is not None and bin_item.scaled.size > 0:
+                    hit_count = _collect_from(image_bin, bin_item.scaled, "bin")
+            if hit_count > 0:
+                pre_detect_by_class[class_name] = pre_detect_by_class.get(class_name, 0) + hit_count
+            if progress_callback is not None:
+                progress_callback(step, total_steps, class_name, hit_count)
+
+    confirmed = _nms(candidates, iou_threshold=0.75)
+
+    export_payload = export_annotations(
+        image_path=image_path,
+        image_size=(img.shape[1], img.shape[0]),
+        candidates=confirmed,
+        output_format=output_format,
+    )
+
+    return {
+        "image": str(image_path),
+        "threshold": threshold,
+        "total_candidates": len(candidates),
+        "pre_detect_by_class": pre_detect_by_class,
+        "confirmed": confirmed,
+        "export": export_payload,
+    }

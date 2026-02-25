@@ -89,7 +89,12 @@ from .sam_device import get_sam_device
 from .polygon import mask_to_polygon, polygon_to_bbox
 from .export_yolo import make_yolo_lines
 from .export_yolo import normalize_bbox
-from .detection_core import annotate_all, annotate_all_manual, annotate_all_manual_equal_scale_beta
+from .detection_core import (
+    annotate_all,
+    annotate_all_global_precision,
+    annotate_all_manual,
+    annotate_all_manual_equal_scale_beta,
+)
 
 
 app = FastAPI(title="Annotator MVP")
@@ -2074,16 +2079,14 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 progress_callback=_progress if progress_id else None,
             )
         elif method == "scaled_templates_beta":
-            result = annotate_all_manual_equal_scale_beta(
+            result = annotate_all_global_precision(
                 image_path=image_path,
                 templates=project_templates,
                 threshold=payload.threshold,
                 output_format="coco",
-                roi_size=payload.roi_size or 200,
                 scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
                 scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
                 scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
-                stride=payload.stride,
                 progress_callback=_progress if progress_id else None,
             )
         else:
