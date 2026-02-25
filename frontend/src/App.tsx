@@ -4011,6 +4011,30 @@ export default function App() {
           flex-wrap: nowrap !important;
           gap: 6px;
         }
+        .menuChevron {
+          display: inline-flex;
+          width: 14px;
+          justify-content: center;
+          transform: rotate(0deg);
+          transition: transform 180ms ease;
+        }
+        .menuChevron.isOpen {
+          transform: rotate(90deg);
+        }
+        @keyframes menuExpandIn {
+          0% {
+            opacity: 0;
+            transform: translateY(-4px);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .menuExpand {
+          animation: menuExpandIn 140ms ease-out both;
+          will-change: transform, opacity;
+        }
       `}</style>
       <div
         className="topBar"
@@ -5998,13 +6022,13 @@ export default function App() {
                   padding: 0,
                 }}
               >
-                <span style={{ fontSize: 12, color: "#546e7a" }}>
-                  {showCommonSettings ? "▼" : "▶"}
+                <span className={`menuChevron ${showCommonSettings ? "isOpen" : ""}`}>
+                  ▶
                 </span>
                 <span style={{ textDecoration: "underline", textUnderlineOffset: "3px" }}>検出 共通設定</span>
               </button>
               {showCommonSettings && (
-              <>
+              <div className="menuExpand">
               <div className="sectionBody" style={{ display: "grid", gap: 6, marginBottom: 10 }} />
                 <div
                   style={{
@@ -6954,10 +6978,11 @@ export default function App() {
                     height: 32,
                   }}
                 >
-                  {showDebug ? "▼ Debug" : "▶︎ Debug"}
+                  <span className={`menuChevron ${showDebug ? "isOpen" : ""}`}>▶</span> Debug
                 </button>
                 {showDebug && (
                   <div
+                    className="menuExpand"
                     style={{
                       marginTop: 10,
                       background: "#fff7ed",
@@ -7182,7 +7207,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              </>
+              </div>
               )}
             </div>
 
@@ -7206,15 +7231,15 @@ export default function App() {
                   padding: 0,
                 }}
               >
-                  <span style={{ fontSize: 12, color: "#546e7a" }}>
-                    {autoPanelOpen ? "▼" : "▶"}
+                  <span className={`menuChevron ${autoPanelOpen ? "isOpen" : ""}`}>
+                    ▶
                   </span>
                   <span style={{ textDecoration: "underline", textUnderlineOffset: "3px" }}>
                     全自動アノテーション
                   </span>
                 </button>
                 {autoPanelOpen && (
-                  <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                  <div className="menuExpand" style={{ marginTop: 10, display: "grid", gap: 10 }}>
                     <div className="formRow" style={{ gridTemplateColumns: "152px 1fr", order: 2 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>確信度 閾値</div>
