@@ -4265,33 +4265,6 @@ export default function App() {
           }}
         />
       )}
-      {viewState.view === "home" && (
-        <button
-          type="button"
-          onClick={() => setShowHomePrereqModal(true)}
-          title="図面探索の前提条件を表示"
-          aria-label="図面探索の前提条件を表示"
-          style={{
-            position: "fixed",
-            right: 18,
-            bottom: 18,
-            width: 44,
-            height: 44,
-            borderRadius: "50%",
-            border: "1px solid rgba(53,116,255,0.5)",
-            background: "linear-gradient(180deg, #f4f8ff 0%, #dfe9ff 100%)",
-            color: "#1f4fbf",
-            fontSize: 22,
-            fontWeight: 800,
-            lineHeight: 1,
-            cursor: "pointer",
-            zIndex: 35,
-            boxShadow: "0 8px 22px rgba(31, 79, 191, 0.26)",
-          }}
-        >
-          i
-        </button>
-      )}
       {showHomePrereqModal && viewState.view === "home" && (
         <>
           <div
@@ -7936,7 +7909,33 @@ export default function App() {
                 padding: 22,
               }}
             >
-          <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 12, color: "#12385f" }}>Project Home</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#12385f" }}>Project Home</div>
+            <button
+              type="button"
+              onClick={() => setShowHomePrereqModal(true)}
+              title="図面探索の前提条件を表示"
+              aria-label="図面探索の前提条件を表示"
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: "50%",
+                border: "1px solid rgba(63, 97, 149, 0.45)",
+                background: "rgba(255,255,255,0.8)",
+                color: "#2b4f86",
+                fontSize: 13,
+                fontWeight: 800,
+                lineHeight: 1,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 2px 8px rgba(31, 79, 140, 0.14)",
+              }}
+            >
+              i
+            </button>
+          </div>
           <div
             style={{
               display: "flex",
@@ -8246,7 +8245,7 @@ export default function App() {
                             }}
                           >
                             {typeof row.score_min === "number" && typeof row.score_max === "number"
-                              ? `${row.score_min.toFixed(3)} - ${row.score_max.toFixed(3)}`
+                              ? `${row.score_min.toFixed(3)} ~ ${row.score_max.toFixed(3)}`
                               : "-"}
                           </td>
                           <td
@@ -8258,7 +8257,7 @@ export default function App() {
                             }}
                           >
                             {typeof row.scale_min === "number" && typeof row.scale_max === "number"
-                              ? `${row.scale_min.toFixed(2)} - ${row.scale_max.toFixed(2)}`
+                              ? `${row.scale_min.toFixed(2)} ~ ${row.scale_max.toFixed(2)}`
                               : "-"}
                           </td>
                           <td
