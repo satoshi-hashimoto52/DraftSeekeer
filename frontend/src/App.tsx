@@ -7917,13 +7917,13 @@ export default function App() {
               title="図面探索の前提条件を表示"
               aria-label="図面探索の前提条件を表示"
               style={{
-                width: 20,
-                height: 20,
+                width: 16,
+                height: 16,
                 borderRadius: "50%",
                 border: "1px solid rgba(63, 97, 149, 0.45)",
                 background: "rgba(255,255,255,0.8)",
                 color: "#2b4f86",
-                fontSize: 13,
+                fontSize: 10,
                 fontWeight: 800,
                 lineHeight: 1,
                 cursor: "pointer",
