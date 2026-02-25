@@ -64,6 +64,9 @@ const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 10;
 const DEBUG_TEMPLATE_SCALE_STEP = 0.01;
 const PROJECT_STATS_POPUP_W = 760;
 const PROJECT_STATS_POPUP_H = 380;
+const HOME_PREREQ_SEEN_KEY = "draftseeker:homePrereqSeen:v1";
+const HOME_PREREQ_SHOW_ON_STARTUP_KEY = "draftseeker:homePrereqShowOnStartup:v1";
+const HOME_PREREQ_AUTO_SHOWN_SESSION_KEY = "draftseeker:homePrereqAutoShownSession:v1";
 const DEFAULT_AUTO_THRESHOLD_BY_METHOD: Record<AutoMethod, number> = {
   combined: 0.65,
   scaled_templates: 0.7,
@@ -289,6 +292,8 @@ export default function App() {
   });
   const [showHeaderSettings, setShowHeaderSettings] = useState<boolean>(false);
   const headerSettingsRef = useRef<HTMLDivElement | null>(null);
+  const [showHomePrereqModal, setShowHomePrereqModal] = useState<boolean>(false);
+  const [showHomePrereqOnStartup, setShowHomePrereqOnStartup] = useState<boolean>(true);
   const [autoThreshold, setAutoThreshold] = useState<number>(
     DEFAULT_AUTO_THRESHOLD_BY_METHOD[DEFAULT_AUTO_METHOD]
   );
@@ -3178,6 +3183,38 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showExportDrawer]);
 
+  useEffect(() => {
+    if (viewState.view !== "home") return;
+    try {
+      const raw = localStorage.getItem(HOME_PREREQ_SHOW_ON_STARTUP_KEY);
+      let enabled = true;
+      if (raw === "0" || raw === "1") {
+        enabled = raw === "1";
+      } else {
+        // Backward compatibility: old key "seen=1" meant disabled.
+        const seen = localStorage.getItem(HOME_PREREQ_SEEN_KEY) === "1";
+        enabled = !seen;
+      }
+      setShowHomePrereqOnStartup(enabled);
+      const autoShownInSession = sessionStorage.getItem(HOME_PREREQ_AUTO_SHOWN_SESSION_KEY) === "1";
+      if (enabled && !autoShownInSession) {
+        setShowHomePrereqModal(true);
+        sessionStorage.setItem(HOME_PREREQ_AUTO_SHOWN_SESSION_KEY, "1");
+      }
+    } catch {
+      setShowHomePrereqOnStartup(true);
+      const autoShownInSession = sessionStorage.getItem(HOME_PREREQ_AUTO_SHOWN_SESSION_KEY) === "1";
+      if (!autoShownInSession) {
+        setShowHomePrereqModal(true);
+        sessionStorage.setItem(HOME_PREREQ_AUTO_SHOWN_SESSION_KEY, "1");
+      }
+    }
+  }, [viewState.view]);
+
+  const closeHomePrereqModal = () => {
+    setShowHomePrereqModal(false);
+  };
+
   const autoProgressClamped = Math.max(0, Math.min(100, autoProgress));
   const templateClassCountMap = useMemo(() => {
     const selected = templateProjects.find((p) => p.name === project);
@@ -4227,6 +4264,147 @@ export default function App() {
             whiteSpace: "nowrap",
           }}
         />
+      )}
+      {viewState.view === "home" && (
+        <button
+          type="button"
+          onClick={() => setShowHomePrereqModal(true)}
+          title="図面探索の前提条件を表示"
+          aria-label="図面探索の前提条件を表示"
+          style={{
+            position: "fixed",
+            right: 18,
+            bottom: 18,
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            border: "1px solid rgba(53,116,255,0.5)",
+            background: "linear-gradient(180deg, #f4f8ff 0%, #dfe9ff 100%)",
+            color: "#1f4fbf",
+            fontSize: 22,
+            fontWeight: 800,
+            lineHeight: 1,
+            cursor: "pointer",
+            zIndex: 35,
+            boxShadow: "0 8px 22px rgba(31, 79, 191, 0.26)",
+          }}
+        >
+          i
+        </button>
+      )}
+      {showHomePrereqModal && viewState.view === "home" && (
+        <>
+          <div
+            onClick={closeHomePrereqModal}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(8, 17, 31, 0.34)",
+              zIndex: 60,
+            }}
+          />
+          <div
+            className="panelShell"
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(760px, calc(100vw - 24px))",
+              maxHeight: "min(80vh, calc(100vh - 40px))",
+              zIndex: 61,
+              overflow: "auto",
+              padding: 16,
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#12385f" }}>図面探索の前提条件（最低条件）</div>
+              <button
+                type="button"
+                onClick={closeHomePrereqModal}
+                className="btn btnGhost"
+                style={{ width: 30, height: 30, padding: 0, fontSize: 18, boxShadow: "none" }}
+                aria-label="閉じる"
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: "#2f4668", lineHeight: 1.55, display: "grid", gap: 10 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>1. 画像条件</div>
+                <div>線品質: 主線が連続し、欠け・かすれが少ないこと。</div>
+                <div>解像度: 対象の最細線が最低1.5px程度は確保されること。</div>
+                <div>2値特性: 白背景/黒線に近い分布で、濃淡むらやJPEGブロックノイズが強すぎないこと。</div>
+                <div>幾何差: 回転・せん断・透視歪みが小さいこと（本実装は主に平行移動+スケール前提）。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>2. テンプレ条件</div>
+                <div>切り出し: 対象形状を過不足なく含み、余白は最小限。</div>
+                <div>識別性: クラス間で似すぎたテンプレートを増やしすぎないこと。</div>
+                <div>一貫性: 同クラス内で線種・太さ・記法のばらつきが極端でないこと。</div>
+                <div>サイズ帯: 実画像での出現倍率が scale_min～scale_max に収まること。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>3. パラメータ条件</div>
+                <div>scale_min / scale_max / scale_steps は出現倍率帯を過不足なくカバーすること。</div>
+                <div>閾値はモード別に管理（Fusion: 再現率寄り / Expand: バランス / Global Precision: 高閾値寄り）。</div>
+                <div>Global Precision は 0.8 以上を推奨。Fusion/Expand では ROI が対象を十分含むサイズであること。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>4. データ分布条件</div>
+                <div>余白量の一貫性: 特に Global Precision は余白面積の影響を強く受けます。</div>
+                <div>ノイズ環境の一貫性: 影・汚れ・罫線密度が急変すると閾値最適点がずれます。</div>
+                <div>クラス頻度の偏り: 極端な不均衡は誤検出・見逃しの偏りを増やします。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>5. 運用条件</div>
+                <div>モード運用: 初期探索=Fusion / 通常運用=Expand / 最終高精度=Global Precision。</div>
+                <div>代表セット評価: 本番前に precision / recall / 処理時間を固定計測すること。</div>
+                <div>閾値管理: 図面タイプ単位でプリセット化（全案件一律閾値は非推奨）。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>6. 余白で性能が落ちる理由（本件）</div>
+                <div>全域探索では画素数に比例して偶然一致候補が増え、誤検出が増加します。</div>
+                <div>候補競合が増えると NMS で真候補が落ちることがあり、検出漏れにつながります。</div>
+                <div>つまり余白あり画像はスコア分布が変わるため、同一閾値でも性能が崩れやすくなります。</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, color: "#12385f" }}>7. 最低限の改善策（優先順）</div>
+                <div>1) 前処理で有効領域クロップ（白余白除去）</div>
+                <div>2) 余白率に応じた閾値補正</div>
+                <div>3) クラス別上位候補数制限 + 後段再評価</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#2f4668" }}>
+                <input
+                  type="checkbox"
+                  checked={showHomePrereqOnStartup}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setShowHomePrereqOnStartup(next);
+                    try {
+                      localStorage.setItem(HOME_PREREQ_SHOW_ON_STARTUP_KEY, next ? "1" : "0");
+                    } catch {
+                      // ignore storage errors
+                    }
+                  }}
+                />
+                次回起動時に表示する
+              </label>
+              <button
+                type="button"
+                onClick={closeHomePrereqModal}
+                className="btn btnPrimary"
+                style={{ height: 34, padding: "0 14px" }}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </>
       )}
       {showExportDrawer && (
         <>
