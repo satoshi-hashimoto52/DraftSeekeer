@@ -4686,11 +4686,11 @@ export default function App() {
               display: "grid",
               gap: 10,
               background:
-                "linear-gradient(160deg, rgba(255,255,255,0.36) 0%, rgba(244,250,255,0.30) 55%, rgba(236,246,255,0.26) 100%)",
-              border: "1px solid rgba(255,255,255,0.40)",
+                "linear-gradient(160deg, rgba(255,255,255,0.54) 0%, rgba(244,250,255,0.48) 55%, rgba(236,246,255,0.44) 100%)",
+              border: "1px solid rgba(255,255,255,0.56)",
               backdropFilter: "blur(14px) saturate(120%)",
               boxShadow:
-                "0 18px 44px rgba(8, 19, 35, 0.18), inset 0 1px 0 rgba(255,255,255,0.44), inset 0 -1px 0 rgba(255,255,255,0.12)",
+                "0 18px 44px rgba(8, 19, 35, 0.22), inset 0 1px 0 rgba(255,255,255,0.62), inset 0 -1px 0 rgba(255,255,255,0.22)",
             }}
           >
             <div
@@ -4758,7 +4758,7 @@ export default function App() {
                     border: "1px solid rgba(194, 211, 232, 0.82)",
                     borderRadius: 8,
                     padding: 8,
-                    background: "rgba(255, 255, 255, 0.34)",
+                    background: "rgba(255, 255, 255, 0.52)",
                     minWidth: 0,
                   }}
                 >
@@ -4835,7 +4835,7 @@ export default function App() {
               style={{
                 border: "1px solid rgba(194, 211, 232, 0.82)",
                 borderRadius: 8,
-                background: "rgba(255, 255, 255, 0.32)",
+                background: "rgba(255, 255, 255, 0.50)",
                 overflow: "hidden",
               }}
             >
@@ -4846,7 +4846,7 @@ export default function App() {
                   fontWeight: 700,
                   color: "#0b3954",
                   borderBottom: "1px solid rgba(220, 231, 243, 0.88)",
-                  background: "rgba(255, 255, 255, 0.28)",
+                  background: "rgba(255, 255, 255, 0.46)",
                 }}
               >
                 クラス別比較（確定 / 検出）
