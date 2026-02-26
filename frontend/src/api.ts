@@ -288,6 +288,35 @@ export type AutoAnnotateProgressResponse = {
   updated_at?: number | null;
 };
 
+export type BenchmarkRunRecord = {
+  run_id: string;
+  status: string;
+  project_name: string;
+  image_id: string;
+  image_key?: string | null;
+  method: "combined" | "scaled_templates" | "scaled_templates_beta" | string;
+  mode_label: string;
+  started_at?: number | null;
+  finished_at?: number | null;
+  duration_ms?: number | null;
+  threshold: number;
+  params: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  class_progress: {
+    class_name: string;
+    confirmed_count: number;
+    pre_detect_count: number;
+  }[];
+  message?: string | null;
+  error_message?: string | null;
+  updated_at?: number | null;
+};
+
+export type BenchmarkRunsResponse = {
+  project_name: string;
+  runs: BenchmarkRunRecord[];
+};
+
 export async function autoAnnotate(
   params: AutoAnnotateRequest
 ): Promise<AutoAnnotateResponse> {
@@ -315,6 +344,15 @@ export async function fetchAutoAnnotateProgress(
     throw new Error(text || "Auto annotate progress fetch failed");
   }
   return (await res.json()) as AutoAnnotateProgressResponse;
+}
+
+export async function fetchBenchmarkRuns(projectName: string): Promise<BenchmarkRunsResponse> {
+  const res = await fetch(`${API_BASE}/benchmarks/${encodeURIComponent(projectName)}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Benchmark runs fetch failed");
+  }
+  return (await res.json()) as BenchmarkRunsResponse;
 }
 
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {

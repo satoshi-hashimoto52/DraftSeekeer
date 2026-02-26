@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -352,3 +352,28 @@ class AutoAnnotateProgressResponse(BaseModel):
     class_progress: Optional[List[AutoAnnotateClassProgress]] = None
     message: Optional[str] = None
     updated_at: Optional[float] = None
+
+
+class BenchmarkRunRecord(BaseModel):
+    run_id: str
+    status: str
+    project_name: str
+    image_id: str
+    image_key: Optional[str] = None
+    method: str
+    mode_label: str
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    duration_ms: Optional[float] = None
+    threshold: float
+    params: Dict[str, object] = Field(default_factory=dict)
+    summary: Dict[str, object] = Field(default_factory=dict)
+    class_progress: List[AutoAnnotateClassProgress] = Field(default_factory=list)
+    message: Optional[str] = None
+    error_message: Optional[str] = None
+    updated_at: Optional[float] = None
+
+
+class BenchmarkRunsResponse(BaseModel):
+    project_name: str
+    runs: List[BenchmarkRunRecord]

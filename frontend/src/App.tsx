@@ -32,8 +32,10 @@ import {
   deleteDatasetProject,
   autoAnnotate,
   fetchAutoAnnotateProgress,
+  fetchBenchmarkRuns,
   fetchProjectAnnotationStats,
   shutdownApp,
+  BenchmarkRunRecord,
   ProjectAnnotationStatsResponse,
 } from "./api.ts";
 import ImageCanvas, { ImageCanvasHandle } from "./components/ImageCanvas.tsx";
@@ -64,6 +66,8 @@ const DEFAULT_HOVER_REDETECT_DISTANCE_PX = 10;
 const DEBUG_TEMPLATE_SCALE_STEP = 0.01;
 const PROJECT_STATS_POPUP_W = 760;
 const PROJECT_STATS_POPUP_H = 380;
+const BENCHMARK_COMPARE_POPUP_W = 920;
+const BENCHMARK_COMPARE_POPUP_H = 760;
 const HOME_PREREQ_SEEN_KEY = "draftseeker:homePrereqSeen:v1";
 const HOME_PREREQ_SHOW_ON_STARTUP_KEY = "draftseeker:homePrereqShowOnStartup:v1";
 const HOME_PREREQ_AUTO_SHOWN_SESSION_KEY = "draftseeker:homePrereqAutoShownSession:v1";
@@ -146,6 +150,12 @@ export default function App() {
   const hoverProjectStatsTimerRef = useRef<number | null>(null);
   const [projectStatsPopupPos, setProjectStatsPopupPos] = useState<{ left: number; top: number } | null>(null);
   const projectStatsDragRef = useRef<{ active: boolean; dx: number; dy: number }>({
+    active: false,
+    dx: 0,
+    dy: 0,
+  });
+  const [benchmarkComparePopupPos, setBenchmarkComparePopupPos] = useState<{ left: number; top: number } | null>(null);
+  const benchmarkCompareDragRef = useRef<{ active: boolean; dx: number; dy: number }>({
     active: false,
     dx: 0,
     dy: 0,
@@ -330,9 +340,17 @@ export default function App() {
   } | null>(null);
   const [autoProgress, setAutoProgress] = useState<number>(0);
   const [autoProgressId, setAutoProgressId] = useState<string>("");
+  const [roiOverlayDetectionSeq, setRoiOverlayDetectionSeq] = useState<number>(0);
   const [autoRuntimeClassProgress, setAutoRuntimeClassProgress] = useState<
     { className: string; confirmed: number; preDetect: number }[]
   >([]);
+  const [benchmarkRuns, setBenchmarkRuns] = useState<BenchmarkRunRecord[]>([]);
+  const [benchmarkLoading, setBenchmarkLoading] = useState<boolean>(false);
+  const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+  const [benchmarkMethodFilter, setBenchmarkMethodFilter] = useState<"all" | AutoMethod>("all");
+  const [benchmarkSelectedRunIds, setBenchmarkSelectedRunIds] = useState<string[]>([]);
+  const [benchmarkDetailRunId, setBenchmarkDetailRunId] = useState<string | null>(null);
+  const [showBenchmarkCompareModal, setShowBenchmarkCompareModal] = useState<boolean>(false);
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressPollRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
@@ -531,6 +549,16 @@ export default function App() {
     const vh = typeof window !== "undefined" ? window.innerHeight : 900;
     const left = Math.max(16, Math.min(vw - PROJECT_STATS_POPUP_W - 16, anchor.rect.right + 10));
     const top = Math.max(16, Math.min(vh - PROJECT_STATS_POPUP_H - 16, anchor.rect.top - 18));
+    return { left, top };
+  };
+
+  const getBenchmarkComparePopupDefaultPos = () => {
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1600;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 900;
+    const popupW = Math.min(BENCHMARK_COMPARE_POPUP_W, vw - 24);
+    const popupH = Math.min(BENCHMARK_COMPARE_POPUP_H, vh - 24);
+    const left = Math.max(12, Math.round((vw - popupW) / 2));
+    const top = Math.max(12, Math.round((vh - popupH) / 2));
     return { left, top };
   };
 
@@ -1085,7 +1113,8 @@ export default function App() {
     typeof autoStride === "number" && (autoStride < 32 || autoStride > 128);
   const autoUsesStride = autoMethod === "scaled_templates";
   const autoUsesRoi = autoMethod !== "scaled_templates_beta";
-  const autoDisablesRoiUi = autoMethod === "scaled_templates_beta";
+  const autoMethodRoiUnused = autoMethod === "scaled_templates_beta";
+  const autoDisablesRoiUi = autoPanelOpen && autoMethodRoiUnused;
   const scaleMinLabel = scaleMin.toFixed(2);
   const scaleMaxLabel = scaleMax.toFixed(2);
 
@@ -1865,6 +1894,7 @@ export default function App() {
       });
       setCandidates(nextCandidates);
       setSelectedCandidateId(nextCandidates.length > 0 ? nextCandidates[0].id : null);
+      setRoiOverlayDetectionSeq((prev) => prev + 1);
       const nextPoint = computeNextScanPoint({ x: sendX, y: sendY });
       followupScanPointRef.current = nextPoint;
       setFollowupScanReady(Boolean(nextPoint));
@@ -2543,6 +2573,45 @@ export default function App() {
     }
   };
 
+  const refreshBenchmarkRuns = async (projectName: string) => {
+    if (!projectName) return;
+    setBenchmarkLoading(true);
+    setBenchmarkError(null);
+    try {
+      const res = await fetchBenchmarkRuns(projectName);
+      setBenchmarkRuns(res.runs || []);
+    } catch (err) {
+      setBenchmarkError(err instanceof Error ? err.message : "ベンチマーク履歴の取得に失敗しました");
+    } finally {
+      setBenchmarkLoading(false);
+    }
+  };
+
+  const applyBenchmarkRunToAutoForm = (run: BenchmarkRunRecord) => {
+    const params = run.params || {};
+    const nextMethod =
+      run.method === "combined" || run.method === "scaled_templates" || run.method === "scaled_templates_beta"
+        ? run.method
+        : autoMethod;
+    const pThreshold = Number(run.threshold);
+    const pScaleMin = Number(params.scale_min);
+    const pScaleMax = Number(params.scale_max);
+    const pScaleSteps = Number(params.scale_steps);
+    const pRoi = Number(params.roi_size);
+    const pStride = Number(params.stride);
+    const pClassFilter = Array.isArray(params.class_filter)
+      ? params.class_filter.map((v) => String(v)).filter((v) => v.length > 0)
+      : [];
+    setAutoMethod(nextMethod);
+    if (Number.isFinite(pThreshold)) setAutoThreshold(Math.max(0.1, Math.min(1, pThreshold)));
+    if (Number.isFinite(pScaleMin) && pScaleMin > 0) setScaleMin(pScaleMin);
+    if (Number.isFinite(pScaleMax) && pScaleMax > 0) setScaleMax(pScaleMax);
+    if (Number.isFinite(pScaleSteps) && pScaleSteps > 0) setScaleSteps(Math.round(pScaleSteps));
+    if (Number.isFinite(pRoi) && pRoi > 0) setRoiSize(Math.round(pRoi));
+    setAutoStride(Number.isFinite(pStride) && pStride > 0 ? Math.round(pStride) : null);
+    setAutoClassFilter(pClassFilter);
+  };
+
   const stopAutoProgressPolling = () => {
     if (autoProgressPollRef.current !== null) {
       window.clearInterval(autoProgressPollRef.current);
@@ -2671,6 +2740,9 @@ export default function App() {
         autoStride,
       });
       completed = true;
+      if (datasetId) {
+        void refreshBenchmarkRuns(datasetId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto annotate failed");
     } finally {
@@ -2679,6 +2751,16 @@ export default function App() {
       setAutoProgress(completed ? 100 : 0);
     }
   };
+
+  useEffect(() => {
+    if (!datasetId) {
+      setBenchmarkRuns([]);
+      setBenchmarkSelectedRunIds([]);
+      setBenchmarkDetailRunId(null);
+      return;
+    }
+    void refreshBenchmarkRuns(datasetId);
+  }, [datasetId]);
 
   const handleUndoAutoAnnotate = () => {
     if (lastAutoAddedIds.length === 0) return;
@@ -3213,6 +3295,76 @@ export default function App() {
 
   const closeHomePrereqModal = () => {
     setShowHomePrereqModal(false);
+  };
+
+  const benchmarkRunsForCurrentImage = useMemo(() => {
+    const base = benchmarkRuns.filter((row) => row.image_key === datasetSelectedName);
+    if (benchmarkMethodFilter === "all") return base;
+    return base.filter((row) => row.method === benchmarkMethodFilter);
+  }, [benchmarkRuns, datasetSelectedName, benchmarkMethodFilter]);
+
+  useEffect(() => {
+    const validIds = new Set(benchmarkRunsForCurrentImage.map((row) => row.run_id));
+    setBenchmarkSelectedRunIds((prev) => prev.filter((id) => validIds.has(id)));
+    setBenchmarkDetailRunId((prev) => (prev && validIds.has(prev) ? prev : null));
+  }, [benchmarkRunsForCurrentImage]);
+
+  const benchmarkSelectedRuns = useMemo(
+    () =>
+      benchmarkSelectedRunIds
+        .map((id) => benchmarkRunsForCurrentImage.find((row) => row.run_id === id))
+        .filter((row): row is BenchmarkRunRecord => Boolean(row)),
+    [benchmarkSelectedRunIds, benchmarkRunsForCurrentImage]
+  );
+  const benchmarkDetailRun = useMemo(
+    () => benchmarkRunsForCurrentImage.find((row) => row.run_id === benchmarkDetailRunId) || null,
+    [benchmarkRunsForCurrentImage, benchmarkDetailRunId]
+  );
+  useEffect(() => {
+    if (!showBenchmarkCompareModal) {
+      setBenchmarkComparePopupPos(null);
+    }
+  }, [showBenchmarkCompareModal]);
+  const benchmarkCompareBest = useMemo(() => {
+    if (benchmarkSelectedRuns.length < 2) {
+      return {
+        bestAdded: Number.NEGATIVE_INFINITY,
+        bestRejected: Number.POSITIVE_INFINITY,
+        bestDurationMs: Number.POSITIVE_INFINITY,
+        classBestConfirmed: {} as Record<string, number>,
+      };
+    }
+    let bestAdded = Number.NEGATIVE_INFINITY;
+    let bestRejected = Number.POSITIVE_INFINITY;
+    let bestDurationMs = Number.POSITIVE_INFINITY;
+    const classBestConfirmed: Record<string, number> = {};
+    for (const run of benchmarkSelectedRuns) {
+      const added = Number(run.summary?.added_count ?? 0);
+      const rejected = Number(run.summary?.rejected_count ?? 0);
+      if (Number.isFinite(added)) bestAdded = Math.max(bestAdded, added);
+      if (Number.isFinite(rejected)) bestRejected = Math.min(bestRejected, rejected);
+      if (typeof run.duration_ms === "number" && Number.isFinite(run.duration_ms)) {
+        bestDurationMs = Math.min(bestDurationMs, run.duration_ms);
+      }
+      for (const row of run.class_progress || []) {
+        const current = classBestConfirmed[row.class_name];
+        if (typeof current !== "number" || row.confirmed_count > current) {
+          classBestConfirmed[row.class_name] = row.confirmed_count;
+        }
+      }
+    }
+    return { bestAdded, bestRejected, bestDurationMs, classBestConfirmed };
+  }, [benchmarkSelectedRuns]);
+  const benchmarkCompareGridTemplate = useMemo(
+    () => `180px repeat(${benchmarkSelectedRuns.length}, minmax(0, 1fr))`,
+    [benchmarkSelectedRuns.length]
+  );
+  const getConfirmRateStyle = (confirmed: number, preDetect: number): { color: string; fontWeight: 500 | 700 } => {
+    if (preDetect <= 0) return { color: "#607d8b", fontWeight: 500 };
+    const rate = confirmed / preDetect;
+    if (preDetect >= 10 && rate < 0.35) return { color: "#c62828", fontWeight: 700 };
+    if (preDetect >= 8 && rate < 0.5) return { color: "#ef6c00", fontWeight: 700 };
+    return { color: "#2a4463", fontWeight: 500 };
   };
 
   const autoProgressClamped = Math.max(0, Math.min(100, autoProgress));
@@ -4403,6 +4555,352 @@ export default function App() {
           </div>
         </>
       )}
+      {benchmarkDetailRun && (
+        <>
+          <div
+            onClick={() => setBenchmarkDetailRunId(null)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(8, 17, 31, 0.34)",
+              zIndex: 62,
+            }}
+          />
+          <div
+            className="panelShell"
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(760px, calc(100vw - 24px))",
+              maxHeight: "min(82vh, calc(100vh - 24px))",
+              zIndex: 63,
+              overflow: "auto",
+              padding: 14,
+              display: "grid",
+              gap: 10,
+              background:
+                "linear-gradient(160deg, rgba(255,255,255,0.60) 0%, rgba(244,250,255,0.54) 55%, rgba(236,246,255,0.50) 100%)",
+              border: "1px solid rgba(255,255,255,0.52)",
+              backdropFilter: "blur(12px) saturate(125%)",
+              boxShadow:
+                "0 18px 44px rgba(8, 19, 35, 0.24), inset 0 1px 0 rgba(255,255,255,0.62), inset 0 -1px 0 rgba(255,255,255,0.18)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#12385f" }}>
+                ベンチマーク詳細: {benchmarkDetailRun.mode_label}
+              </div>
+              <button
+                type="button"
+                className="btn btnGhost"
+                style={{ width: 30, height: 30, padding: 0, fontSize: 18, boxShadow: "none" }}
+                onClick={() => setBenchmarkDetailRunId(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: "#244264", display: "grid", gap: 4 }}>
+              <div>run_id: {benchmarkDetailRun.run_id}</div>
+              <div>image: {benchmarkDetailRun.image_key || "-"}</div>
+              <div>status: {benchmarkDetailRun.status}</div>
+              <div>threshold: {benchmarkDetailRun.threshold.toFixed(2)}</div>
+              <div>
+                処理時間:{" "}
+                {typeof benchmarkDetailRun.duration_ms === "number"
+                  ? `${(benchmarkDetailRun.duration_ms / 1000).toFixed(2)}s`
+                  : "-"}
+              </div>
+              <div>
+                追加/除外: {Number(benchmarkDetailRun.summary?.added_count || 0)} /{" "}
+                {Number(benchmarkDetailRun.summary?.rejected_count || 0)}
+              </div>
+            </div>
+            <div style={{ border: "1px solid #d9e2ec", borderRadius: 8, padding: 8, background: "#fbfdff" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", marginBottom: 6 }}>パラメータ</div>
+              <pre style={{ margin: 0, fontSize: 11, color: "#385672", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {JSON.stringify(benchmarkDetailRun.params || {}, null, 2)}
+              </pre>
+            </div>
+            <div style={{ border: "1px solid #d9e2ec", borderRadius: 8, background: "#fff", overflow: "hidden" }}>
+              <div style={{ padding: "8px 10px", fontSize: 12, fontWeight: 700, color: "#0b3954", borderBottom: "1px solid #eef2f7" }}>
+                クラス別（確定 / 検出）
+              </div>
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                {(benchmarkDetailRun.class_progress || []).length === 0 ? (
+                  <div style={{ padding: 10, fontSize: 11, color: "#607d8b" }}>データなし</div>
+                ) : (
+                  benchmarkDetailRun.class_progress.map((row) => (
+                    <div
+                      key={`${benchmarkDetailRun.run_id}-${row.class_name}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 8,
+                        padding: "6px 10px",
+                        borderBottom: "1px solid #f0f4f9",
+                        fontSize: 11,
+                        color: "#2a4463",
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {row.class_name}
+                      </span>
+                      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {row.confirmed_count} / {row.pre_detect_count}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+      {showBenchmarkCompareModal && benchmarkSelectedRuns.length >= 2 && (
+        <>
+          <div
+            onClick={() => setShowBenchmarkCompareModal(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(8, 17, 31, 0.34)",
+              zIndex: 62,
+            }}
+          />
+          <div
+            className="panelShell"
+            style={{
+              position: "fixed",
+              left:
+                benchmarkComparePopupPos?.left ?? getBenchmarkComparePopupDefaultPos().left,
+              top:
+                benchmarkComparePopupPos?.top ?? getBenchmarkComparePopupDefaultPos().top,
+              transform: "none",
+              width: "min(920px, calc(100vw - 24px))",
+              maxHeight: "min(82vh, calc(100vh - 24px))",
+              zIndex: 63,
+              overflow: "auto",
+              padding: 14,
+              display: "grid",
+              gap: 10,
+              background:
+                "linear-gradient(160deg, rgba(255,255,255,0.36) 0%, rgba(244,250,255,0.30) 55%, rgba(236,246,255,0.26) 100%)",
+              border: "1px solid rgba(255,255,255,0.40)",
+              backdropFilter: "blur(14px) saturate(120%)",
+              boxShadow:
+                "0 18px 44px rgba(8, 19, 35, 0.18), inset 0 1px 0 rgba(255,255,255,0.44), inset 0 -1px 0 rgba(255,255,255,0.12)",
+            }}
+          >
+            <div
+              onMouseDown={(e) => {
+                if (e.button !== 0) return;
+                const base = benchmarkComparePopupPos ?? getBenchmarkComparePopupDefaultPos();
+                benchmarkCompareDragRef.current = {
+                  active: true,
+                  dx: e.clientX - base.left,
+                  dy: e.clientY - base.top,
+                };
+                const onMove = (ev: MouseEvent) => {
+                  if (!benchmarkCompareDragRef.current.active) return;
+                  const vw = window.innerWidth;
+                  const vh = window.innerHeight;
+                  const popupW = Math.min(BENCHMARK_COMPARE_POPUP_W, vw - 24);
+                  const popupH = Math.min(BENCHMARK_COMPARE_POPUP_H, vh - 24);
+                  const nextLeft = Math.max(
+                    12,
+                    Math.min(vw - popupW - 12, ev.clientX - benchmarkCompareDragRef.current.dx)
+                  );
+                  const nextTop = Math.max(
+                    12,
+                    Math.min(vh - popupH - 12, ev.clientY - benchmarkCompareDragRef.current.dy)
+                  );
+                  setBenchmarkComparePopupPos({ left: nextLeft, top: nextTop });
+                };
+                const onUp = () => {
+                  benchmarkCompareDragRef.current.active = false;
+                  window.removeEventListener("mousemove", onMove);
+                  window.removeEventListener("mouseup", onUp);
+                };
+                window.addEventListener("mousemove", onMove);
+                window.addEventListener("mouseup", onUp);
+              }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "move" }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#12385f" }}>ベンチマーク比較（最大3件）</div>
+              <button
+                type="button"
+                className="btn btnGhost"
+                style={{ width: 30, height: 30, padding: 0, fontSize: 18, boxShadow: "none" }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setShowBenchmarkCompareModal(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: benchmarkCompareGridTemplate, gap: 8, alignItems: "stretch" }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "#607d8b",
+                  alignSelf: "center",
+                  paddingLeft: 2,
+                }}
+              >
+                実行ごと
+              </div>
+              {benchmarkSelectedRuns.map((run) => (
+                <div
+                  key={`cmp-${run.run_id}`}
+                  style={{
+                    border: "1px solid rgba(194, 211, 232, 0.82)",
+                    borderRadius: 8,
+                    padding: 8,
+                    background: "rgba(255, 255, 255, 0.34)",
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", marginBottom: 4 }}>{run.mode_label}</div>
+                  {(() => {
+                    const added = Number(run.summary?.added_count ?? 0);
+                    const rejected = Number(run.summary?.rejected_count ?? 0);
+                    const detectedTotal = Number(run.summary?.detected_total ?? 0);
+                    const params = run.params || {};
+                    const pScaleMin = Number(params.effective_scale_min);
+                    const pScaleMax = Number(params.effective_scale_max);
+                    const pScaleSteps = Number(params.effective_scale_steps);
+                    const pRoi = Number(params.effective_roi_size);
+                    const pStride = Number(params.effective_stride);
+                    const pSeed = Number(params.template_selection_seed);
+                    const isBestAdded = Number.isFinite(added) && added === benchmarkCompareBest.bestAdded;
+                    const isBestRejected =
+                      Number.isFinite(rejected) && rejected === benchmarkCompareBest.bestRejected;
+                    const hasDuration =
+                      typeof run.duration_ms === "number" && Number.isFinite(run.duration_ms);
+                    const isBestDuration =
+                      hasDuration && run.duration_ms === benchmarkCompareBest.bestDurationMs;
+                    const rate = detectedTotal > 0 ? added / detectedTotal : 0;
+                    const ratePct = `${(rate * 100).toFixed(1)}%`;
+                    const rateStyle = getConfirmRateStyle(added, detectedTotal);
+                    return (
+                  <div style={{ fontSize: 11, color: "#385672", display: "grid", gap: 2 }}>
+                    <div>threshold: {run.threshold.toFixed(2)}</div>
+                    <div style={{ color: isBestDuration ? "#1b8f3a" : "#385672", fontWeight: isBestDuration ? 700 : 500 }}>
+                      time:{" "}
+                      {typeof run.duration_ms === "number" ? `${(run.duration_ms / 1000).toFixed(2)}s` : "-"}
+                    </div>
+                    <div>
+                      <span style={{ color: isBestAdded ? "#1b8f3a" : "#385672", fontWeight: isBestAdded ? 700 : 500 }}>
+                        add {added}
+                      </span>
+                      {" / "}
+                      <span
+                        style={{
+                          color: isBestRejected ? "#1b8f3a" : "#385672",
+                          fontWeight: isBestRejected ? 700 : 500,
+                        }}
+                      >
+                        rej {rejected}
+                      </span>
+                    </div>
+                    <div style={{ color: rateStyle.color, fontWeight: rateStyle.fontWeight }}>
+                      確定率: {detectedTotal > 0 ? `${added}/${detectedTotal} (${ratePct})` : "-"}
+                    </div>
+                    <div>
+                      scale(min~max)/steps:{" "}
+                      {Number.isFinite(pScaleMin) && Number.isFinite(pScaleMax) && Number.isFinite(pScaleSteps)
+                        ? `${pScaleMin.toFixed(2)}~${pScaleMax.toFixed(2)} / ${Math.round(pScaleSteps)}`
+                        : "-"}
+                    </div>
+                    <div>
+                      roi_size / stride:{" "}
+                      {Number.isFinite(pRoi) ? Math.round(pRoi) : "-"} /{" "}
+                      {Number.isFinite(pStride) && pStride > 0 ? Math.round(pStride) : "auto"}
+                    </div>
+                    <div style={{ color: "#607d8b" }}>
+                      template_seed: {Number.isFinite(pSeed) ? Math.round(pSeed) : "-"}
+                    </div>
+                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {run.image_key || "-"}
+                    </div>
+                  </div>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+            <div
+              style={{
+                border: "1px solid rgba(194, 211, 232, 0.82)",
+                borderRadius: 8,
+                background: "rgba(255, 255, 255, 0.32)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  padding: "8px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#0b3954",
+                  borderBottom: "1px solid rgba(220, 231, 243, 0.88)",
+                  background: "rgba(255, 255, 255, 0.28)",
+                }}
+              >
+                クラス別比較（確定 / 検出）
+              </div>
+              <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                {Array.from(
+                  new Set(
+                    benchmarkSelectedRuns.flatMap((run) => run.class_progress.map((row) => row.class_name))
+                  )
+                )
+                  .sort()
+                  .map((className) => (
+                    <div
+                      key={`cmp-row-${className}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: benchmarkCompareGridTemplate,
+                        gap: 8,
+                        padding: "6px 10px",
+                        borderBottom: "1px solid #f0f4f9",
+                        fontSize: 11,
+                        color: "#2a4463",
+                      }}
+                    >
+                      <span style={{ fontWeight: 700 }}>{className}</span>
+                      {benchmarkSelectedRuns.map((run) => {
+                        const row = run.class_progress.find((v) => v.class_name === className);
+                        const bestConfirmed = benchmarkCompareBest.classBestConfirmed[className];
+                        const isBestClassConfirmed =
+                          row && typeof bestConfirmed === "number" && row.confirmed_count === bestConfirmed;
+                        const confirmed = row?.confirmed_count ?? 0;
+                        const preDetect = row?.pre_detect_count ?? 0;
+                        const rate = preDetect > 0 ? confirmed / preDetect : 0;
+                        const rateStyle = getConfirmRateStyle(confirmed, preDetect);
+                        return (
+                          <span
+                            key={`cmp-val-${run.run_id}-${className}`}
+                            style={{
+                              fontVariantNumeric: "tabular-nums",
+                              color: isBestClassConfirmed ? "#1b8f3a" : rateStyle.color,
+                              fontWeight: isBestClassConfirmed ? 700 : 500,
+                            }}
+                          >
+                            {row ? `${row.confirmed_count} / ${row.pre_detect_count} (${(rate * 100).toFixed(1)}%)` : "-"}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {showExportDrawer && (
         <>
           <div
@@ -5348,8 +5846,10 @@ export default function App() {
                 roiOverlayPoint={showDebug ? null : lastClick}
                 roiOverlaySize={showDebug ? undefined : roiSize}
                 roiOverlayConfidence={roiOverlayConfidence}
-                showRoiArea={showRoiArea}
-              />
+                roiOverlayDetectionSeq={roiOverlayDetectionSeq}
+                  showRoiArea={showRoiArea}
+                  interactionMode={detectionMode}
+                />
                 {showHints && imageUrl && (
                   <div
                     style={{
@@ -6140,7 +6640,7 @@ export default function App() {
                         }}
                       >
                         <span style={{ fontSize: 11, color: "#666" }}>
-                          {autoDisablesRoiUi ? "Global Precisionでは未使用" : "手動/自動で共通"}
+                          {autoMethodRoiUnused ? "Global Precisionでは未使用" : "手動/自動で共通"}
                         </span>
                         <div className="hintText" style={{ justifyContent: "flex-end" }}>
                           <span className="badge">推奨 200–600</span>
@@ -7340,6 +7840,166 @@ export default function App() {
                         </button>
                       </div>
                     )}
+                    <div
+                      style={{
+                        order: 6,
+                        display: "grid",
+                        gap: 8,
+                        padding: 10,
+                        borderRadius: 10,
+                        border: "1px solid #d6e0f0",
+                        background: "#f8fbff",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954" }}>ベンチマーク履歴</div>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => datasetId && refreshBenchmarkRuns(datasetId)}
+                          disabled={!datasetId || benchmarkLoading}
+                          style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+                        >
+                          更新
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto auto", gap: 6, alignItems: "center" }}>
+                        <select
+                          value={benchmarkMethodFilter}
+                          onChange={(e) => {
+                            setBenchmarkMethodFilter(e.target.value as "all" | AutoMethod);
+                            setBenchmarkSelectedRunIds([]);
+                            setBenchmarkDetailRunId(null);
+                          }}
+                          style={{ height: 28, fontSize: 11 }}
+                        >
+                          <option value="all">全モード</option>
+                          <option value="combined">Fusion</option>
+                          <option value="scaled_templates">Expand</option>
+                          <option value="scaled_templates_beta">Global Precision</option>
+                        </select>
+                        <div style={{ fontSize: 11, color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          対象画像のみ: {datasetSelectedName || "-"}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => setShowBenchmarkCompareModal(true)}
+                          disabled={benchmarkSelectedRuns.length < 2}
+                          style={{ height: 28, padding: "0 10px", fontSize: 11 }}
+                        >
+                          比較（{benchmarkSelectedRuns.length}/3）
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => {
+                            if (benchmarkSelectedRuns.length === 0) return;
+                            applyBenchmarkRunToAutoForm(benchmarkSelectedRuns[0]);
+                          }}
+                          disabled={benchmarkSelectedRuns.length === 0}
+                          style={{ height: 28, padding: "0 10px", fontSize: 11 }}
+                          title="選択中の先頭1件をフォームに反映"
+                        >
+                          再実行に反映
+                        </button>
+                      </div>
+                      {benchmarkError && <div style={{ fontSize: 11, color: "#c62828" }}>{benchmarkError}</div>}
+                      <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #d9e2ec", borderRadius: 8, background: "#fff" }}>
+                        {benchmarkLoading ? (
+                          <div style={{ padding: 10, fontSize: 11, color: "#607d8b" }}>読み込み中...</div>
+                        ) : benchmarkRunsForCurrentImage.length === 0 ? (
+                          <div style={{ padding: 10, fontSize: 11, color: "#607d8b" }}>履歴がありません</div>
+                        ) : (
+                          benchmarkRunsForCurrentImage.slice(0, 80).map((row) => {
+                            const selected = benchmarkSelectedRunIds.includes(row.run_id);
+                            const ts = row.started_at ? new Date(row.started_at * 1000).toLocaleString() : "-";
+                            const added = Number(row.summary?.added_count ?? 0);
+                            const rejected = Number(row.summary?.rejected_count ?? 0);
+                            const durationSec =
+                              typeof row.duration_ms === "number" && Number.isFinite(row.duration_ms)
+                                ? (row.duration_ms / 1000).toFixed(2)
+                                : "-";
+                            return (
+                              <div
+                                key={`bench-${row.run_id}`}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "18px 1fr auto auto auto",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  padding: "6px 8px",
+                                  borderBottom: "1px solid #eef2f7",
+                                  background: selected ? "rgba(25,118,210,0.08)" : "#fff",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setBenchmarkSelectedRunIds((prev) => {
+                                      if (checked) {
+                                        if (prev.includes(row.run_id)) return prev;
+                                        if (prev.length >= 3) return prev;
+                                        return [...prev, row.run_id];
+                                      }
+                                      return prev.filter((id) => id !== row.run_id);
+                                    });
+                                  }}
+                                />
+                                <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 6,
+                                      minWidth: 0,
+                                      fontSize: 11,
+                                      color: "#0b3954",
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{row.mode_label}</span>
+                                    <span style={{ color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                      {ts}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "#607d8b" }}>
+                                    追加 {added} / 除外 {rejected} / {durationSec}s / th {row.threshold.toFixed(2)}
+                                  </div>
+                                </div>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    borderColor: row.status === "done" ? "#a5d6a7" : row.status === "error" ? "#ef9a9a" : "#90caf9",
+                                    background: row.status === "done" ? "#e8f5e9" : row.status === "error" ? "#ffebee" : "#e3f2fd",
+                                    color: row.status === "done" ? "#2e7d32" : row.status === "error" ? "#c62828" : "#1565c0",
+                                  }}
+                                >
+                                  {row.status}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                                  onClick={() => setBenchmarkDetailRunId(row.run_id)}
+                                >
+                                  詳細
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  style={{ height: 24, padding: "0 8px", fontSize: 10 }}
+                                  onClick={() => applyBenchmarkRunToAutoForm(row)}
+                                >
+                                  反映
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
                     <div
                       className="autoAdvanced"
                       style={{

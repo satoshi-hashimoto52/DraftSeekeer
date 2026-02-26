@@ -55,7 +55,9 @@ type Props = {
   roiOverlayPoint?: { x: number; y: number } | null;
   roiOverlaySize?: number;
   roiOverlayConfidence?: number | null;
+  roiOverlayDetectionSeq?: number;
   showRoiArea: boolean;
+  interactionMode: "click" | "hover";
 };
 
 export type ImageCanvasHandle = {
@@ -102,7 +104,9 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   roiOverlayPoint,
   roiOverlaySize,
   roiOverlayConfidence,
+  roiOverlayDetectionSeq,
   showRoiArea,
+  interactionMode,
 }: Props,
   ref
 ) {
@@ -175,6 +179,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   } | null>(null);
   const [debugHoverImagePoint, setDebugHoverImagePoint] = useState<{ x: number; y: number } | null>(null);
   const [showRoiOverlay, setShowRoiOverlay] = useState(true);
+  const [roiLockAnimProgress, setRoiLockAnimProgress] = useState(0);
+  const roiLockAnimRafRef = useRef<number | null>(null);
+  const roiLockHighPrevRef = useRef<boolean>(false);
+  const roiLockLastTriggerRef = useRef<{ score: number; atMs: number; seq: number | null } | null>(null);
   const [debugTemplateDrawVersion, setDebugTemplateDrawVersion] = useState(0);
   const debugTemplateImageRef = useRef<HTMLImageElement | null>(null);
   const [debugMatchTemplateDrawVersion, setDebugMatchTemplateDrawVersion] = useState(0);
@@ -193,6 +201,82 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugOverlay?.outer_bbox ||
     debugOverlay?.tight_bbox ||
     null;
+  const hoverLoupeCursor = 'url("/cursors/loupe.cur") 8 8, url("/cursors/loupe.png") 8 8, zoom-in';
+  const getIdleCursor = () => {
+    if (!imageUrl) return "default";
+    return interactionMode === "hover" ? hoverLoupeCursor : "pointer";
+  };
+
+  useEffect(() => {
+    setCursorStyle(getIdleCursor());
+  }, [imageUrl, interactionMode]);
+
+  useEffect(() => {
+    const activePoint = showRoiArea && showRoiOverlay ? roiOverlayPoint : null;
+    const score =
+      typeof roiOverlayConfidence === "number" && Number.isFinite(roiOverlayConfidence)
+        ? roiOverlayConfidence
+        : null;
+    const isHigh = !!activePoint && score !== null && score >= 0.8;
+    const now = performance.now();
+    let shouldTrigger = isHigh && !roiLockHighPrevRef.current;
+    if (isHigh && !shouldTrigger && score !== null) {
+      const prev = roiLockLastTriggerRef.current;
+      if (!prev) {
+        shouldTrigger = true;
+      } else {
+        // Re-trigger only when displayed confidence actually updates.
+        const scoreChanged = Math.abs(score - prev.score) >= 0.003;
+        const cooldownPassed = now - prev.atMs >= 120;
+        const detectUpdated =
+          typeof roiOverlayDetectionSeq === "number" &&
+          Number.isFinite(roiOverlayDetectionSeq) &&
+          roiOverlayDetectionSeq > 0 &&
+          roiOverlayDetectionSeq !== prev.seq;
+        shouldTrigger = cooldownPassed && (scoreChanged || detectUpdated);
+      }
+    }
+    roiLockHighPrevRef.current = isHigh;
+    if (!shouldTrigger || !activePoint || score === null) return;
+    const seqMark =
+      typeof roiOverlayDetectionSeq === "number" && Number.isFinite(roiOverlayDetectionSeq)
+        ? roiOverlayDetectionSeq
+        : null;
+    roiLockLastTriggerRef.current = { score, atMs: now, seq: seqMark };
+
+    if (roiLockAnimRafRef.current !== null) {
+      window.cancelAnimationFrame(roiLockAnimRafRef.current);
+      roiLockAnimRafRef.current = null;
+    }
+    const durationMs = 380;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const t = Math.max(0, Math.min(1, (now - startedAt) / durationMs));
+      setRoiLockAnimProgress(t);
+      if (t < 1) {
+        roiLockAnimRafRef.current = window.requestAnimationFrame(tick);
+      } else {
+        roiLockAnimRafRef.current = null;
+        setRoiLockAnimProgress(0);
+      }
+    };
+    roiLockAnimRafRef.current = window.requestAnimationFrame(tick);
+  }, [
+    showRoiArea,
+    showRoiOverlay,
+    roiOverlayPoint,
+    roiOverlayConfidence,
+    roiOverlayDetectionSeq,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (roiLockAnimRafRef.current !== null) {
+        window.cancelAnimationFrame(roiLockAnimRafRef.current);
+        roiLockAnimRafRef.current = null;
+      }
+    };
+  }, []);
 
   const endAnnotationEditSession = (reason: string) => {
     if (!editSessionRef.current.active) return;
@@ -780,6 +864,53 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         const roiColor =
           score !== null && score >= 0.8 ? "#39ff14" : score !== null && score >= 0.7 ? "#ffb300" : "#e53935";
         drawBox(x1, y1, x2 - x1, y2 - y1, roiColor, baseLine * 2.6, true, 0.9, 0);
+
+        // Lock-on effect: trigger once when ROI confidence enters green range.
+        if (score !== null && score >= 0.8 && roiLockAnimProgress > 0) {
+          const p = roiLockAnimProgress; // 0..1
+          const grow = (size * 0.06) * p;
+          const pulseAlpha = Math.max(0, 0.75 * (1 - p));
+          drawBox(
+            x1 - grow,
+            y1 - grow,
+            (x2 - x1) + grow * 2,
+            (y2 - y1) + grow * 2,
+            roiColor,
+            baseLine * 3.6,
+            false,
+            pulseAlpha,
+            0
+          );
+          if (p < 0.45) {
+            const blink = (Math.floor(p * 12) % 2) === 0 ? 0.95 : 0.35;
+            const cs = Math.max(6, baseLine * 5);
+            const clw = Math.max(1, baseLine * 1.6) / lineScale;
+            ctx.save();
+            ctx.globalAlpha = blink;
+            ctx.strokeStyle = roiColor;
+            ctx.lineWidth = clw;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            // TL
+            ctx.moveTo(x1, y1 + cs);
+            ctx.lineTo(x1, y1);
+            ctx.lineTo(x1 + cs, y1);
+            // TR
+            ctx.moveTo(x2 - cs, y1);
+            ctx.lineTo(x2, y1);
+            ctx.lineTo(x2, y1 + cs);
+            // BL
+            ctx.moveTo(x1, y2 - cs);
+            ctx.lineTo(x1, y2);
+            ctx.lineTo(x1 + cs, y2);
+            // BR
+            ctx.moveTo(x2 - cs, y2);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, y2 - cs);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
         // Keep ROI label at fixed on-screen size regardless of zoom scale.
         drawFixedScreenLabelAtImage(
           x1,
@@ -962,6 +1093,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     showRoiArea,
     showRoiOverlay,
     debugHoverImagePoint,
+    roiOverlayConfidence,
+    roiLockAnimProgress,
     debugTemplateDrawVersion,
     debugMatchTemplateDrawVersion,
     debugMatchedTemplateClassName,
@@ -1340,7 +1473,11 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       }
     }
     if (manualDragRef.current.active) {
-      setCursorStyle("crosshair");
+      setCursorStyle(getIdleCursor());
+      return;
+    }
+    if (interactionMode === "hover") {
+      setCursorStyle(hoverLoupeCursor);
       return;
     }
     const annHit = hitTestSelectedAnnotation(x, y);
@@ -1399,10 +1536,10 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       return;
     }
     if (manualDragRef.current.active) {
-      setCursorStyle("crosshair");
+      setCursorStyle(getIdleCursor());
       return;
     }
-    setCursorStyle(imageUrl ? "crosshair" : "default");
+    setCursorStyle(getIdleCursor());
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1481,7 +1618,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         setDebugHoverImagePoint({ x: coords.x, y: coords.y });
         setShowRoiOverlay(true);
       } else {
-        setCursorStyle(imageUrl ? "crosshair" : "default");
+        setCursorStyle(getIdleCursor());
         setDebugHoverImagePoint(null);
         setShowRoiOverlay(false);
       }
@@ -1698,7 +1835,7 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
         onDoubleClick={imageUrl ? handleDoubleClick : undefined}
         onMouseLeave={(event) => {
           if (imageUrl) handleMouseUp();
-          setCursorStyle(imageUrl ? "crosshair" : "default");
+          setCursorStyle(getIdleCursor());
           setDebugHoverImagePoint(null);
           setShowRoiOverlay(false);
         }}

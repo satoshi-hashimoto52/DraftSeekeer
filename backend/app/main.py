@@ -6,6 +6,7 @@ import signal
 import threading
 import time
 import subprocess
+import hashlib
 
 import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -57,6 +58,8 @@ from .schemas import (
     AutoAnnotateResponse,
     AutoAnnotateClassProgress,
     AutoAnnotateProgressResponse,
+    BenchmarkRunRecord,
+    BenchmarkRunsResponse,
     AutoAnnotationItem,
     DatasetImportResponse,
     DatasetInfo,
@@ -120,6 +123,7 @@ MANUAL_SCORE_RAW_WEIGHT = 0.2
 MANUAL_SCORE_SHAPE_WEIGHT = 0.8
 AUTO_PROGRESS_STORE: Dict[str, Dict[str, object]] = {}
 AUTO_PROGRESS_LOCK = threading.Lock()
+BENCHMARK_STORE_LOCK = threading.Lock()
 
 
 def _get_project_class_names(project: str) -> List[str]:
@@ -137,6 +141,7 @@ def _get_project_class_names(project: str) -> List[str]:
 def _cap_templates_per_class_random(
     templates: Dict[str, List["TemplateImage"]],
     max_per_class: int,
+    rng: Optional[random.Random] = None,
 ) -> Dict[str, List["TemplateImage"]]:
     if max_per_class <= 0:
         return templates
@@ -145,10 +150,21 @@ def _cap_templates_per_class_random(
         if len(items) <= max_per_class:
             capped[class_name] = items
             continue
-        picked = random.sample(items, max_per_class)
+        picker = rng if rng is not None else random
+        picked = picker.sample(items, max_per_class)
         picked.sort(key=lambda t: t.template_name)
         capped[class_name] = picked
     return capped
+
+
+def _template_selection_digest(templates: Dict[str, List["TemplateImage"]]) -> str:
+    lines: List[str] = []
+    for class_name in sorted(templates.keys()):
+        names = sorted([t.template_name for t in templates.get(class_name, [])])
+        for name in names:
+            lines.append(f"{class_name}/{name}")
+    joined = "\n".join(lines).encode("utf-8")
+    return hashlib.sha1(joined).hexdigest()
 
 
 def _split_counts(total: int, ratios: List[int]) -> List[int]:
@@ -203,6 +219,53 @@ def _get_auto_progress(progress_id: str) -> Optional[Dict[str, object]]:
         if data is None:
             return None
         return dict(data)
+
+
+def _benchmark_path(project_name: str) -> Path:
+    safe = Path(project_name).name
+    return _project_dir(safe) / "benchmarks.json"
+
+
+def _load_benchmark_runs(project_name: str) -> List[Dict[str, object]]:
+    path = _benchmark_path(project_name)
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        runs = raw.get("runs") if isinstance(raw, dict) else None
+        if isinstance(runs, list):
+            return [r for r in runs if isinstance(r, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def _save_benchmark_runs(project_name: str, runs: List[Dict[str, object]]) -> None:
+    path = _benchmark_path(project_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "runs": runs}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _append_benchmark_run(project_name: str, row: Dict[str, object]) -> None:
+    with BENCHMARK_STORE_LOCK:
+        runs = _load_benchmark_runs(project_name)
+        runs.append(row)
+        _save_benchmark_runs(project_name, runs)
+
+
+def _update_benchmark_run(project_name: str, run_id: str, patch: Dict[str, object]) -> None:
+    with BENCHMARK_STORE_LOCK:
+        runs = _load_benchmark_runs(project_name)
+        updated = False
+        for row in runs:
+            if str(row.get("run_id", "")) == run_id:
+                row.update(patch)
+                row["updated_at"] = time.time()
+                updated = True
+                break
+        if updated:
+            _save_benchmark_runs(project_name, runs)
 
 
 def _load_matching_table(dataset_dir: Path) -> List[dict]:
@@ -1976,6 +2039,51 @@ def get_auto_annotate_progress(progress_id: str) -> AutoAnnotateProgressResponse
     )
 
 
+@app.get("/benchmarks/{project_name}", response_model=BenchmarkRunsResponse)
+def get_benchmark_runs(project_name: str) -> BenchmarkRunsResponse:
+    safe_project_name = Path(project_name).name
+    runs_raw = _load_benchmark_runs(safe_project_name)
+    runs: List[BenchmarkRunRecord] = []
+    for row in sorted(
+        runs_raw,
+        key=lambda r: float(r.get("updated_at") or r.get("started_at") or 0),
+        reverse=True,
+    ):
+        cp_rows = row.get("class_progress") or []
+        runs.append(
+            BenchmarkRunRecord(
+                run_id=str(row.get("run_id", "")),
+                status=str(row.get("status", "unknown")),
+                project_name=str(row.get("project_name", safe_project_name)),
+                image_id=str(row.get("image_id", "")),
+                image_key=str(row.get("image_key")) if row.get("image_key") is not None else None,
+                method=str(row.get("method", "")),
+                mode_label=str(row.get("mode_label", "")),
+                started_at=float(row.get("started_at")) if row.get("started_at") is not None else None,
+                finished_at=float(row.get("finished_at")) if row.get("finished_at") is not None else None,
+                duration_ms=float(row.get("duration_ms")) if row.get("duration_ms") is not None else None,
+                threshold=float(row.get("threshold", 0.0) or 0.0),
+                params=row.get("params") if isinstance(row.get("params"), dict) else {},
+                summary=row.get("summary") if isinstance(row.get("summary"), dict) else {},
+                class_progress=[
+                    AutoAnnotateClassProgress(
+                        class_name=str(cp.get("class_name", "")),
+                        confirmed_count=int(cp.get("confirmed_count", 0) or 0),
+                        pre_detect_count=int(cp.get("pre_detect_count", 0) or 0),
+                    )
+                    for cp in cp_rows
+                    if isinstance(cp, dict) and str(cp.get("class_name", ""))
+                ],
+                message=str(row.get("message")) if row.get("message") is not None else None,
+                error_message=str(row.get("error_message"))
+                if row.get("error_message") is not None
+                else None,
+                updated_at=float(row.get("updated_at")) if row.get("updated_at") is not None else None,
+            )
+        )
+    return BenchmarkRunsResponse(project_name=safe_project_name, runs=runs)
+
+
 @app.post("/annotate/auto", response_model=AutoAnnotateResponse)
 def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
     if payload.threshold < 0.0 or payload.threshold > 1.0:
@@ -1991,12 +2099,22 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
     if payload.roi_size is not None and payload.roi_size <= 0:
         raise HTTPException(status_code=400, detail="roi_size must be > 0")
     progress_id = (payload.progress_id or "").strip()
+    run_id = progress_id or f"auto-{int(time.time() * 1000)}-{uuid4().hex[:8]}"
     try:
         _read_image_bgr(payload.image_id)
     except FileNotFoundError:
         raise HTTPException(status_code=400, detail="invalid image_id")
     except ValueError:
         raise HTTPException(status_code=400, detail="failed to read image")
+
+    method = payload.method
+    if payload.mode in ("auto", "manual"):
+        method = "scaled_templates" if payload.mode == "manual" else "combined"
+    effective_scale_min = payload.scale_min or DEFAULT_SCALE_MIN
+    effective_scale_max = payload.scale_max or DEFAULT_SCALE_MAX
+    effective_scale_steps = payload.scale_steps or DEFAULT_SCALE_STEPS
+    effective_roi_size = payload.roi_size or 200
+    effective_stride = payload.stride
 
     project_templates = templates_cache.get(payload.project)
     if project_templates is None:
@@ -2007,10 +2125,23 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
             k: v for k, v in project_templates.items() if k in set(payload.class_filter)
         }
         project_templates = filtered
+    template_selection_seed = int(
+        hashlib.sha1(run_id.encode("utf-8")).hexdigest()[:12], 16
+    )
+    template_rng = random.Random(template_selection_seed)
     project_templates = _cap_templates_per_class_random(
         project_templates,
         AUTO_MAX_TEMPLATES_PER_CLASS,
+        rng=template_rng,
     )
+    selected_template_count_by_class = {
+        class_name: len(items) for class_name, items in project_templates.items()
+    }
+    template_selection_digest = _template_selection_digest(project_templates)
+    template_selection_preview_by_class = {
+        class_name: [t.template_name for t in sorted(items, key=lambda x: x.template_name)[:8]]
+        for class_name, items in project_templates.items()
+    }
     class_total_map = {k: len(v) for k, v in project_templates.items()}
     class_runtime_map = {
         class_name: {"class_name": class_name, "confirmed_count": 0, "pre_detect_count": 0}
@@ -2041,8 +2172,58 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
     else:
         image_path = _resolve_any_image_path(payload.image_id)
 
+    mode_label = (
+        "Fusion Mode"
+        if method == "combined"
+        else "Equal Scale Expand Mode"
+        if method == "scaled_templates"
+        else "Global Precision Mode"
+    )
+    benchmark_project_name = (payload.project_name or "").strip()
+    benchmark_started_at = time.time()
+    if benchmark_project_name:
+        _append_benchmark_run(
+            benchmark_project_name,
+            {
+                "run_id": run_id,
+                "status": "running",
+                "project_name": benchmark_project_name,
+                "image_id": payload.image_id,
+                "image_key": payload.image_key,
+                "method": method,
+                "mode_label": mode_label,
+                "started_at": benchmark_started_at,
+                "finished_at": None,
+                "duration_ms": None,
+                "threshold": payload.threshold,
+                "params": {
+                    "threshold": payload.threshold,
+                    "class_filter": payload.class_filter or [],
+                    "scale_min": payload.scale_min,
+                    "scale_max": payload.scale_max,
+                    "scale_steps": payload.scale_steps,
+                    "stride": payload.stride,
+                    "roi_size": payload.roi_size,
+                    "effective_scale_min": effective_scale_min,
+                    "effective_scale_max": effective_scale_max,
+                    "effective_scale_steps": effective_scale_steps,
+                    "effective_stride": effective_stride,
+                    "effective_roi_size": effective_roi_size,
+                    "auto_max_templates_per_class": AUTO_MAX_TEMPLATES_PER_CLASS,
+                    "template_selection_seed": template_selection_seed,
+                    "selected_template_count_by_class": selected_template_count_by_class,
+                    "selected_template_digest": template_selection_digest,
+                    "selected_template_preview_by_class": template_selection_preview_by_class,
+                },
+                "summary": {},
+                "class_progress": [],
+                "message": "準備中",
+                "error_message": None,
+                "updated_at": benchmark_started_at,
+            },
+        )
+
     try:
-        method = payload.method
         core_total = 1
 
         def _progress(current: int, total: int, class_name: str, hit_count: int) -> None:
@@ -2061,22 +2242,29 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                     class_progress=list(class_runtime_map.values()),
                     message="検出中",
                 )
-
-        if payload.mode in ("auto", "manual"):
-            method = "scaled_templates" if payload.mode == "manual" else "combined"
+            if benchmark_project_name:
+                _update_benchmark_run(
+                    benchmark_project_name,
+                    run_id,
+                    {
+                        "status": "running",
+                        "class_progress": list(class_runtime_map.values()),
+                        "message": "検出中",
+                    },
+                )
         if method == "scaled_templates":
             result = annotate_all_manual(
                 image_path=image_path,
                 templates=project_templates,
                 threshold=payload.threshold,
                 output_format="coco",
-                roi_size=payload.roi_size or 200,
-                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
-                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
-                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
-                stride=payload.stride,
+                roi_size=effective_roi_size,
+                scale_min=effective_scale_min,
+                scale_max=effective_scale_max,
+                scale_steps=effective_scale_steps,
+                stride=effective_stride,
                 scale_order="center_out",
-                progress_callback=_progress if progress_id else None,
+                progress_callback=_progress if (progress_id or benchmark_project_name) else None,
             )
         elif method == "scaled_templates_beta":
             result = annotate_all_global_precision(
@@ -2084,10 +2272,10 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 templates=project_templates,
                 threshold=payload.threshold,
                 output_format="coco",
-                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
-                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
-                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
-                progress_callback=_progress if progress_id else None,
+                scale_min=effective_scale_min,
+                scale_max=effective_scale_max,
+                scale_steps=effective_scale_steps,
+                progress_callback=_progress if (progress_id or benchmark_project_name) else None,
             )
         else:
             result = annotate_all(
@@ -2095,16 +2283,28 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 templates=project_templates,
                 threshold=payload.threshold,
                 output_format="coco",
-                roi_size=payload.roi_size or 200,
-                scale_min=payload.scale_min or DEFAULT_SCALE_MIN,
-                scale_max=payload.scale_max or DEFAULT_SCALE_MAX,
-                scale_steps=payload.scale_steps or DEFAULT_SCALE_STEPS,
-                stride=payload.stride,
-                progress_callback=_progress if progress_id else None,
+                roi_size=effective_roi_size,
+                scale_min=effective_scale_min,
+                scale_max=effective_scale_max,
+                scale_steps=effective_scale_steps,
+                stride=effective_stride,
+                progress_callback=_progress if (progress_id or benchmark_project_name) else None,
             )
     except Exception as exc:
         if progress_id:
             _set_auto_progress(progress_id, status="error", current=0, total=1, message=str(exc))
+        if benchmark_project_name:
+            _update_benchmark_run(
+                benchmark_project_name,
+                run_id,
+                {
+                    "status": "error",
+                    "finished_at": time.time(),
+                    "duration_ms": max(0.0, (time.time() - benchmark_started_at) * 1000.0),
+                    "message": "失敗",
+                    "error_message": str(exc),
+                },
+            )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     confirmed = result.get("confirmed", [])
@@ -2347,6 +2547,32 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                 for row in class_progress
             ],
             message="完了",
+        )
+    if benchmark_project_name:
+        _update_benchmark_run(
+            benchmark_project_name,
+            run_id,
+            {
+                "status": "done",
+                "finished_at": time.time(),
+                "duration_ms": max(0.0, (time.time() - benchmark_started_at) * 1000.0),
+                "summary": {
+                    "added_count": added_count,
+                    "rejected_count": rejected_count,
+                    "detected_total": int(sum(int(pre_detect_by_class.get(k, 0)) for k in pre_detect_by_class.keys())),
+                    "confirmed_total": added_count,
+                },
+                "class_progress": [
+                    {
+                        "class_name": row.class_name,
+                        "confirmed_count": row.confirmed_count,
+                        "pre_detect_count": row.pre_detect_count,
+                    }
+                    for row in class_progress
+                ],
+                "message": "完了",
+                "error_message": None,
+            },
         )
 
     return AutoAnnotateResponse(
