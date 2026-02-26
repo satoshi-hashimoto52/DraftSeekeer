@@ -160,6 +160,7 @@ export default function App() {
     dx: 0,
     dy: 0,
   });
+  const benchmarkComparePopupRef = useRef<HTMLDivElement | null>(null);
   const [projectStatsByName, setProjectStatsByName] = useState<Record<string, ProjectAnnotationStatsResponse>>({});
   const [projectStatsLoadingName, setProjectStatsLoadingName] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState<string>("");
@@ -4454,6 +4455,7 @@ export default function App() {
           />
           <div
             className="panelShell"
+            ref={benchmarkComparePopupRef}
             style={{
               position: "fixed",
               left: "50%",
@@ -4706,16 +4708,15 @@ export default function App() {
                   if (!benchmarkCompareDragRef.current.active) return;
                   const vw = window.innerWidth;
                   const vh = window.innerHeight;
-                  const popupW = Math.min(BENCHMARK_COMPARE_POPUP_W, vw - 24);
-                  const popupH = Math.min(BENCHMARK_COMPARE_POPUP_H, vh - 24);
+                  const popupRect = benchmarkComparePopupRef.current?.getBoundingClientRect();
+                  const popupW = popupRect?.width ?? Math.min(BENCHMARK_COMPARE_POPUP_W, vw - 24);
                   const nextLeft = Math.max(
                     12,
                     Math.min(vw - popupW - 12, ev.clientX - benchmarkCompareDragRef.current.dx)
                   );
-                  const nextTop = Math.max(
-                    12,
-                    Math.min(vh - popupH - 12, ev.clientY - benchmarkCompareDragRef.current.dy)
-                  );
+                  // Allow moving toward the lower UI area by clamping with a loose bound
+                  // (keep header reachable while permitting most of the panel to go below viewport).
+                  const nextTop = Math.max(8, Math.min(vh - 56, ev.clientY - benchmarkCompareDragRef.current.dy));
                   setBenchmarkComparePopupPos({ left: nextLeft, top: nextTop });
                 };
                 const onUp = () => {
