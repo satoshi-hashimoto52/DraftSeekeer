@@ -33,6 +33,7 @@ import {
   autoAnnotate,
   fetchAutoAnnotateProgress,
   fetchBenchmarkRuns,
+  deleteBenchmarkRun,
   fetchProjectAnnotationStats,
   shutdownApp,
   BenchmarkRunRecord,
@@ -184,7 +185,7 @@ export default function App() {
   const [advancedTab, setAdvancedTab] = useState<"params" | "classes">("params");
   const [showDebug, setShowDebug] = useState<boolean>(false);
   const [debugPanelTab, setDebugPanelTab] = useState<DebugPanelTab>("follow");
-  const [classCardFilter, setClassCardFilter] = useState<"all" | "enabled">("all");
+  const [classCardFilter, setClassCardFilter] = useState<"all" | "enabled">("enabled");
   const [showCommonSettings, setShowCommonSettings] = useState<boolean>(true);
   const [isCanvasInteracting, setIsCanvasInteracting] = useState<boolean>(false);
   const interactionTimeoutRef = useRef<number | null>(null);
@@ -1512,6 +1513,7 @@ export default function App() {
       setSelectedCandidateId(null);
       setAnnotations([]);
       setSelectedAnnotationId(null);
+      setClassCardFilter("enabled");
       const storedColors = loadColorMapForProject(projectName);
       if (storedColors) {
         setColorMap((prev) => {
@@ -2614,6 +2616,26 @@ export default function App() {
     setAutoClassFilter(pClassFilter);
   };
 
+  const handleDeleteSelectedBenchmarkRuns = async () => {
+    if (!datasetId || benchmarkSelectedRunIds.length === 0) return;
+    if (!window.confirm(`選択した${benchmarkSelectedRunIds.length}件のベンチマーク履歴を削除しますか？`)) {
+      return;
+    }
+    setBenchmarkError(null);
+    try {
+      for (const runId of benchmarkSelectedRunIds) {
+        await deleteBenchmarkRun(datasetId, runId);
+      }
+      setBenchmarkSelectedRunIds([]);
+      if (benchmarkOverlayRunId && benchmarkSelectedRunIds.includes(benchmarkOverlayRunId)) {
+        setBenchmarkOverlayRunId(null);
+      }
+      await refreshBenchmarkRuns(datasetId);
+    } catch (err) {
+      setBenchmarkError(err instanceof Error ? err.message : "ベンチマーク履歴の削除に失敗しました");
+    }
+  };
+
   const stopAutoProgressPolling = () => {
     if (autoProgressPollRef.current !== null) {
       window.clearInterval(autoProgressPollRef.current);
@@ -2658,6 +2680,28 @@ export default function App() {
     if (!imageId || !datasetId || !datasetSelectedName || !project) {
       setError("画像またはプロジェクトが選択されていません");
       return;
+    }
+    if (annotations.length > 0) {
+      const ok = window.confirm(
+        `現在の確定アノテーション ${annotations.length} 件を削除して、全自動アノテーションを実行しますか？`
+      );
+      if (!ok) {
+        return;
+      }
+      try {
+        await saveAnnotations({
+          project_name: datasetId,
+          image_key: datasetSelectedName,
+          annotations: [],
+        });
+        setAnnotations([]);
+        setSelectedAnnotationId(null);
+        setCheckedAnnotationIds([]);
+        setLastAutoAddedIds([]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "既存アノテーションの削除に失敗しました");
+        return;
+      }
     }
     setError(null);
     setAutoRunning(true);
@@ -7900,15 +7944,26 @@ export default function App() {
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954" }}>ベンチマーク履歴</div>
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => datasetId && refreshBenchmarkRuns(datasetId)}
-                          disabled={!datasetId || benchmarkLoading}
-                          style={{ height: 26, padding: "0 8px", fontSize: 11 }}
-                        >
-                          更新
-                        </button>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={handleDeleteSelectedBenchmarkRuns}
+                            disabled={!datasetId || benchmarkSelectedRunIds.length === 0}
+                            style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+                          >
+                            選択削除
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => datasetId && refreshBenchmarkRuns(datasetId)}
+                            disabled={!datasetId || benchmarkLoading}
+                            style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+                          >
+                            更新
+                          </button>
+                        </div>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto auto", gap: 6, alignItems: "center" }}>
                         <select

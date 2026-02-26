@@ -268,6 +268,16 @@ def _update_benchmark_run(project_name: str, run_id: str, patch: Dict[str, objec
             _save_benchmark_runs(project_name, runs)
 
 
+def _delete_benchmark_run(project_name: str, run_id: str) -> bool:
+    with BENCHMARK_STORE_LOCK:
+        runs = _load_benchmark_runs(project_name)
+        next_runs = [row for row in runs if str(row.get("run_id", "")) != run_id]
+        if len(next_runs) == len(runs):
+            return False
+        _save_benchmark_runs(project_name, next_runs)
+        return True
+
+
 def _load_matching_table(dataset_dir: Path) -> List[dict]:
     table_path = dataset_dir / "matching_table.json"
     if not table_path.exists():
@@ -2100,6 +2110,15 @@ def get_benchmark_runs(project_name: str) -> BenchmarkRunsResponse:
             )
         )
     return BenchmarkRunsResponse(project_name=safe_project_name, runs=runs)
+
+
+@app.delete("/benchmarks/{project_name}/{run_id}")
+def delete_benchmark_run(project_name: str, run_id: str) -> Dict[str, object]:
+    safe_project_name = Path(project_name).name
+    deleted = _delete_benchmark_run(safe_project_name, str(run_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="benchmark run not found")
+    return {"ok": True, "project_name": safe_project_name, "run_id": str(run_id)}
 
 
 @app.post("/annotate/auto", response_model=AutoAnnotateResponse)

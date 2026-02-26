@@ -362,6 +362,17 @@ export async function fetchBenchmarkRuns(projectName: string): Promise<Benchmark
   return (await res.json()) as BenchmarkRunsResponse;
 }
 
+export async function deleteBenchmarkRun(projectName: string, runId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/benchmarks/${encodeURIComponent(projectName)}/${encodeURIComponent(runId)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Benchmark run delete failed");
+  }
+}
+
 export async function fetchTemplates(): Promise<ProjectTemplates[]> {
   const res = await fetch(`${API_BASE}/templates`);
   if (!res.ok) {
