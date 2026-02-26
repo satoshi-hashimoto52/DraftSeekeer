@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Annotation,
@@ -349,11 +349,13 @@ export default function App() {
   const [benchmarkRuns, setBenchmarkRuns] = useState<BenchmarkRunRecord[]>([]);
   const [benchmarkLoading, setBenchmarkLoading] = useState<boolean>(false);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
-  const [benchmarkMethodFilter, setBenchmarkMethodFilter] = useState<"all" | AutoMethod>("all");
+  const [benchmarkMethodFilter, setBenchmarkMethodFilter] = useState<"all" | AutoMethod | "top3">("all");
   const [benchmarkSelectedRunIds, setBenchmarkSelectedRunIds] = useState<string[]>([]);
   const [benchmarkDetailRunId, setBenchmarkDetailRunId] = useState<string | null>(null);
+  const [benchmarkHistoryHelpOpen, setBenchmarkHistoryHelpOpen] = useState<boolean>(false);
   const [showBenchmarkCompareModal, setShowBenchmarkCompareModal] = useState<boolean>(false);
   const [benchmarkOverlayRunId, setBenchmarkOverlayRunId] = useState<string | null>(null);
+  const [benchmarkCompareTab, setBenchmarkCompareTab] = useState<"summary" | "classes">("summary");
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressPollRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
@@ -3343,11 +3345,61 @@ export default function App() {
     setShowHomePrereqModal(false);
   };
 
+  const benchmarkRunsBaseForCurrentImage = useMemo(
+    () => benchmarkRuns.filter((row) => row.image_key === datasetSelectedName),
+    [benchmarkRuns, datasetSelectedName]
+  );
+  const rankBenchmarkRunIds = useCallback((rows: BenchmarkRunRecord[]) => {
+    const methodPriority = (method: string): number => {
+      if (method === "scaled_templates_beta") return 3; // 全域精密探索モード
+      if (method === "combined") return 2; // 二値相関統合モード
+      if (method === "scaled_templates") return 1; // ROIタイル等倍拡張モード
+      return 0;
+    };
+    return rows
+      .filter((row) => row.status === "done")
+      .map((row) => {
+        const added = Number(row.summary?.added_count ?? 0);
+        const detected = Number(row.summary?.detected_total ?? 0);
+        const rate = detected > 0 ? added / detected : Number.NEGATIVE_INFINITY;
+        const duration =
+          typeof row.duration_ms === "number" && Number.isFinite(row.duration_ms)
+            ? row.duration_ms
+            : Number.POSITIVE_INFINITY;
+        const priority = methodPriority(row.method);
+        return { runId: row.run_id, rate, added, duration, priority };
+      })
+      .sort(
+        (a, b) =>
+          b.priority - a.priority ||
+          b.rate - a.rate ||
+          b.added - a.added ||
+          a.duration - b.duration
+      )
+      .map((v) => v.runId);
+  }, []);
+  const benchmarkTopRunIdsAsc = useMemo(
+    () => rankBenchmarkRunIds(benchmarkRunsBaseForCurrentImage).slice(0, 3),
+    [benchmarkRunsBaseForCurrentImage, rankBenchmarkRunIds]
+  );
+  const benchmarkGlobalRankByRunId = useMemo(() => {
+    const ranked = rankBenchmarkRunIds(benchmarkRunsBaseForCurrentImage);
+    const out: Record<string, number> = {};
+    ranked.forEach((runId, idx) => {
+      out[runId] = idx + 1;
+    });
+    return out;
+  }, [benchmarkRunsBaseForCurrentImage, rankBenchmarkRunIds]);
   const benchmarkRunsForCurrentImage = useMemo(() => {
-    const base = benchmarkRuns.filter((row) => row.image_key === datasetSelectedName);
+    const base = benchmarkRunsBaseForCurrentImage;
+    if (benchmarkMethodFilter === "top3") {
+      return benchmarkTopRunIdsAsc
+        .map((id) => base.find((row) => row.run_id === id))
+        .filter((row): row is BenchmarkRunRecord => !!row);
+    }
     if (benchmarkMethodFilter === "all") return base;
     return base.filter((row) => row.method === benchmarkMethodFilter);
-  }, [benchmarkRuns, datasetSelectedName, benchmarkMethodFilter]);
+  }, [benchmarkRunsBaseForCurrentImage, benchmarkMethodFilter, benchmarkTopRunIdsAsc]);
   const benchmarkRunNoById = useMemo(() => {
     const map: Record<string, number> = {};
     benchmarkRunsForCurrentImage.forEach((row, idx) => {
@@ -3355,7 +3407,6 @@ export default function App() {
     });
     return map;
   }, [benchmarkRunsForCurrentImage]);
-
   useEffect(() => {
     const validIds = new Set(benchmarkRunsForCurrentImage.map((row) => row.run_id));
     setBenchmarkSelectedRunIds((prev) => prev.filter((id) => validIds.has(id)));
@@ -3369,6 +3420,15 @@ export default function App() {
     },
     [benchmarkSelectedRunIds, benchmarkRunsForCurrentImage]
   );
+  const benchmarkTopRankByRunId = useMemo(() => {
+    const out: Record<string, 1 | 2 | 3> = {};
+    benchmarkTopRunIdsAsc.forEach((runId, idx) => {
+      if (idx === 0) out[runId] = 1;
+      if (idx === 1) out[runId] = 2;
+      if (idx === 2) out[runId] = 3;
+    });
+    return out;
+  }, [benchmarkTopRunIdsAsc]);
   const benchmarkDetailRun = useMemo(
     () => benchmarkRunsForCurrentImage.find((row) => row.run_id === benchmarkDetailRunId) || null,
     [benchmarkRunsForCurrentImage, benchmarkDetailRunId]
@@ -3402,7 +3462,6 @@ export default function App() {
     if (!showBenchmarkCompareModal) {
       setBenchmarkComparePopupPos(null);
       setBenchmarkOverlayRunId(null);
-      setBenchmarkSelectedRunIds([]);
     }
   }, [showBenchmarkCompareModal]);
   const benchmarkCompareBest = useMemo(() => {
@@ -3435,10 +3494,6 @@ export default function App() {
     }
     return { bestAdded, bestRejected, bestDurationMs, classBestConfirmed };
   }, [benchmarkSelectedRuns]);
-  const benchmarkCompareGridTemplate = useMemo(
-    () => `180px repeat(${benchmarkSelectedRuns.length}, minmax(0, 1fr))`,
-    [benchmarkSelectedRuns.length]
-  );
   const getConfirmRateStyle = (confirmed: number, preDetect: number): { color: string; fontWeight: 500 | 700 } => {
     if (preDetect <= 0) return { color: "#607d8b", fontWeight: 500 };
     const rate = confirmed / preDetect;
@@ -4682,10 +4737,37 @@ export default function App() {
                 ×
               </button>
             </div>
-            <div style={{ fontSize: 12, color: "#244264", display: "grid", gap: 4 }}>
+              <div style={{ fontSize: 12, color: "#244264", display: "grid", gap: 4 }}>
               <div>run_id: {benchmarkDetailRun.run_id}</div>
               <div>image: {benchmarkDetailRun.image_key || "-"}</div>
-              <div>status: {benchmarkDetailRun.status}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>status:</span>
+                <span
+                  className="badge"
+                  style={{
+                    borderColor:
+                      benchmarkDetailRun.status === "done"
+                        ? "#a5d6a7"
+                        : benchmarkDetailRun.status === "error"
+                          ? "#ef9a9a"
+                          : "#90caf9",
+                    background:
+                      benchmarkDetailRun.status === "done"
+                        ? "#e8f5e9"
+                        : benchmarkDetailRun.status === "error"
+                          ? "#ffebee"
+                          : "#e3f2fd",
+                    color:
+                      benchmarkDetailRun.status === "done"
+                        ? "#2e7d32"
+                        : benchmarkDetailRun.status === "error"
+                          ? "#c62828"
+                          : "#1565c0",
+                  }}
+                >
+                  {benchmarkDetailRun.status}
+                </span>
+              </div>
               <div>threshold: {benchmarkDetailRun.threshold.toFixed(2)}</div>
               <div>
                 処理時間:{" "}
@@ -4693,10 +4775,7 @@ export default function App() {
                   ? `${(benchmarkDetailRun.duration_ms / 1000).toFixed(2)}s`
                   : "-"}
               </div>
-              <div>
-                追加/除外: {Number(benchmarkDetailRun.summary?.added_count || 0)} /{" "}
-                {Number(benchmarkDetailRun.summary?.rejected_count || 0)}
-              </div>
+              <div>追加: {Number(benchmarkDetailRun.summary?.added_count || 0)}</div>
             </div>
             <div style={{ border: "1px solid #d9e2ec", borderRadius: 8, padding: 8, background: "#fbfdff" }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", marginBottom: 6 }}>パラメータ</div>
@@ -4819,18 +4898,7 @@ export default function App() {
                 ×
               </button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: benchmarkCompareGridTemplate, gap: 8, alignItems: "stretch" }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "#607d8b",
-                  alignSelf: "center",
-                  paddingLeft: 2,
-                }}
-              >
-                実行ごと
-              </div>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${benchmarkSelectedRuns.length}, minmax(0, 1fr))`, gap: 8, alignItems: "stretch" }}>
               {benchmarkSelectedRuns.map((run) => (
                 <div
                   key={`cmp-${run.run_id}`}
@@ -4865,13 +4933,62 @@ export default function App() {
                         justifyContent: "center",
                       }}
                     >
-                      #{benchmarkRunNoById[run.run_id] ?? "-"}
+                      #{benchmarkRunNoById[run.run_id] ?? benchmarkGlobalRankByRunId[run.run_id] ?? "-"}
                     </span>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954" }}>{run.mode_label}</div>
                   </div>
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: "inline-grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 4,
+                      marginBottom: 6,
+                      padding: 3,
+                      borderRadius: 8,
+                      background: "rgba(226, 238, 252, 0.9)",
+                      border: "1px solid rgba(187, 206, 229, 0.9)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 24,
+                        padding: "0 8px",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        borderColor: benchmarkCompareTab === "summary" ? "#8eb8eb" : "transparent",
+                        background: benchmarkCompareTab === "summary" ? "rgba(255,255,255,0.9)" : "transparent",
+                        color: benchmarkCompareTab === "summary" ? "#0f4a83" : "#6b7f95",
+                      }}
+                      onClick={() => setBenchmarkCompareTab("summary")}
+                    >
+                      概要
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 24,
+                        padding: "0 8px",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        boxShadow: "none",
+                        borderRadius: 6,
+                        borderColor: benchmarkCompareTab === "classes" ? "#8eb8eb" : "transparent",
+                        background: benchmarkCompareTab === "classes" ? "rgba(255,255,255,0.9)" : "transparent",
+                        color: benchmarkCompareTab === "classes" ? "#0f4a83" : "#6b7f95",
+                      }}
+                      onClick={() => setBenchmarkCompareTab("classes")}
+                    >
+                      クラス別
+                    </button>
+                  </div>
                   {(() => {
                     const added = Number(run.summary?.added_count ?? 0);
-                    const rejected = Number(run.summary?.rejected_count ?? 0);
                     const detectedTotal = Number(run.summary?.detected_total ?? 0);
                     const params = run.params || {};
                     const pScaleMin = Number(params.effective_scale_min);
@@ -4881,8 +4998,6 @@ export default function App() {
                     const pStride = Number(params.effective_stride);
                     const pSeed = Number(params.template_selection_seed);
                     const isBestAdded = Number.isFinite(added) && added === benchmarkCompareBest.bestAdded;
-                    const isBestRejected =
-                      Number.isFinite(rejected) && rejected === benchmarkCompareBest.bestRejected;
                     const hasDuration =
                       typeof run.duration_ms === "number" && Number.isFinite(run.duration_ms);
                     const isBestDuration =
@@ -4890,48 +5005,108 @@ export default function App() {
                     const rate = detectedTotal > 0 ? added / detectedTotal : 0;
                     const ratePct = `${(rate * 100).toFixed(1)}%`;
                     const rateStyle = getConfirmRateStyle(added, detectedTotal);
+                    const classRows = (run.class_progress || [])
+                      .slice()
+                      .sort(
+                        (a, b) =>
+                          b.pre_detect_count - a.pre_detect_count ||
+                          b.confirmed_count - a.confirmed_count ||
+                          a.class_name.localeCompare(b.class_name)
+                      );
                     return (
                   <div style={{ fontSize: 11, color: "#385672", display: "grid", gap: 2 }}>
-                    <div>閾値: {run.threshold.toFixed(2)}</div>
-                    <div style={{ color: isBestDuration ? "#1b8f3a" : "#385672", fontWeight: isBestDuration ? 700 : 500 }}>
-                      時間:{" "}
-                      {typeof run.duration_ms === "number" ? `${(run.duration_ms / 1000).toFixed(2)}s` : "-"}
-                    </div>
-                    <div>
-                      <span style={{ color: isBestAdded ? "#1b8f3a" : "#385672", fontWeight: isBestAdded ? 700 : 500 }}>
-                        追加 {added}
-                      </span>
-                      {" / "}
-                      <span
+                    {benchmarkCompareTab === "summary" ? (
+                      <>
+                        <div>閾値: {run.threshold.toFixed(2)}</div>
+                        <div style={{ color: isBestDuration ? "#1b8f3a" : "#385672", fontWeight: isBestDuration ? 700 : 500 }}>
+                          時間:{" "}
+                          {typeof run.duration_ms === "number" ? `${(run.duration_ms / 1000).toFixed(2)}s` : "-"}
+                        </div>
+                        <div>
+                          <span style={{ color: isBestAdded ? "#1b8f3a" : "#385672", fontWeight: isBestAdded ? 700 : 500 }}>
+                            追加 {added}
+                          </span>
+                        </div>
+                        <div style={{ color: rateStyle.color, fontWeight: rateStyle.fontWeight }}>
+                          確定率 (確定/検出):{" "}
+                          {detectedTotal > 0 ? `${ratePct} (${added}/${detectedTotal})` : "-"}
+                        </div>
+                        <div>
+                          スケール(最小~最大):{" "}
+                          {Number.isFinite(pScaleMin) && Number.isFinite(pScaleMax)
+                            ? `${pScaleMin.toFixed(2)}~${pScaleMax.toFixed(2)}`
+                            : "-"}
+                        </div>
+                        <div>
+                          タイル分割: {Number.isFinite(pScaleSteps) ? Math.round(pScaleSteps) : "-"}
+                        </div>
+                        <div>
+                          ROIサイズ: {Number.isFinite(pRoi) ? Math.round(pRoi) : "-"}
+                        </div>
+                        <div>
+                          探索間隔:{" "}
+                          {Number.isFinite(pStride) && pStride > 0 ? Math.round(pStride) : "auto"}
+                        </div>
+                        <div style={{ color: "#607d8b" }}>
+                          テンプレ乱数Seed: {Number.isFinite(pSeed) ? Math.round(pSeed) : "-"}
+                        </div>
+                        <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {run.image_key || "-"}
+                        </div>
+                      </>
+                    ) : (
+                      <div
                         style={{
-                          color: isBestRejected ? "#1b8f3a" : "#385672",
-                          fontWeight: isBestRejected ? 700 : 500,
+                          border: "1px solid rgba(194, 211, 232, 0.72)",
+                          borderRadius: 6,
+                          background: "rgba(255, 255, 255, 0.46)",
+                          maxHeight: 224,
+                          overflowY: "auto",
                         }}
                       >
-                        除外 {rejected}
-                      </span>
-                    </div>
-                    <div style={{ color: rateStyle.color, fontWeight: rateStyle.fontWeight }}>
-                      CR (確定/検出):{" "}
-                      {detectedTotal > 0 ? `${ratePct} (${added}/${detectedTotal})` : "-"}
-                    </div>
-                    <div>
-                      スケール(最小~最大)/分割:{" "}
-                      {Number.isFinite(pScaleMin) && Number.isFinite(pScaleMax) && Number.isFinite(pScaleSteps)
-                        ? `${pScaleMin.toFixed(2)}~${pScaleMax.toFixed(2)} / ${Math.round(pScaleSteps)}`
-                        : "-"}
-                    </div>
-                    <div>
-                      ROIサイズ / 探索間隔:{" "}
-                      {Number.isFinite(pRoi) ? Math.round(pRoi) : "-"} /{" "}
-                      {Number.isFinite(pStride) && pStride > 0 ? Math.round(pStride) : "auto"}
-                    </div>
-                    <div style={{ color: "#607d8b" }}>
-                      テンプレ乱数Seed: {Number.isFinite(pSeed) ? Math.round(pSeed) : "-"}
-                    </div>
-                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {run.image_key || "-"}
-                    </div>
+                        {classRows.length === 0 ? (
+                          <div style={{ padding: "8px 10px", color: "#607d8b" }}>クラス別データなし</div>
+                        ) : (
+                          classRows.map((row) => {
+                            const confirmed = Number(row.confirmed_count ?? 0);
+                            const preDetect = Number(row.pre_detect_count ?? 0);
+                            const rowRate = preDetect > 0 ? confirmed / preDetect : 0;
+                            const rowStyle = getConfirmRateStyle(confirmed, preDetect);
+                            const bestConfirmed = benchmarkCompareBest.classBestConfirmed[row.class_name];
+                            const isBestClassConfirmed =
+                              typeof bestConfirmed === "number" && confirmed === bestConfirmed;
+                            return (
+                              <div
+                                key={`${run.run_id}:${row.class_name}`}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr auto",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  padding: "6px 8px",
+                                  borderBottom: "1px solid rgba(233, 241, 250, 0.9)",
+                                  fontSize: 10,
+                                  color: "#2a4463",
+                                }}
+                              >
+                                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 700 }}>
+                                  {row.class_name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontVariantNumeric: "tabular-nums",
+                                    color: isBestClassConfirmed ? "#1b8f3a" : rowStyle.color,
+                                    fontWeight: isBestClassConfirmed ? 700 : rowStyle.fontWeight,
+                                  }}
+                                >
+                                  {confirmed} / {preDetect} ({(rowRate * 100).toFixed(1)}%)
+                                </span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
                     <div
                       style={{
                         fontSize: 10,
@@ -4947,73 +5122,6 @@ export default function App() {
                   })()}
                 </div>
               ))}
-            </div>
-            <div
-              style={{
-                border: "1px solid rgba(194, 211, 232, 0.82)",
-                borderRadius: 8,
-                background: "rgba(255, 255, 255, 0.50)",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  padding: "8px 10px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#0b3954",
-                  borderBottom: "1px solid rgba(220, 231, 243, 0.88)",
-                  background: "rgba(255, 255, 255, 0.46)",
-                }}
-              >
-                クラス別比較（確定 / 検出）
-              </div>
-              <div style={{ maxHeight: 280, overflowY: "auto" }}>
-                {Array.from(
-                  new Set(
-                    benchmarkSelectedRuns.flatMap((run) => run.class_progress.map((row) => row.class_name))
-                  )
-                )
-                  .sort()
-                  .map((className) => (
-                    <div
-                      key={`cmp-row-${className}`}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: benchmarkCompareGridTemplate,
-                        gap: 8,
-                        padding: "6px 10px",
-                        borderBottom: "1px solid #f0f4f9",
-                        fontSize: 11,
-                        color: "#2a4463",
-                      }}
-                    >
-                      <span style={{ fontWeight: 700 }}>{className}</span>
-                      {benchmarkSelectedRuns.map((run) => {
-                        const row = run.class_progress.find((v) => v.class_name === className);
-                        const bestConfirmed = benchmarkCompareBest.classBestConfirmed[className];
-                        const isBestClassConfirmed =
-                          row && typeof bestConfirmed === "number" && row.confirmed_count === bestConfirmed;
-                        const confirmed = row?.confirmed_count ?? 0;
-                        const preDetect = row?.pre_detect_count ?? 0;
-                        const rate = preDetect > 0 ? confirmed / preDetect : 0;
-                        const rateStyle = getConfirmRateStyle(confirmed, preDetect);
-                        return (
-                          <span
-                            key={`cmp-val-${run.run_id}-${className}`}
-                            style={{
-                              fontVariantNumeric: "tabular-nums",
-                              color: isBestClassConfirmed ? "#1b8f3a" : rateStyle.color,
-                              fontWeight: isBestClassConfirmed ? 700 : 500,
-                            }}
-                          >
-                            {row ? `${row.confirmed_count} / ${row.pre_detect_count} (${(rate * 100).toFixed(1)}%)` : "-"}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  ))}
-              </div>
             </div>
           </div>
         </>
@@ -7971,33 +8079,93 @@ export default function App() {
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954" }}>ベンチマーク履歴</div>
+                        <div style={{ position: "relative" }}>
+                          <div
+                            style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", cursor: "help" }}
+                            onMouseEnter={() => setBenchmarkHistoryHelpOpen(true)}
+                            onMouseLeave={() => setBenchmarkHistoryHelpOpen(false)}
+                          >
+                            ベンチマーク履歴
+                          </div>
+                          {benchmarkHistoryHelpOpen && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                top: "calc(100% + 6px)",
+                                width: 330,
+                                padding: "8px 10px",
+                                borderRadius: 8,
+                                border: "1px solid #c7d6ea",
+                                background: "rgba(255,255,255,0.98)",
+                                color: "#23405f",
+                                fontSize: 11,
+                                lineHeight: 1.45,
+                                whiteSpace: "pre-line",
+                                boxShadow: "0 8px 20px rgba(10,26,46,0.16)",
+                                zIndex: 4,
+                              }}
+                            >
+                              {"順位の評価基準（履歴基準）\n1) モード優先順\n   全域精密探索 > 二値相関統合 > ROIタイル等倍拡張\n2) 同モード内は\n   確定率（確定/検出） > 追加数 > 処理時間（短い方）\n\nこの順位は比較用の評価指標です。\n実際の妥当性は、必ず画像上の実データ（BBox/確定内容）を確認してください。"}
+                            </div>
+                          )}
+                        </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <button
                             type="button"
                             className="btn"
-                            onClick={handleDeleteSelectedBenchmarkRuns}
-                            disabled={!datasetId || benchmarkSelectedRunIds.length === 0}
-                            style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+                            onClick={() => setShowBenchmarkCompareModal(true)}
+                            disabled={benchmarkSelectedRuns.length < 2}
+                            style={{
+                              height: 26,
+                              padding: "0 10px",
+                              fontSize: 11,
+                              border: "1px solid #90caf9",
+                              background: "#e3f2fd",
+                              color: "#0d47a1",
+                            }}
                           >
-                            選択削除
+                            対比（{benchmarkSelectedRuns.length}/3）
                           </button>
                           <button
                             type="button"
                             className="btn"
                             onClick={() => datasetId && refreshBenchmarkRuns(datasetId)}
                             disabled={!datasetId || benchmarkLoading}
-                            style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+                            style={{
+                              height: 26,
+                              padding: "0 8px",
+                              fontSize: 11,
+                              color: "#1565c0",
+                              borderColor: "#90caf9",
+                              background: "#e3f2fd",
+                            }}
                           >
                             更新
                           </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={handleDeleteSelectedBenchmarkRuns}
+                            disabled={!datasetId || benchmarkSelectedRunIds.length === 0}
+                            style={{
+                              height: 26,
+                              padding: "0 8px",
+                              fontSize: 11,
+                              color: "#b71c1c",
+                              borderColor: "#e57373",
+                              background: "#ffcdd2",
+                            }}
+                          >
+                            削除
+                          </button>
                         </div>
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto auto", gap: 6, alignItems: "center" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 6, alignItems: "center" }}>
                         <select
                           value={benchmarkMethodFilter}
                           onChange={(e) => {
-                            setBenchmarkMethodFilter(e.target.value as "all" | AutoMethod);
+                            setBenchmarkMethodFilter(e.target.value as "all" | AutoMethod | "top3");
                             setBenchmarkSelectedRunIds([]);
                             setBenchmarkDetailRunId(null);
                           }}
@@ -8007,32 +8175,15 @@ export default function App() {
                           <option value="combined">二値相関統合</option>
                           <option value="scaled_templates">ROIタイル等倍拡張</option>
                           <option value="scaled_templates_beta">全域精密探索</option>
+                          {benchmarkRunsBaseForCurrentImage.length > 3 && (
+                            <option value="top3" style={{ fontWeight: 700 }}>
+                              *上位のみ
+                            </option>
+                          )}
                         </select>
                         <div style={{ fontSize: 11, color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           対象画像のみ: {datasetSelectedName || "-"}
                         </div>
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => setShowBenchmarkCompareModal(true)}
-                          disabled={benchmarkSelectedRuns.length < 2}
-                          style={{ height: 28, padding: "0 10px", fontSize: 11 }}
-                        >
-                          比較（{benchmarkSelectedRuns.length}/3）
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => {
-                            if (benchmarkSelectedRuns.length === 0) return;
-                            applyBenchmarkRunToAutoForm(benchmarkSelectedRuns[0]);
-                          }}
-                          disabled={benchmarkSelectedRuns.length === 0}
-                          style={{ height: 28, padding: "0 10px", fontSize: 11 }}
-                          title="選択中の先頭1件をフォームに反映"
-                        >
-                          再実行に反映
-                        </button>
                       </div>
                       {benchmarkError && <div style={{ fontSize: 11, color: "#c62828" }}>{benchmarkError}</div>}
                       <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #d9e2ec", borderRadius: 8, background: "#fff" }}>
@@ -8046,7 +8197,8 @@ export default function App() {
                             const runNo = benchmarkRunNoById[row.run_id];
                             const ts = row.started_at ? new Date(row.started_at * 1000).toLocaleString() : "-";
                             const added = Number(row.summary?.added_count ?? 0);
-                            const rejected = Number(row.summary?.rejected_count ?? 0);
+                            const rank = benchmarkTopRankByRunId[row.run_id];
+                            const rankLabel = rank === 1 ? "Best" : rank === 2 ? "2nd" : rank === 3 ? "3rd" : null;
                             const durationSec =
                               typeof row.duration_ms === "number" && Number.isFinite(row.duration_ms)
                                 ? (row.duration_ms / 1000).toFixed(2)
@@ -8056,7 +8208,7 @@ export default function App() {
                                 key={`bench-${row.run_id}`}
                                 style={{
                                   display: "grid",
-                                  gridTemplateColumns: "18px 1fr auto auto auto",
+                                  gridTemplateColumns: "18px 1fr auto auto",
                                   alignItems: "center",
                                   gap: 6,
                                   padding: "6px 8px",
@@ -8067,6 +8219,7 @@ export default function App() {
                                 <input
                                   type="checkbox"
                                   checked={selected}
+                                  style={{ width: 16, height: 16 }}
                                   onChange={(e) => {
                                     const checked = e.target.checked;
                                     setBenchmarkSelectedRunIds((prev) => {
@@ -8090,50 +8243,43 @@ export default function App() {
                                       color: "#0b3954",
                                     }}
                                   >
-                                    <span
-                                      className="badge"
-                                      style={{
-                                        borderColor: "#bbdefb",
-                                        background: "#e3f2fd",
-                                        color: "#0d47a1",
-                                        fontWeight: 700,
-                                        minWidth: 30,
-                                        justifyContent: "center",
-                                      }}
-                                    >
+                                    <span style={{ fontWeight: 800, color: "#0d47a1", whiteSpace: "nowrap" }}>
                                       #{runNo ?? "-"}
                                     </span>
                                     <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{row.mode_label}</span>
-                                    <span style={{ color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                      {ts}
-                                    </span>
+                                    {rank && (
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          borderColor: rank === 1 ? "#ffcc80" : rank === 2 ? "#cfd8dc" : "#d7ccc8",
+                                          background: rank === 1 ? "#fff3e0" : rank === 2 ? "#f5f7fa" : "#efebe9",
+                                          color: rank === 1 ? "#ef6c00" : rank === 2 ? "#455a64" : "#6d4c41",
+                                          fontWeight: 800,
+                                        }}
+                                      >
+                                        {rankLabel}
+                                      </span>
+                                    )}
                                   </div>
                                   <div style={{ fontSize: 11, color: "#607d8b" }}>
-                                    追加 {added} / 除外 {rejected} / {durationSec}s / th {row.threshold.toFixed(2)}
+                                    {ts}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "#607d8b" }}>
+                                    Add: {added} Time: {durationSec}s th: {row.threshold.toFixed(2)}
                                   </div>
                                 </div>
-                                <span
-                                  className="badge"
+                                <button
+                                  type="button"
+                                  className="btn"
                                   style={{
-                                    borderColor: row.status === "done" ? "#a5d6a7" : row.status === "error" ? "#ef9a9a" : "#90caf9",
-                                    background: row.status === "done" ? "#e8f5e9" : row.status === "error" ? "#ffebee" : "#e3f2fd",
-                                    color: row.status === "done" ? "#2e7d32" : row.status === "error" ? "#c62828" : "#1565c0",
+                                    height: 24,
+                                    minWidth: 40,
+                                    padding: "0 8px",
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    borderRadius: 6,
+                                    border: "1px solid #90caf9",
                                   }}
-                                >
-                                  {row.status}
-                                </span>
-                                <button
-                                  type="button"
-                                  className="btn"
-                                  style={{ height: 24, padding: "0 8px", fontSize: 10 }}
-                                  onClick={() => setBenchmarkDetailRunId(row.run_id)}
-                                >
-                                  詳細
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn"
-                                  style={{ height: 24, padding: "0 8px", fontSize: 10 }}
                                   onClick={() => applyBenchmarkRunToAutoForm(row)}
                                 >
                                   反映
