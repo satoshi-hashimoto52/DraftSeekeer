@@ -58,6 +58,12 @@ type Props = {
   roiOverlayDetectionSeq?: number;
   showRoiArea: boolean;
   interactionMode: "click" | "hover";
+  benchmarkOverlayBoxes?: {
+    class_name: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    score: number | null;
+  }[];
+  benchmarkOverlayRunId?: string | null;
 };
 
 export type ImageCanvasHandle = {
@@ -107,6 +113,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
   roiOverlayDetectionSeq,
   showRoiArea,
   interactionMode,
+  benchmarkOverlayBoxes = [],
+  benchmarkOverlayRunId = null,
 }: Props,
   ref
 ) {
@@ -809,6 +817,35 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
       });
       }
 
+      if (benchmarkOverlayRunId && benchmarkOverlayBoxes.length > 0) {
+        benchmarkOverlayBoxes.forEach((item) => {
+          const color = colorMap[item.class_name] || "#1976d2";
+          drawBox(
+            item.bbox.x,
+            item.bbox.y,
+            item.bbox.w,
+            item.bbox.h,
+            color,
+            baseLine * 1.9,
+            true,
+            0.9,
+            0.04
+          );
+          const scoreText =
+            typeof item.score === "number" && Number.isFinite(item.score)
+              ? ` (${item.score.toFixed(3)})`
+              : "";
+          drawLabel(
+            item.bbox.x,
+            item.bbox.y,
+            `BM ${item.class_name}${scoreText}`,
+            color,
+            0.95,
+            "rgba(10, 16, 26, 0.30)"
+          );
+        });
+      }
+
       if (!isDragging && editMode && editablePolygon && editablePolygon.length > 0) {
         const color = "#1a73e8";
         drawPolygon(editablePolygon, color, baseLine * 2.4, 1);
@@ -1102,6 +1139,8 @@ export default forwardRef<ImageCanvasHandle, Props>(function ImageCanvas(
     debugMatchedTemplateBBox?.y,
     debugMatchedTemplateBBox?.w,
     debugMatchedTemplateBBox?.h,
+    benchmarkOverlayBoxes,
+    benchmarkOverlayRunId,
   ]);
 
   const schedulePanZoomUpdate = () => {

@@ -352,6 +352,7 @@ export default function App() {
   const [benchmarkSelectedRunIds, setBenchmarkSelectedRunIds] = useState<string[]>([]);
   const [benchmarkDetailRunId, setBenchmarkDetailRunId] = useState<string | null>(null);
   const [showBenchmarkCompareModal, setShowBenchmarkCompareModal] = useState<boolean>(false);
+  const [benchmarkOverlayRunId, setBenchmarkOverlayRunId] = useState<string | null>(null);
   const [lastAutoAddedIds, setLastAutoAddedIds] = useState<string[]>([]);
   const autoProgressPollRef = useRef<number | null>(null);
   const [checkedAnnotationIds, setCheckedAnnotationIds] = useState<string[]>([]);
@@ -3321,9 +3322,36 @@ export default function App() {
     () => benchmarkRunsForCurrentImage.find((row) => row.run_id === benchmarkDetailRunId) || null,
     [benchmarkRunsForCurrentImage, benchmarkDetailRunId]
   );
+  const benchmarkOverlayBoxes = useMemo(() => {
+    if (!benchmarkOverlayRunId) return [];
+    const run = benchmarkRunsForCurrentImage.find((row) => row.run_id === benchmarkOverlayRunId);
+    if (!run || !Array.isArray(run.confirmed_annotations)) return [];
+    return run.confirmed_annotations
+      .filter(
+        (item) =>
+          item &&
+          item.bbox &&
+          Number.isFinite(item.bbox.x) &&
+          Number.isFinite(item.bbox.y) &&
+          Number.isFinite(item.bbox.w) &&
+          Number.isFinite(item.bbox.h)
+      )
+      .map((item) => ({
+        class_name: item.class_name,
+        bbox: {
+          x: Number(item.bbox.x),
+          y: Number(item.bbox.y),
+          w: Number(item.bbox.w),
+          h: Number(item.bbox.h),
+        },
+        score: typeof item.score === "number" ? item.score : null,
+      }));
+  }, [benchmarkOverlayRunId, benchmarkRunsForCurrentImage]);
   useEffect(() => {
     if (!showBenchmarkCompareModal) {
       setBenchmarkComparePopupPos(null);
+      setBenchmarkOverlayRunId(null);
+      setBenchmarkSelectedRunIds([]);
     }
   }, [showBenchmarkCompareModal]);
   const benchmarkCompareBest = useMemo(() => {
@@ -4755,15 +4783,31 @@ export default function App() {
               {benchmarkSelectedRuns.map((run) => (
                 <div
                   key={`cmp-${run.run_id}`}
+                  onClick={() =>
+                    setBenchmarkOverlayRunId((prev) => (prev === run.run_id ? null : run.run_id))
+                  }
                   style={{
-                    border: "1px solid rgba(194, 211, 232, 0.82)",
+                    border:
+                      benchmarkOverlayRunId === run.run_id
+                        ? "1px solid rgba(25,118,210,0.95)"
+                        : "1px solid rgba(194, 211, 232, 0.82)",
                     borderRadius: 8,
                     padding: 8,
                     background: "rgba(255, 255, 255, 0.52)",
                     minWidth: 0,
+                    cursor: "pointer",
+                    boxShadow:
+                      benchmarkOverlayRunId === run.run_id
+                        ? "0 0 0 1px rgba(25,118,210,0.35), 0 6px 14px rgba(25,118,210,0.18)"
+                        : "none",
                   }}
                 >
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", marginBottom: 4 }}>{run.mode_label}</div>
+                  {benchmarkOverlayRunId === run.run_id && (
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#1565c0", marginBottom: 3 }}>
+                      画像表示中
+                    </div>
+                  )}
                   {(() => {
                     const added = Number(run.summary?.added_count ?? 0);
                     const rejected = Number(run.summary?.rejected_count ?? 0);
@@ -5736,7 +5780,7 @@ export default function App() {
                   imageUrl={imageUrl}
                   candidates={candidates}
                   selectedCandidateId={selectedCandidateId}
-                  annotations={canvasAnnotations}
+                  annotations={benchmarkOverlayRunId ? [] : canvasAnnotations}
                   selectedAnnotationId={selectedAnnotationId}
                   colorMap={colorMap}
                   showCandidates={showCandidates}
@@ -5846,10 +5890,12 @@ export default function App() {
                 }
                 roiOverlayPoint={showDebug ? null : lastClick}
                 roiOverlaySize={showDebug ? undefined : roiSize}
-                roiOverlayConfidence={roiOverlayConfidence}
+                  roiOverlayConfidence={roiOverlayConfidence}
                 roiOverlayDetectionSeq={roiOverlayDetectionSeq}
                   showRoiArea={showRoiArea}
                   interactionMode={detectionMode}
+                  benchmarkOverlayBoxes={benchmarkOverlayBoxes}
+                  benchmarkOverlayRunId={benchmarkOverlayRunId}
                 />
                 {showHints && imageUrl && (
                   <div

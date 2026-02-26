@@ -369,6 +369,7 @@ class BenchmarkRunRecord(BaseModel):
     params: Dict[str, object] = Field(default_factory=dict)
     summary: Dict[str, object] = Field(default_factory=dict)
     class_progress: List[AutoAnnotateClassProgress] = Field(default_factory=list)
+    confirmed_annotations: List[AutoAnnotationItem] = Field(default_factory=list)
     message: Optional[str] = None
     error_message: Optional[str] = None
     updated_at: Optional[float] = None

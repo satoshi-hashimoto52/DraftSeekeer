@@ -307,6 +307,13 @@ export type BenchmarkRunRecord = {
     confirmed_count: number;
     pre_detect_count: number;
   }[];
+  confirmed_annotations?: {
+    class_name: string;
+    bbox: { x: number; y: number; w: number; h: number };
+    score: number;
+    template_name?: string | null;
+    scale?: number | null;
+  }[];
   message?: string | null;
   error_message?: string | null;
   updated_at?: number | null;

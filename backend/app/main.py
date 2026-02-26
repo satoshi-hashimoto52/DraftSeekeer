@@ -2074,6 +2074,24 @@ def get_benchmark_runs(project_name: str) -> BenchmarkRunsResponse:
                     for cp in cp_rows
                     if isinstance(cp, dict) and str(cp.get("class_name", ""))
                 ],
+                confirmed_annotations=[
+                    AutoAnnotationItem(
+                        class_name=str(item.get("class_name", "")),
+                        bbox={
+                            "x": float((item.get("bbox") or {}).get("x", 0)),
+                            "y": float((item.get("bbox") or {}).get("y", 0)),
+                            "w": float((item.get("bbox") or {}).get("w", 0)),
+                            "h": float((item.get("bbox") or {}).get("h", 0)),
+                        },
+                        score=float(item.get("score", 0.0) or 0.0),
+                        template_name=str(item.get("template_name"))
+                        if item.get("template_name") is not None
+                        else None,
+                        scale=float(item.get("scale")) if item.get("scale") is not None else None,
+                    )
+                    for item in (row.get("confirmed_annotations") or [])
+                    if isinstance(item, dict) and str(item.get("class_name", ""))
+                ],
                 message=str(row.get("message")) if row.get("message") is not None else None,
                 error_message=str(row.get("error_message"))
                 if row.get("error_message") is not None
@@ -2569,6 +2587,21 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
                         "pre_detect_count": row.pre_detect_count,
                     }
                     for row in class_progress
+                ],
+                "confirmed_annotations": [
+                    {
+                        "class_name": c["class_name"],
+                        "bbox": {
+                            "x": c["bbox"][0],
+                            "y": c["bbox"][1],
+                            "w": c["bbox"][2],
+                            "h": c["bbox"][3],
+                        },
+                        "score": float(c.get("final_score", 0.0) or 0.0),
+                        "template_name": c.get("template_name"),
+                        "scale": c.get("scale"),
+                    }
+                    for c in confirmed
                 ],
                 "message": "完了",
                 "error_message": None,
