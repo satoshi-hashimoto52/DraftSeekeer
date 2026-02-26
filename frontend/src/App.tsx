@@ -3348,6 +3348,13 @@ export default function App() {
     if (benchmarkMethodFilter === "all") return base;
     return base.filter((row) => row.method === benchmarkMethodFilter);
   }, [benchmarkRuns, datasetSelectedName, benchmarkMethodFilter]);
+  const benchmarkRunNoById = useMemo(() => {
+    const map: Record<string, number> = {};
+    benchmarkRunsForCurrentImage.forEach((row, idx) => {
+      map[row.run_id] = idx + 1;
+    });
+    return map;
+  }, [benchmarkRunsForCurrentImage]);
 
   useEffect(() => {
     const validIds = new Set(benchmarkRunsForCurrentImage.map((row) => row.run_id));
@@ -3356,10 +3363,10 @@ export default function App() {
   }, [benchmarkRunsForCurrentImage]);
 
   const benchmarkSelectedRuns = useMemo(
-    () =>
-      benchmarkSelectedRunIds
-        .map((id) => benchmarkRunsForCurrentImage.find((row) => row.run_id === id))
-        .filter((row): row is BenchmarkRunRecord => Boolean(row)),
+    () => {
+      const selectedSet = new Set(benchmarkSelectedRunIds);
+      return benchmarkRunsForCurrentImage.filter((row) => selectedSet.has(row.run_id));
+    },
     [benchmarkSelectedRunIds, benchmarkRunsForCurrentImage]
   );
   const benchmarkDetailRun = useMemo(
@@ -4572,18 +4579,18 @@ export default function App() {
               <div>
                 <div style={{ fontWeight: 700, color: "#12385f" }}>3. パラメータ条件</div>
                 <div>scale_min / scale_max / scale_steps は出現倍率帯を過不足なくカバーすること。</div>
-                <div>閾値はモード別に管理（Fusion: 再現率寄り / Expand: バランス / Global Precision: 高閾値寄り）。</div>
-                <div>Global Precision は 0.8 以上を推奨。Fusion/Expand では ROI が対象を十分含むサイズであること。</div>
+                <div>閾値はモード別に管理（二値相関統合: 再現率寄り / ROIタイル等倍拡張: バランス / 全域精密探索: 高閾値寄り）。</div>
+                <div>全域精密探索は 0.8 以上を推奨。二値相関統合/ROIタイル等倍拡張では ROI が対象を十分含むサイズであること。</div>
               </div>
               <div>
                 <div style={{ fontWeight: 700, color: "#12385f" }}>4. データ分布条件</div>
-                <div>余白量の一貫性: 特に Global Precision は余白面積の影響を強く受けます。</div>
+                <div>余白量の一貫性: 特に全域精密探索は余白面積の影響を強く受けます。</div>
                 <div>ノイズ環境の一貫性: 影・汚れ・罫線密度が急変すると閾値最適点がずれます。</div>
                 <div>クラス頻度の偏り: 極端な不均衡は誤検出・見逃しの偏りを増やします。</div>
               </div>
               <div>
                 <div style={{ fontWeight: 700, color: "#12385f" }}>5. 運用条件</div>
-                <div>モード運用: 初期探索=Fusion / 通常運用=Expand / 最終高精度=Global Precision。</div>
+                <div>モード運用: 初期探索=二値相関統合 / 通常運用=ROIタイル等倍拡張 / 最終高精度=全域精密探索。</div>
                 <div>代表セット評価: 本番前に precision / recall / 処理時間を固定計測すること。</div>
                 <div>閾値管理: 図面タイプ単位でプリセット化（全案件一律閾値は非推奨）。</div>
               </div>
@@ -4846,12 +4853,22 @@ export default function App() {
                         : "none",
                   }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954", marginBottom: 4 }}>{run.mode_label}</div>
-                  {benchmarkOverlayRunId === run.run_id && (
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "#1565c0", marginBottom: 3 }}>
-                      画像表示中
-                    </div>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span
+                      className="badge"
+                      style={{
+                        borderColor: "#bbdefb",
+                        background: "#e3f2fd",
+                        color: "#0d47a1",
+                        fontWeight: 700,
+                        minWidth: 30,
+                        justifyContent: "center",
+                      }}
+                    >
+                      #{benchmarkRunNoById[run.run_id] ?? "-"}
+                    </span>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#0b3954" }}>{run.mode_label}</div>
+                  </div>
                   {(() => {
                     const added = Number(run.summary?.added_count ?? 0);
                     const rejected = Number(run.summary?.rejected_count ?? 0);
@@ -4875,14 +4892,14 @@ export default function App() {
                     const rateStyle = getConfirmRateStyle(added, detectedTotal);
                     return (
                   <div style={{ fontSize: 11, color: "#385672", display: "grid", gap: 2 }}>
-                    <div>threshold: {run.threshold.toFixed(2)}</div>
+                    <div>閾値: {run.threshold.toFixed(2)}</div>
                     <div style={{ color: isBestDuration ? "#1b8f3a" : "#385672", fontWeight: isBestDuration ? 700 : 500 }}>
-                      time:{" "}
+                      時間:{" "}
                       {typeof run.duration_ms === "number" ? `${(run.duration_ms / 1000).toFixed(2)}s` : "-"}
                     </div>
                     <div>
                       <span style={{ color: isBestAdded ? "#1b8f3a" : "#385672", fontWeight: isBestAdded ? 700 : 500 }}>
-                        add {added}
+                        追加 {added}
                       </span>
                       {" / "}
                       <span
@@ -4891,28 +4908,39 @@ export default function App() {
                           fontWeight: isBestRejected ? 700 : 500,
                         }}
                       >
-                        rej {rejected}
+                        除外 {rejected}
                       </span>
                     </div>
                     <div style={{ color: rateStyle.color, fontWeight: rateStyle.fontWeight }}>
-                      確定率: {detectedTotal > 0 ? `${added}/${detectedTotal} (${ratePct})` : "-"}
+                      CR (確定/検出):{" "}
+                      {detectedTotal > 0 ? `${ratePct} (${added}/${detectedTotal})` : "-"}
                     </div>
                     <div>
-                      scale(min~max)/steps:{" "}
+                      スケール(最小~最大)/分割:{" "}
                       {Number.isFinite(pScaleMin) && Number.isFinite(pScaleMax) && Number.isFinite(pScaleSteps)
                         ? `${pScaleMin.toFixed(2)}~${pScaleMax.toFixed(2)} / ${Math.round(pScaleSteps)}`
                         : "-"}
                     </div>
                     <div>
-                      roi_size / stride:{" "}
+                      ROIサイズ / 探索間隔:{" "}
                       {Number.isFinite(pRoi) ? Math.round(pRoi) : "-"} /{" "}
                       {Number.isFinite(pStride) && pStride > 0 ? Math.round(pStride) : "auto"}
                     </div>
                     <div style={{ color: "#607d8b" }}>
-                      template_seed: {Number.isFinite(pSeed) ? Math.round(pSeed) : "-"}
+                      テンプレ乱数Seed: {Number.isFinite(pSeed) ? Math.round(pSeed) : "-"}
                     </div>
                     <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {run.image_key || "-"}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: "#1565c0",
+                        minHeight: 14,
+                      }}
+                    >
+                      {benchmarkOverlayRunId === run.run_id ? "画像表示中" : ""}
                     </div>
                   </div>
                     );
@@ -6101,10 +6129,10 @@ export default function App() {
                       </div>
                       <span className="autoCloudMode">
                         {autoMethod === "combined"
-                          ? "Fusion Mode"
+                          ? "二値相関統合モード"
                           : autoMethod === "scaled_templates"
-                            ? "Equal Scale Expand Mode"
-                            : "Global Precision Mode"}
+                            ? "ROIタイル等倍拡張モード"
+                            : "全域精密探索モード"}
                       </span>
                       <div className="autoCloudStatus">
                         実行中
@@ -6731,7 +6759,7 @@ export default function App() {
                         }}
                       >
                         <span style={{ fontSize: 11, color: "#666" }}>
-                          {autoMethodRoiUnused ? "Global Precisionでは未使用" : "手動/自動で共通"}
+                          {autoMethodRoiUnused ? "全域精密探索では未使用" : "手動/自動で共通"}
                         </span>
                         <div className="hintText" style={{ justifyContent: "flex-end" }}>
                           <span className="badge">推奨 200–600</span>
@@ -7976,9 +8004,9 @@ export default function App() {
                           style={{ height: 28, fontSize: 11 }}
                         >
                           <option value="all">全モード</option>
-                          <option value="combined">Fusion</option>
-                          <option value="scaled_templates">Expand</option>
-                          <option value="scaled_templates_beta">Global Precision</option>
+                          <option value="combined">二値相関統合</option>
+                          <option value="scaled_templates">ROIタイル等倍拡張</option>
+                          <option value="scaled_templates_beta">全域精密探索</option>
                         </select>
                         <div style={{ fontSize: 11, color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           対象画像のみ: {datasetSelectedName || "-"}
@@ -8015,6 +8043,7 @@ export default function App() {
                         ) : (
                           benchmarkRunsForCurrentImage.slice(0, 80).map((row) => {
                             const selected = benchmarkSelectedRunIds.includes(row.run_id);
+                            const runNo = benchmarkRunNoById[row.run_id];
                             const ts = row.started_at ? new Date(row.started_at * 1000).toLocaleString() : "-";
                             const added = Number(row.summary?.added_count ?? 0);
                             const rejected = Number(row.summary?.rejected_count ?? 0);
@@ -8061,6 +8090,19 @@ export default function App() {
                                       color: "#0b3954",
                                     }}
                                   >
+                                    <span
+                                      className="badge"
+                                      style={{
+                                        borderColor: "#bbdefb",
+                                        background: "#e3f2fd",
+                                        color: "#0d47a1",
+                                        fontWeight: 700,
+                                        minWidth: 30,
+                                        justifyContent: "center",
+                                      }}
+                                    >
+                                      #{runNo ?? "-"}
+                                    </span>
                                     <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{row.mode_label}</span>
                                     <span style={{ color: "#607d8b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                       {ts}
@@ -8138,30 +8180,30 @@ export default function App() {
                           {[
                             {
                               key: "combined",
-                              label: "Fusion Mode",
-                              help: "二値化 + match + 黒線一致率 + NMS で判定。",
+                              label: "二値相関統合モード",
+                              help: "二値相関 + 黒線一致率 + NMSで統合。",
                               detail:
-                                "Fusion Mode（画像解析型）: 画像全体を二値化してスケールドテンプレートを正規化相関（TM_CCORR_NORMED）で走査し、match_score に黒画素一致率（match_ratio >= 0.69）を掛け合わせて候補化。候補は IoU=0.8 の NMS で統合され、再現率寄りの検出挙動になります。",
+                                "二値相関統合モード: 画像全体を二値化し、各スケールテンプレートをTM_CCORR_NORMEDで走査します。相関値に黒線一致率（match_ratio >= 0.69）を反映して候補化し、IoU=0.8のNMSで統合します。再現率重視で候補を拾いやすい方式です。",
                               recommend: "推奨 0.6~0.7",
                               accent: "#1976d2",
                               bg: "#e3f2fd",
                             },
                             {
                               key: "scaled_templates",
-                              label: "Equal Scale Expand Mode",
-                              help: "1.0x中心→外側拡張でタイル探索判定。",
+                              label: "ROIタイル等倍拡張モード",
+                              help: "ROIタイル走査 + 1.0中心の外側拡張探索。",
                               detail:
-                                "Equal Scale Expand Mode（等倍外側探索型）: 画像をタイル走査（tile=roi_size、strideは指定値またはroi_size×0.5）し、各タイル中心ROIでテンプレート照合を実行。倍率探索は 1.0x を中心に外側へ拡張（例: 1.0→0.9→1.1→0.8→1.2...）。edge前処理で TM_CCOEFF_NORMED を評価し、候補ゼロ時のみ二値反転へフォールバック。score と shape_ratio から final_score（0.6*score+0.4*shape_ratio）を作って閾値選別し、最後に重なりクラスタを1件へ統合します。",
+                                "ROIタイル等倍拡張モード: 画像をタイル走査し、各タイル内ROIでテンプレート照合します。スケールは1.0x中心の外側順（1.0→0.9→1.1...）で評価し、edge照合を優先、ヒットなし時のみ二値反転へフォールバックします。scoreとshape_ratioを合成して候補を選別し、重なり候補を統合します。",
                               recommend: "推奨 0.7~0.8",
                               accent: "#546e7a",
                               bg: "#eceff1",
                             },
                             {
                               key: "scaled_templates_beta",
-                              label: "Global Precision Mode",
-                              help: "ROIなし全画面テンプレ探索で精度優先。",
+                              label: "全域精密探索モード",
+                              help: "ROIなし全域探索 + 形状一致重視の精密判定。",
                               detail:
-                                "Global Precision Mode（精度最優先型）: ROIを使わず画像全域でテンプレート探索を行います。スケールは1.0x中心の外側拡張順（例: 1.0→0.9→1.1...）で全探索し、クリック検出と同じ重み（raw/shape）で確信度を算出します。処理は重いですが精度を優先します。",
+                                "全域精密探索モード: ROIを使わず画像全域でテンプレートを探索します。スケールは1.0x中心の外側順で全探索し、raw_scoreとshape_ratioの重み付き確信度（クリック検出と同系）で判定します。計算量は増えますが、精度を最優先する方式です。",
                               recommend: "推奨 0.8以上",
                               accent: "#00897b",
                               bg: "#e0f2f1",

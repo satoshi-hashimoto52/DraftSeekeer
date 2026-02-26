@@ -2210,11 +2210,11 @@ def annotate_auto(payload: AutoAnnotateRequest) -> AutoAnnotateResponse:
         image_path = _resolve_any_image_path(payload.image_id)
 
     mode_label = (
-        "Fusion Mode"
+        "二値相関統合モード"
         if method == "combined"
-        else "Equal Scale Expand Mode"
+        else "ROIタイル等倍拡張モード"
         if method == "scaled_templates"
-        else "Global Precision Mode"
+        else "全域精密探索モード"
     )
     benchmark_project_name = (payload.project_name or "").strip()
     benchmark_started_at = time.time()
