@@ -1,48 +1,44 @@
 # DraftSeeker Overview
 
-本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
+## 1. 何をするシステムか
+DraftSeeker は、図面画像に対してテンプレート照合を行い、候補BBoxを人手で確定しながらアノテーションを蓄積するためのローカルアプリケーションです。必要に応じて SAM による polygon 補助も実行できます。
 
-## 設計思想
-- 実装中心: テンプレート照合を中核にし、手動補正しやすいUIを優先。
-- ローカル完結: FastAPI + React をローカルで起動し、データは `data/` 配下で管理。
-- モード分離: 全自動は2方式 (`combined`, `scaled_templates`) を持ち、利用者が閾値/探索設定を調整。
+## 2. コンポーネント
+- Frontend: `frontend/src/App.tsx`, `frontend/src/components/ImageCanvas.tsx`
+- Backend API: `backend/app/main.py`
+- 検出コア:
+  - クリック/ROIベース: `backend/app/matching.py`
+  - 全自動: `backend/app/detection_core.py`
+- セグメンテーション: `backend/app/sam_service.py`, `backend/app/polygon.py`
+- 永続化: `backend/app/storage.py`, `data/datasets/*`
 
-## 自動アノテーション2モード
+## 3. データフロー（主要）
+1. Dataset 作成・取込（`/dataset/projects`, `/dataset/import`）
+2. 画像選択（`/dataset/select`）
+3. 検出（`/detect/point` または `/annotate/auto`）
+4. 確定結果を保存（`/annotations/save`）
+5. 必要時に Seg 補助（`/segment/candidate`）
+6. 出力（`/export/yolo`, `/export/dataset/bbox`, `/export/dataset/seg`）
 
-### 1. Template Mode (`scaled_templates`)
-- 実装: `backend/app/detection_core.py:272` `annotate_all_manual`
-- タイル走査し、`matching.match_templates` のスコアをそのまま `final_score` として採用。
-- `final_score >= threshold` を採択。
-- `annotate/auto` 側で重複クラスタ統合・既存アノテーション重なり除外を実施。
+## 4. 自動アノテーション方式（現行コード）
+`POST /annotate/auto` の `method` は以下を受け付けます。
+- `combined`: 二値相関統合モード（`annotate_all`）
+- `scaled_templates`: ROIタイル等倍拡張モード（`annotate_all_manual`）
+- `scaled_templates_beta`: 全域精密探索モード（`annotate_all_global_precision`）
 
-### 2. SAM assisted / Fusion相当 (`combined`)
-- 実装: `backend/app/detection_core.py:113` `annotate_all`
-- 画像を2値化し、テンプレとの `cv2.matchTemplate` + match ratio を組み合わせ。
-- 現行実装で SAM 推論を直接使うのは `/segment/candidate` であり、`/annotate/auto` の `combined` 自体は template matching ベース。
+## 5. 保存先
+- Dataset: `data/datasets/<project_name>/`
+- テンプレート: `data/templates/<project>/<class>/*`
+- 単発画像アップロード: `data/images/`
+- YOLOダウンロード対象: `data/runs/`
 
-## 処理フロー（文章図）
-1. 画像読込
-- `App.tsx` で画像選択し、`/dataset/select` 経由で `image_id` を取得。
-2. ROI 決定
-- クリック検出: `detect/point` で `clip_roi` によりROI切り出し。
-- 全自動: タイル走査 (`_iter_tiles`) でROI相当を反復。
-3. Match
-- `matching.match_templates` が edge → bin fallback で照合。
-4. Scoring
-- `scaled_templates`: raw score中心。
-- `combined`: match/ratio の合成。
-5. NMS / 重複除外
-- `detect/full` はクラス別NMS。
-- `annotate/auto` は方式に応じてクラスタ重複統合。
-6. Annotation 保存
-- `annotations/save` または `annotate/auto` で `data/datasets/<project>/annotations/*.json` に保存。
+## 6. 境界と前提
+- 認証・認可は実装されていません（ローカル利用前提）。
+- CORS は全許可です。
+- テンプレートは起動時スキャンのため、反映には Backend 再起動が必要です。
 
-## UI と Backend の責務分離
-- UI (`frontend/src/App.tsx`, `frontend/src/components/ImageCanvas.tsx`)
-  - 状態管理、ショートカット、描画、ローカル保存、API呼び出し。
-- Backend (`backend/app/main.py` + 各ロジックモジュール)
-  - テンプレ走査、検出、SAM推論、永続化、エクスポート。
-
-## 現時点で未定義/未検証
-- `combined` と「Fusion Mode」名称の1対1対応はUI文言依存で、コード上は `method="combined"` のみが正。
-- 全自動の性能・閾値推奨は画像/テンプレ依存が大きく、固定保証は未定義。
+## 7. 参照
+- API: `docs/api.md`
+- Runbook: `docs/runbook.md`
+- Backend 詳細: `backend/app/docs/main.md`
+- Frontend 詳細: `frontend/docs/README.md`

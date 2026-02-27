@@ -1,75 +1,22 @@
 # Backend Developer Guide
 
-本書はコードから仕様を抽出して記載しています。
-動作確認・実運用テストは別途実施してください。
+Backend の入口ドキュメントです。詳細は `backend/app/docs/` 配下を参照してください。
 
-## 構成
+## 読み順（推奨）
+1. `backend/app/docs/main.md`（ルーティングと全体フロー）
+2. `backend/app/docs/schemas.md`（API型）
+3. `backend/app/docs/templates.md` / `matching.md` / `filters.md` / `nms.md`（検出系）
+4. `backend/app/docs/storage.md`（保存I/O）
+5. `backend/app/docs/sam_service.md` / `sam_device.md`（SAM系）
 
-- `app/main.py`
-  - FastAPI ルーティング / アプリ設定 / CORS
-  - 検出 / セグ / export / dataset 管理の実処理
-- `app/schemas.py`
-  - Pydantic request/response
-- `app/config.py`
-  - パス・デフォルト値・SAM 設定
-- `app/templates.py`
-  - テンプレスキャン / content bbox 抽出 / crop
-- `app/matching.py`
-  - template match / NMS前の補助処理
-  - `refine_match_bboxes`, `apply_vertical_padding`
-- `app/filters.py`
-  - bbox フィルタ / confirmed 除外
-- `app/nms.py`
-  - IoU / NMS
-- `app/contours.py`
-  - Template OFF 用の輪郭候補生成
-- `app/sam_service.py`, `app/sam_device.py`
-  - SAM ロード / デバイス判定
-- `app/polygon.py`
-  - mask → polygon / polygon → bbox
-- `app/export_yolo.py`
-  - YOLO / YOLO-seg 正規化と出力行
-- `app/storage.py`
-  - 画像アップロード保存 / path 解決
+## 実装ファイル対応
+- API統合: `backend/app/main.py`
+- スキーマ: `backend/app/schemas.py`
+- 検出コア: `backend/app/detection_core.py`, `matching.py`, `filters.py`, `nms.py`
+- テンプレート: `backend/app/templates.py`
+- 保存: `backend/app/storage.py`
+- 出力: `backend/app/export_yolo.py`
 
-## Dataset メタ構造
-
-- `data/datasets/<project>/meta.json` に images 配列を保持
-- 各 entry は `original_filename` / `internal_id` / `import_order`
-
-## ルーティング追加手順
-
-1. `app/schemas.py` に request/response を追加
-2. `app/main.py` に `@app.get/post` で登録
-3. 返却値は response_model に合わせる
-
-## 検出ロジックの差し込みポイント
-
-- クリック検出: `detect_point` 内
-- 全体検出: `detect_full` 内
-- 追加のフィルタ/後処理は
-  - `filter_bboxes` 前後
-  - NMS 後
-  - クラス代表抽出後
-
-## Export の構造
-
-- YOLO 単体: `/export/yolo`
-  - `output_dir` 直下に dataset フォルダを作成
-  - `classes.txt` / `notes.json` を生成
-- Dataset: `/export/dataset/bbox` / `/export/dataset/seg`
-  - split / seed で分割
-  - output_dir 直下に `dataset_<project>_yyyymmdd`
-  - 同名フォルダは上書き
-
-## Logging / デバッグ
-
-- 例外は基本的に `HTTPException` で返す
-- SAM 周りは例外時に fallback へ
-- path 関連は `Path` で扱う
-
-## 変更が起きやすい箇所
-
-- `app/main.py`: routing / 既存フローの変更
-- `app/matching.py`: テンプレ精度に影響
-- `app/export_yolo.py`: 出力形式への影響
+## 注意
+- 現行コードでは `POST /export/dataset/seg` に既知不具合（未定義変数参照）があります。
+- テンプレート更新反映には backend 再起動が必要です。

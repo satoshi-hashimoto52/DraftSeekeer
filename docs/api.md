@@ -1,119 +1,123 @@
 # API Specification
 
-本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
-
-対象実装:
-- `backend/app/main.py`
-- `backend/app/schemas.py`
-- `frontend/src/api.ts`
+本書は `backend/app/main.py` と `backend/app/schemas.py` を一次ソースとして記載しています。
 
 ## 共通
 - Base URL: `http://127.0.0.1:8000`
-- CORS: `allow_origins=["*"]`, `allow_methods=["*"]`, `allow_headers=["*"]` (`main.py`)
-- 主なエラー形式: FastAPI の `{"detail": "..."}`
+- 認証: なし
+- CORS: 全許可（`allow_origins=["*"]`）
+- エラー: FastAPI 標準の `{"detail": "..."}` または API 固有 `{"ok": false, "error": "..."}`
 
 ## エンドポイント一覧
 
-### Templates / Projects
+### Templates
 - `GET /templates`
-  - response: `ProjectInfo[]`
 - `GET /projects`
-  - response: `string[]`
 - `GET /templates/{project}/{class_name}/{template_name}/preview`
-  - response: `{ base64: string | null }`
+- `GET /templates/{project}/class-previews`
+- `GET /templates/{project}/{class_name}/items`
+- `GET /templates/{project}/{class_name}/{template_name}/image`
+- `GET /templates/{project}/{class_name}/{template_name}/binary-image`
+- `GET /templates/{project}/{class_name}/{template_name}/overlay-red`
+- `GET /templates/{project}/{class_name}/{template_name}/overlay-blue`
 
-### Dataset / Project管理
+### Dataset / Annotation
 - `GET /dataset/projects`
-  - response: `DatasetInfo[]`
 - `POST /dataset/projects`
-  - request: `{ project_name: string }`
-  - response: `DatasetInfo`
 - `DELETE /dataset/projects/{project_name}`
-  - response: `{ ok: true }`
-- `POST /dataset/import` (multipart)
-  - form: `project_name`, `files[]`
-  - response: `{ project_name, count }`
+- `POST /dataset/import` (multipart: `project_name`, `files`)
 - `GET /dataset/{project_name}`
-  - response: `DatasetInfo`
+- `GET /dataset/{project_name}/annotation-stats`
 - `GET /dataset/{project_name}/image/{filename}`
-  - response: image binary
 - `POST /dataset/select`
-  - request: `{ project_name?, dataset_id?, filename? }`
-  - response: `UploadResponse`
-
-### Annotation
 - `POST /annotations/save`
-  - request: `{ project_name, image_key, annotations[] }`
-  - response: `{ ok: boolean }`
-- `GET /annotations/load?project_name=...&image_key=...`
-  - response: `{ ok, annotations[] }`
+- `GET /annotations/load`
 - `POST /annotations/clear`
-  - request: `{ project_name }`
-  - response: `{ ok, deleted }`
 
 ### Detect / Segment / Auto
 - `POST /detect/point`
-  - request: `DetectPointRequest`
-  - response: `DetectPointResponse`
 - `POST /detect/full`
-  - request: `DetectFullRequest`
-  - response: `DetectFullResponse`
 - `POST /segment/candidate`
-  - request: `SegmentCandidateRequest`
-  - response: `SegmentCandidateResponse`
 - `POST /annotate/auto`
-  - request: `AutoAnnotateRequest`
-  - response: `AutoAnnotateResponse`
+- `GET /annotate/auto/progress/{progress_id}`
+- `GET /benchmarks/{project_name}`
+- `DELETE /benchmarks/{project_name}/{run_id}`
 
 ### Export
 - `POST /export/yolo`
-  - request: `ExportYoloRequest`
-  - response: `ExportYoloResponse`
 - `GET /export/yolo/download?path=...`
-  - response: text file
 - `POST /export/dataset/bbox`
-  - request: `ExportDatasetBBoxRequest`
-  - response: `ExportDatasetBBoxResponse`
 - `POST /export/dataset/seg`
-  - request: `ExportDatasetSegRequest`
-  - response: `ExportDatasetSegResponse`
 - `GET /dataset/export/download?project_name=...&export_id=...`
-  - response: zip file
 
-## 主要スキーマ（要点）
+### App control
+- `POST /app/shutdown`
+- `POST /shutdown`（互換ルート）
 
-### DetectPointRequest
-- 必須: `image_id, project, x, y, roi_size`
-- 主設定: `scale_min/max/steps, topk, template_off`
-- 除外: `confirmed_annotations`, `exclude_mode`, `exclude_iou_threshold` など
+## 主要リクエスト/レスポンス
 
-### DetectPointResponse
-- `results[]`: `class_name, score, bbox, template_name, scale`
-- `debug`: ROI/クリック座標、プレビュー画像base64、match情報
+### `POST /detect/point`
+- request: `DetectPointRequest`
+  - 必須: `image_id`, `project`, `x`, `y`, `roi_size`
+  - 主要任意: `scale_min`, `scale_max`, `scale_steps`, `topk`, `class_filter`, `template_off`
+  - 除外制御: `confirmed_annotations`, `exclude_enabled`, `exclude_mode`, `exclude_center`, `exclude_iou_threshold`
+- response: `DetectPointResponse`
+  - `results[]`: `class_name`, `score`, `bbox`, `template_name`, `scale` など
+  - `debug`: ROI情報、プレビューbase64、一致情報
 
-### AutoAnnotateRequest
-- 必須: `image_id, project, threshold`
-- `method`: `combined | scaled_templates`
-- `mode` は後方互換用途（`auto/manual`）
-- advanced: `scale_min/max/steps, stride, roi_size`
-- 保存対象指定: `project_name, image_key`
+### `POST /annotate/auto`
+- request: `AutoAnnotateRequest`
+  - 必須: `image_id`, `project`, `threshold`
+  - `method`: `combined | scaled_templates | scaled_templates_beta`
+  - 主要任意: `class_filter`, `scale_min/max/steps`, `stride`, `roi_size`, `project_name`, `image_key`, `progress_id`
+- response: `AutoAnnotateResponse`
+  - `added_count`, `rejected_count`, `threshold`
+  - `created_annotations[]`, `class_progress[]`
 
-### AutoAnnotateResponse
-- `added_count, rejected_count, threshold`
-- `created_annotations[]` (class_name, bbox, score)
+### `GET /benchmarks/{project_name}`
+- response: `BenchmarkRunsResponse`
+  - `runs[]`: `run_id`, `status`, `method`, `mode_label`, `duration_ms`, `params`, `summary`, `class_progress`, `confirmed_annotations`
 
-## OpenAPI 定義とコード整合メモ
+### `POST /export/yolo`
+- request: `ExportYoloRequest`
+  - 必須: `project`, `image_id`, `annotations`, `output_dir`
+- response: `ExportYoloResponse`
+  - `ok`, `saved_path`, `text_preview`, `error`
 
-### 一致している点
-- ルートとメソッドは `main.py` と `frontend/src/api.ts` で概ね一致。
-- `schemas.py` の主要リクエスト/レスポンス型が `response_model` と対応。
+## 例
 
-### 差分/注意点
-- `frontend/src/api.ts` の `DetectPointResponse.debug` は `roi_match_preview_base64` を持つが、`schemas.py` の `DetectPointDebug` には定義なし。
-  - `main.py` は `debug["roi_match_preview_base64"]` を設定しているため、型定義と実装にズレがある。
-- `/export/dataset/seg` は実装上、`table_rows`/`rel_out` 未定義参照があり500になる可能性。
-  - スキーマ上は正常レスポンス型が定義されているが、実行時不整合がある。
+### クリック検出
+```bash
+curl -X POST http://127.0.0.1:8000/detect/point \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "image_id":"dataset::project::image.png",
+    "project":"estimate",
+    "x":1200,
+    "y":830,
+    "roi_size":340,
+    "scale_min":0.65,
+    "scale_max":1.20,
+    "scale_steps":8,
+    "topk":3
+  }'
+```
 
-## 実装依存の仕様
-- `output_dir` は export系で「絶対パス必須」。相対パスは `ok=false` またはエラー。
-- `annotate/auto` は条件不正時に 400、内部例外は 500 (`detail` にメッセージ)。
+### 全自動（全域精密探索）
+```bash
+curl -X POST http://127.0.0.1:8000/annotate/auto \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "image_id":"dataset::project::32.png",
+    "project":"estimate",
+    "threshold":0.81,
+    "method":"scaled_templates_beta",
+    "project_name":"1",
+    "image_key":"32.png"
+  }'
+```
+
+## 実装上の注意（コード準拠）
+- `output_dir` は export API で絶対パス必須です。
+- `POST /export/dataset/seg` は現行実装に未定義変数参照があり、500 になる可能性があります。
+- `frontend/src/api.ts` の debug 型には `roi_match_preview_base64` がある一方、`schemas.py` の `DetectPointDebug` には未定義です（互換上は受信可能）。

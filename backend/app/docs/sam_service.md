@@ -1,45 +1,24 @@
-# sam_service
+# backend/app/sam_service.py
 
-## 要約（10行以内）
-- SAM predictor のロードとキャッシュを管理。
-- 環境変数で checkpoint/model を上書き可能。
+## 役割
+SAM predictor を遅延ロードし、プロセス内キャッシュして再利用します。
 
-## 目的/責務
-- SAM 推論の初期化と再利用。
-
-## 公開API（関数/クラス）
+## API
 - `get_sam_predictor() -> SamPredictor`
-  - 例外: segment-anything 未導入 / checkpoint 未設定
 
-## 入出力/データ
-- 入力: なし
-- 出力: `SamPredictor`
+## 推論初期化フロー
+1. 既存 `_predictor` があれば再利用
+2. `segment_anything` を import
+3. checkpoint/model_type を取得
+   - 優先: 環境変数 `SAM_CHECKPOINT`, `SAM_MODEL_TYPE`
+   - fallback: `config.py` の定数
+4. `sam_device.get_sam_device()` で `mps/cpu` を選択
+5. `SamPredictor` を生成しキャッシュ
 
-## 依存関係
-- `segment_anything`, `torch`
-- `config.SAM_CHECKPOINT`, `config.SAM_MODEL_TYPE`
-- `sam_device.get_sam_device`
+## 例外
+- `segment-anything is not installed`
+- `SAM_CHECKPOINT is not set`
 
-## 主要ロジック（図や箇条書き）
-1. キャッシュがあれば返却
-2. segment-anything を import
-3. checkpoint/model を取得
-4. device を決定
-5. predictor を生成しキャッシュ
-
-## パラメータ/閾値の意味
-- `SAM_CHECKPOINT`: 学習済み重み
-- `SAM_MODEL_TYPE`: モデル種別
-
-## テスト観点（最低5つ）
-- checkpoint 未設定時の例外
-- segment-anything 未導入時の例外
-- 環境変数で上書き
-- 2回目以降のキャッシュ
-- mps/cpu 切替
-
-## 変更時の注意（互換性/性能/安全）
-- モデル変更は推論結果に影響
-- 巨大モデルはメモリ負荷に注意
-
-関連: [sam_device](sam_device.md), [main](main.md)
+## 注意
+- checkpoint パス誤りは初回呼び出し時に失敗
+- プロセス再起動まで predictor は保持されます

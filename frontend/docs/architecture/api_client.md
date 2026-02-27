@@ -1,38 +1,42 @@
-# API Client (src/api.ts)
+# frontend/src/api.ts
 
-## 要約
-- すべての API 呼び出しを `api.ts` に集約。
-- 型定義と変換（`toCandidates`）を提供。
-- API 詳細は [docs/api.md](../../api.md) と一致させる。
+## 役割
+- Backend API 呼び出しの単一窓口
+- TypeScript のリクエスト/レスポンス型を提供
+- `toCandidates()` で detect response を UI候補へ変換
 
-## API 呼び出し一覧
-| 関数 | Endpoint | 目的 |
-|---|---|---|
-| `fetchProjects` | `GET /projects` | テンプレプロジェクト取得 |
-| `fetchTemplates` | `GET /templates` | テンプレ一覧 |
-| `listDatasetProjects` | `GET /dataset/projects` | Dataset 一覧 |
-| `createDatasetProject` | `POST /dataset/projects` | Dataset 作成 |
-| `deleteDatasetProject` | `DELETE /dataset/projects/{project}` | Dataset 削除 |
-| `importDataset` | `POST /dataset/import` | Dataset 取り込み |
-| `fetchDataset` | `GET /dataset/{project}` | Dataset 詳細 |
-| `selectDatasetImage` | `POST /dataset/select` | Dataset 画像選択 |
-| `detectPoint` | `POST /detect/point` | クリック検出 |
-| `segmentCandidate` | `POST /segment/candidate` | Seg 生成 |
-| `saveAnnotations` | `POST /annotations/save` | アノテ保存 |
-| `loadAnnotations` | `GET /annotations/load` | アノテ取得 |
-| `exportDatasetBBox` | `POST /export/dataset/bbox` | bbox 出力 |
-| `exportDatasetSeg` | `POST /export/dataset/seg` | seg 出力 |
-| `exportYolo` | `POST /export/yolo` | YOLO 単体 |
+## ベースURL
+- `API_BASE = "http://127.0.0.1:8000"`
 
-## 型定義
-- `DetectPointResponse`, `DetectResult`, `Candidate`, `Annotation`
-- `DatasetInfo`, `DatasetImageEntry`
-- `SegmentCandidateRequest/Response`
+## 主な関数群
 
-## 注意点
-- `API_BASE` は固定値 `http://127.0.0.1:8000`。
-- エラーは `throw new Error` で上位に伝播。
-- `toCandidates` はランダムID生成。
+### Project / Dataset
+- `fetchProjects`, `fetchTemplates`
+- `listDatasetProjects`, `createDatasetProject`, `deleteDatasetProject`
+- `importDataset`, `fetchDataset`, `selectDatasetImage`
+- `fetchProjectAnnotationStats`
 
-## 参照
-- API 詳細: [docs/api.md](../../api.md)
+### Detection / Annotation
+- `detectPoint`
+- `autoAnnotate`, `fetchAutoAnnotateProgress`
+- `saveAnnotations`, `loadAnnotations`, `clearProjectAnnotations`
+
+### Benchmark
+- `fetchBenchmarkRuns`, `deleteBenchmarkRun`
+
+### Segment / Export
+- `segmentCandidate`
+- `exportYolo`, `exportYoloWithDir`
+- `exportDatasetBBox`, `exportDatasetSeg`
+- ダウンロードURLビルダー系（テンプレ画像/overlay）
+
+### App control
+- `shutdownApp`
+
+## エラー処理
+- `fetch` の `!res.ok` 時に本文テキストを `Error` として throw
+- 呼び出し側 (`App.tsx`) で通知・UI反映
+
+## 実装整合メモ
+- API詳細の一次ソースは `docs/api.md` と `backend/app/main.py`
+- debug field など一部は backend schema よりフロント側型が広い場合があります

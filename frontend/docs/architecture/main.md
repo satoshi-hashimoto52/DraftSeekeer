@@ -1,12 +1,10 @@
-# main.tsx
-
-## 要約
-- React のエントリポイント。
-- `App` を `StrictMode` でマウント。
+# frontend/src/main.tsx
 
 ## 役割
-- 初期化とレンダリング
+React エントリポイントです。
+- `#root` を取得
+- `createRoot(...).render(...)`
+- `App` を `React.StrictMode` でマウント
 
-## 依存
-- React
-- `App.tsx`
+## 参照
+- `frontend/src/App.tsx`

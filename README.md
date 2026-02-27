@@ -1,70 +1,51 @@
 # DraftSeeker
 
-本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
+DraftSeeker は、図面画像に対してテンプレートマッチングと補助セグメンテーション（SAM）を使い、アノテーション作業を半自動化するローカルツールです。クリック検出・ホバー検出・全自動アノテーション・YOLO出力までを一連のUIで扱えます。
 
-DraftSeeker は、図面画像に対してテンプレート照合と SAM 補助を使ってアノテーション作成を支援するローカル実行ツールです。主用途は、テンプレートベースの半自動/全自動アノテーションと、YOLO 形式データセット出力です。
+## アーキテクチャ概要
+- Backend: `backend/app/main.py` を起点に FastAPI で API を提供。検出ロジックは `detection_core.py` / `matching.py` / `filters.py` / `nms.py` に分離。
+- Frontend: `frontend/src/App.tsx` が状態管理と画面遷移を担当。描画・座標変換は `frontend/src/components/ImageCanvas.tsx`。
+- Data: プロジェクトデータは `data/datasets/<project>/`、テンプレートは `data/templates/`。
+- Model: SAM は `backend/app/sam_service.py` で遅延ロードし、`sam_device.py` で `mps/cpu` を選択。
 
-## 5分で起動
+## ローカル起動
 
-### 1. 必要環境
-- macOS (Apple Silicon を想定した実装あり)
-- Python 3.10+ (`python3`)
-- Node.js 18+
-- SAM 利用時: `torch`, `segment-anything`, SAM checkpoint
-
-### 2. Backend 起動
+### Backend
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+./run.sh
 ```
 
-### 3. Frontend 起動
-```bash
-cd frontend
-npm install
-npm run dev
-```
+`./run.sh` は `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload` を実行します。
 
-- Frontend: `http://127.0.0.1:5173`
-- Backend: `http://127.0.0.1:8000`
-
-### 4. Quick Start
-
->Backend 起動
-```bash
-cd backend
-source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
->Frontend 起動
+### Frontend
 ```bash
 cd frontend
 npm install
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
----
 
-## 全体構成
-- `backend/app/`: FastAPI と検出・保存・エクスポート処理
-- `frontend/src/`: React/Vite UI (`App.tsx` + `components/ImageCanvas.tsx`)
-- `data/datasets/`: プロジェクト単位の画像・アノテーション
-- `data/templates/`: テンプレート画像
-- `data/runs/`: YOLOテキスト出力など
-- `models/`: SAM checkpoint 配置先候補
+- Frontend: `http://127.0.0.1:5173`
+- Backend: `http://127.0.0.1:8000`
 
-## 想定ユースケース
-- プロジェクト作成 → 画像取り込み
-- テンプレートプロジェクト選択
-- クリック検出で候補を確認し確定
-- 必要に応じて SAM 補助セグメンテーション
-- `Export dataset` で BBox/Seg データセットを出力
+## よくあるトラブル
+- CORSエラーに見える: 実際は Backend 500 のことが多いです。まず backend コンソールの traceback を確認してください。
+- SAM が動かない: `segment-anything` と checkpoint 設定を確認（`SAM_CHECKPOINT` / `SAM_MODEL_TYPE`）。
+- Export が失敗する: `output_dir` は絶対パス必須です。
+- テンプレ変更が反映されない: 起動時キャッシュなので Backend 再起動が必要です。
+- 画像/注釈不整合: `data/datasets/<project>/meta.json` と `annotations/` の対応を確認してください。
 
-## 制限事項・未検証事項
-- SAM checkpoint の既定パスが `backend/app/config.py` に固定値で埋め込まれています。環境差分は `SAM_CHECKPOINT` 環境変数で上書きしてください。
-- `backend/app/main.py` の `/export/dataset/seg` 実装には未定義変数参照があり、500になる可能性があります。
-- OpenAPI の実行時検証は依存ライブラリ導入済み環境でのみ可能です。
-- CORS は `allow_origins=["*"]` で許可されていますが、500系エラー時にはブラウザが CORS エラーとして見せることがあります。
+## ドキュメント導線
+- 全体像: `docs/overview.md`
+- API 仕様: `docs/api.md`
+- 運用手順・トラブル対応: `docs/runbook.md`
+- データ仕様: `docs/data_spec.md`
+- セキュリティ/プライバシー: `docs/security_privacy.md`
+- Backend 実装密着ドキュメント: `backend/app/docs/main.md`
+- Frontend 実装ガイド: `frontend/docs/README.md`
+
+## 既知の実装注意
+- `POST /export/dataset/seg` は現行コードに未定義変数参照（`table_rows`, `rel_out`）があり、500 となる可能性があります（`backend/app/main.py`）。

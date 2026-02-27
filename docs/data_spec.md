@@ -1,65 +1,66 @@
 # Data Specification
 
-本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
+## 1. ディレクトリ構造
+- `data/templates/` テンプレート
+- `data/images/` 単発アップロード画像
+- `data/datasets/` プロジェクトデータ
+- `data/runs/` YOLO出力・ダウンロード対象
 
-## ルート構成
-- `data/templates/`: テンプレート画像
-- `data/images/`: メモリ以外の単発画像向け保管先（`storage.py`）
-- `data/datasets/`: プロジェクト単位データ
-- `data/runs/`: YOLO出力・ダウンロード対象
-
-## datasets 構造
+## 2. Dataset 構造
 `data/datasets/<project_name>/`
 - `meta.json`
-- `images/` (元画像)
-- `annotations/` (`<filename>.json`)
-- `matching_table.json` (エクスポート対応表)
-- `exports_index.json` (export_id と実パスの対応)
+- `images/`
+- `annotations/`
+- `matching_table.json`
+- `exports_index.json`
+- `benchmarks.json`
 
-## meta.json 仕様
-- 作成時 (`POST /dataset/projects`):
-```json
-{ "project_name": "...", "images": [] }
-```
-- 画像取り込み後 (`POST /dataset/import`):
-  - `images` は API互換エントリ配列（`original_filename`, `internal_id`, `import_order`, `width`, `height`）
-- 旧形式（`images: string[]`）読み込み互換あり (`_load_meta_entries`)
+## 3. `meta.json`
+- 画像一覧は `images` 配列
+- 各エントリ（現行）:
+  - `original_filename`
+  - `filename`（任意）
+  - `internal_id`
+  - `import_order`
+  - `width`, `height`（任意）
 
-## templates 構造
-- 標準: `data/templates/<project>/<class>/<image>`
-- 互換: `data/templates/<class>/<image>` は project=`default` として扱う
-- 読み込み時に `TemplateImage` を生成:
-  - `image_gray`
-  - `tight_bbox` / `outer_bbox`
-  - `image_proc_edge` / `image_proc_bin`
-
-## annotation 保存形式
+## 4. annotations ファイル
 `data/datasets/<project>/annotations/<image_filename>.json`
 - 配列形式
-- 要素は `AnnotationPayload` 相当:
+- 要素（`AnnotationPayload` 相当）:
   - `class_name`
   - `bbox: {x,y,w,h}`
-  - 任意: `score`, `segPolygon`, `source`, `created_at`, `segMethod`
+  - 任意: `template_name`, `scale`, `score`, `segPolygon`, `source`, `created_at`, `segMethod`
 
-## project 単位で管理される情報
-- 画像一覧・順序・内部ID (`meta.json`)
-- 画像ファイル本体 (`images/`)
-- 画像ごとのアノテーション (`annotations/`)
-- export履歴 (`exports_index.json`)
-- エクスポート対応表 (`matching_table.json`)
+## 5. templates 構造
+- 推奨: `data/templates/<project>/<class>/*.png|jpg|jpeg`
+- 互換: `data/templates/<class>/*` は project=`default` 扱い
 
-## 再読み込み時・再取込時の挙動
-- `POST /dataset/import` は「新しい投入集合」を正とする。
-  - 入力に含まれない既存画像は `images/` から削除。
-  - 対応する `annotations/*.json` も削除。
-- 含まれる既存画像は維持。新規画像は末尾追加。
-- `annotations/load` はファイルがなければ空配列を返す。
+## 6. ベンチマーク履歴
+`data/datasets/<project>/benchmarks.json`
+- `runs[]` に実行履歴を保存
+- 主な項目: `run_id`, `status`, `method`, `mode_label`, `duration_ms`, `params`, `summary`, `class_progress`, `confirmed_annotations`
 
-## フロントエンド側のローカル保存（永続）
-`localStorage` / `sessionStorage` を使用。
-- 例: `draftseeker:viewState:v1`, `draftseeker.templateByDataset`, `draftseeker.importPathByDataset`, `draftSeeker.exportDirHistory` など。
-- 初回起動制御: `sessionStorage` の `draftseeker:firstBootDone:v1`
+## 7. YOLO 出力仕様
+実装: `backend/app/export_yolo.py`
 
-## 未定義/未検証
-- `matching_table.json` の完全な参照仕様は backend 実装依存で固定契約化されていない。
-- `exports_index.json` は絶対パスを保持するため、環境移動時の再利用は未保証。
+### BBox 行
+`<class_id> <cx> <cy> <w> <h>`
+- すべて 0..1 正規化
+
+### Seg 行
+`<class_id> <x1> <y1> <x2> <y2> ...`
+- `segPolygon` が3点以上あるとき優先
+
+## 8. export index
+- `exports_index.json`: `export_id -> absolute_path`
+- `matching_table.json`: 画像名と出力画像番号の対応
+
+## 9. 入出力APIとの対応
+- 保存: `POST /annotations/save`
+- 読込: `GET /annotations/load`
+- Dataset export: `POST /export/dataset/bbox`, `POST /export/dataset/seg`
+- YOLO単体: `POST /export/yolo`
+
+## 10. 既知の注意
+- `POST /export/dataset/seg` は現行実装に未定義変数参照があり、失敗する可能性があります。

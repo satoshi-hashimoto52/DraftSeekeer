@@ -1,43 +1,29 @@
-# templates
+# backend/app/templates.py
 
-## 要約（10行以内）
-- テンプレ画像を走査してキャッシュを生成。
-- tight bbox を算出し、前処理画像を保持。
-- RGBA の場合は alpha をラインマスクとして扱う。
+## 役割
+テンプレート画像をスキャンして `TemplateImage` 構造に変換し、検出で使う前処理画像を準備します。
 
-## 目的/責務
-- テンプレ読み込みと構造化。
+## テンプレ探索構造
+- 推奨: `data/templates/<project>/<class>/<template_image>`
+- 互換: `data/templates/<class>/<template_image>`（project=`default`）
 
-## 公開API（関数/クラス）
-- `scan_templates(templates_root: Path) -> Dict[str, Dict[str, List[TemplateImage]]]`
-- `TemplateImage` データクラス
+## 公開API
+- `scan_templates(templates_root) -> Dict[project][class] = List[TemplateImage]`
+- `TemplateImage`:
+  - `project`, `class_name`, `template_name`, `path`
+  - `image_gray`
+  - `tight_bbox`, `outer_bbox`
+  - `image_proc_edge`, `image_proc_bin`
 
-## 入出力/データ
-- 入力: テンプレ root
-- 出力: project→class→TemplateImage
+## 前処理
+- `gray < 128` を線画として `tight_bbox` を算出
+- `edge`: GaussianBlur + Canny + Dilate
+- `bin`: GaussianBlur + Otsu + Binary INV
 
-## 依存関係
-- `opencv-python`, `numpy`
+## RGBA テンプレ
+- alpha チャンネルがある場合、透明領域をトリミング
+- RGB が全黒で alpha が有効な場合、`255 - alpha` をグレースケールとして採用
 
-## 主要ロジック（図や箇条書き）
-1. ディレクトリを走査
-2. テンプレ画像をグレースケール化
-3. tight bbox を算出
-4. edge/bin 画像を生成
-5. TemplateImage に格納
-
-## パラメータ/閾値の意味
-- `gray < 128` を線画として扱う
-
-## テスト観点（最低5つ）
-- templates が存在しない場合
-- project/class の階層検出
-- RGBA テンプレの alpha 処理
-- 真っ白テンプレ
-- tight bbox がゼロになる場合
-
-## 変更時の注意（互換性/性能/安全）
-- tight bbox 計算変更で bbox がずれる
-- テンプレ更新時は backend 再起動が必要
-
-関連: [matching](matching.md), [main](main.md)
+## 注意点
+- 真っ白テンプレ等で tight bbox が取れない場合は outer bbox にフォールバック
+- テンプレート更新反映には backend 再起動が必要（起動時スキャン）

@@ -29,3 +29,5 @@ models/*.pth
 !data/templates/.gitkeep
 /data/datasets/*
 !data/datasets/.gitkeep
+
+DevLog_AI_Prompt.md

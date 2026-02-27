@@ -1,47 +1,44 @@
-# schemas
+# backend/app/schemas.py
 
-## 要約（10行以内）
-- FastAPI の request/response スキーマ定義。
-- 検出・Dataset・Seg・Export の型を集約。
-- BBox は float 定義。
+## 役割
+FastAPI 入出力スキーマを定義します。`main.py` の `response_model` / request body と1対1で対応します。
 
-## 目的/責務
-- API の入出力構造を厳密化。
+## 主要カテゴリ
+- Detect: `DetectPointRequest/Response`, `DetectFullRequest/Response`
+- Segment: `SegmentCandidateRequest/Response`, `SegmentMeta`
+- Annotation保存: `AnnotationPayload`, `SaveAnnotationsRequest`, `LoadAnnotationsResponse`
+- Dataset: `DatasetInfo`, `DatasetImageEntry`, `DatasetImportResponse`, `ProjectCreateRequest`, `DatasetSelectRequest`
+- Auto annotate: `AutoAnnotateRequest/Response`, `AutoAnnotateProgressResponse`, `AutoAnnotateClassProgress`
+- Benchmark: `BenchmarkRunRecord`, `BenchmarkRunsResponse`
+- Export: `ExportYoloRequest/Response`, `ExportDatasetBBoxRequest/Response`, `ExportDatasetSegRequest/Response`
 
-## 公開API（関数/クラス）
-- 主要クラス:
-  - `DetectPointRequest`, `DetectPointResponse`, `DetectResult`, `DetectPointDebug`
-  - `DetectFullRequest`, `DetectFullResponse`, `DetectFullResult`
-  - `SegmentCandidateRequest`, `SegmentCandidateResponse`, `SegmentMeta`
-  - `ExportDatasetBBoxRequest/Response`, `ExportDatasetSegRequest/Response`, `ExportYoloRequest/Response`
-  - `DatasetInfo`, `DatasetImageEntry`, `DatasetImportResponse`
-  - `SaveAnnotationsRequest`, `LoadAnnotationsResponse`, `AnnotationPayload`
+## 重要フィールド
 
-## 入出力/データ
-- 入力/出力: JSON
-- バリデーション: `Field` による範囲制約
+### AutoAnnotateRequest
+- 必須: `image_id`, `project`
+- `method`: `combined | scaled_templates | scaled_templates_beta`
+- `mode` は後方互換用（deprecated）
+- 任意詳細: `scale_min/max/steps`, `stride`, `roi_size`, `class_filter`
 
-## 依存関係
-- `pydantic`
+### DetectPointRequest
+- 必須: `image_id`, `project`, `x`, `y`, `roi_size`
+- 除外制御: `exclude_enabled`, `exclude_mode`, `exclude_center`, `exclude_iou_threshold`
+- 形状閾値: `shape_ratio_threshold`
 
-## 主要ロジック（図や箇条書き）
-- 型とバリデーション規則の定義のみ
+### BenchmarkRunRecord
+- 実行メタ: `run_id`, `status`, `method`, `mode_label`, `duration_ms`, `threshold`
+- 再現用パラメータ: `params`
+- 実績: `summary`, `class_progress`, `confirmed_annotations`
 
-## パラメータ/閾値の意味
-- `roi_size`: ROI サイズ
-- `scale_min/max/steps`: テンプレスケール探索
-- `score_threshold`: スコア閾値
-- `iou_threshold`: IoU 閾値
+## バリデーション例
+- `roi_size > 0`
+- `exclude_mode in {same_class, any_class}`
+- `method in {combined, scaled_templates, scaled_templates_beta}`
 
-## テスト観点（最低5つ）
-- 必須フィールド欠落時の 422
-- `roi_size <= 0` でエラー
-- `exclude_mode` の不正値
-- bbox の負数
-- debug フィールドの型不整合
+## 互換性方針（現状）
+- `AutoAnnotateRequest.mode` は legacy 受け口として維持
+- Dataset メタは旧形式（文字列配列）読み込み互換を `main.py` 側で吸収
 
-## 変更時の注意（互換性/性能/安全）
-- スキーマ変更は frontend と docs に影響
-- 必須項目の追加は破壊的変更
-
-関連: [main](main.md)
+## 参照
+- `backend/app/main.py`
+- `docs/api.md`

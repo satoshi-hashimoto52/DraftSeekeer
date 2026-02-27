@@ -1,42 +1,30 @@
-# storage
+# backend/app/storage.py
 
-## 要約（10行以内）
-- 画像アップロードの保存とパス解決を提供。
-- 画像サイズを抽出して返す。
+## 役割
+画像保存・画像パス解決・データルート参照を提供する軽量 I/O モジュールです。
 
-## 目的/責務
-- 画像ファイル保存とパス検証。
+## 公開API
+- `IMAGE_EXTS = {".jpg", ".jpeg", ".png"}`
+- `get_runs_dir() -> Path`
+- `get_datasets_dir() -> Path`
+- `save_upload(image_file, images_dir) -> (image_id, width, height)`
+- `resolve_image_path(images_dir, image_id) -> Path`
 
-## 公開API（関数/クラス）
-- `save_upload(image_file: UploadFile, images_dir: Path) -> (image_id, width, height)`
-  - 例外: ValueError（不正拡張子/空ファイル/壊れた画像）
-- `resolve_image_path(images_dir: Path, image_id: str) -> Path`
-  - 例外: FileNotFoundError
-- `IMAGE_EXTS: Set[str]`
+## 入出力
+### `save_upload`
+- 入力: FastAPI `UploadFile`, 保存先ディレクトリ
+- 出力: 生成された `image_id` と画像サイズ
+- 例外: `ValueError`（拡張子不正、空ファイル、壊れた画像）
 
-## 入出力/データ
-- 入力: UploadFile, 保存先ディレクトリ
-- 出力: (image_id, width, height)
+### `resolve_image_path`
+- 入力: images ディレクトリ, image_id
+- 出力: 実ファイルパス
+- 例外: `FileNotFoundError`
 
-## 依存関係
-- `Pillow`
+## 重要な仕様
+- 保存時ファイル名は `uuid4().hex + 拡張子`
+- Pillow で画像として開けない場合は拒否
 
-## 主要ロジック（図や箇条書き）
-1. 拡張子を検証
-2. 画像を読み込みサイズ取得
-3. UUID を付与して保存
-
-## パラメータ/閾値の意味
-- `IMAGE_EXTS`: 許可拡張子
-
-## テスト観点（最低5つ）
-- png/jpeg の正常系
-- 不正拡張子
-- 空ファイル
-- 破損画像
-- resolve_image_path の存在チェック
-
-## 変更時の注意（互換性/性能/安全）
-- image_id 形式変更は API 互換性に影響
-
-関連: [main](main.md)
+## 注意点
+- 拡張子チェックのみなので、MIME厳密検証はしていません
+- 画像ファイル実体の書き込み権限は運用環境依存
