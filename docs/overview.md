@@ -1,44 +1,56 @@
 # DraftSeeker Overview
 
-## 1. 何をするシステムか
-DraftSeeker は、図面画像に対してテンプレート照合を行い、候補BBoxを人手で確定しながらアノテーションを蓄積するためのローカルアプリケーションです。必要に応じて SAM による polygon 補助も実行できます。
+本書は、システム全体像を短く把握するための概要資料です。
+
+## 1. 目的
+DraftSeeker は、図面画像に対する BBox / polygon アノテーションを、
+テンプレート照合と SAM 補助で効率化するローカルツールです。
 
 ## 2. コンポーネント
-- Frontend: `frontend/src/App.tsx`, `frontend/src/components/ImageCanvas.tsx`
-- Backend API: `backend/app/main.py`
-- 検出コア:
-  - クリック/ROIベース: `backend/app/matching.py`
+- Frontend
+  - 実装: `frontend/src/App.tsx`
+  - 描画: `frontend/src/components/ImageCanvas.tsx`
+- Backend
+  - API統合: `backend/app/main.py`
+  - スキーマ: `backend/app/schemas.py`
+- 検出コア
+  - テンプレート照合: `backend/app/matching.py`
   - 全自動: `backend/app/detection_core.py`
-- セグメンテーション: `backend/app/sam_service.py`, `backend/app/polygon.py`
-- 永続化: `backend/app/storage.py`, `data/datasets/*`
+  - 除外/NMS: `backend/app/filters.py`, `backend/app/nms.py`
+- Segmentation
+  - SAMロード: `backend/app/sam_service.py`
+  - デバイス選択: `backend/app/sam_device.py`
+  - polygon変換: `backend/app/polygon.py`
 
-## 3. データフロー（主要）
-1. Dataset 作成・取込（`/dataset/projects`, `/dataset/import`）
-2. 画像選択（`/dataset/select`）
-3. 検出（`/detect/point` または `/annotate/auto`）
-4. 確定結果を保存（`/annotations/save`）
-5. 必要時に Seg 補助（`/segment/candidate`）
-6. 出力（`/export/yolo`, `/export/dataset/bbox`, `/export/dataset/seg`）
+## 3. 主要データフロー
+1. プロジェクト作成（`/dataset/projects`）
+2. 画像取込（`/dataset/import`）
+3. 画像選択（`/dataset/select`）
+4. 検出（`/detect/point`）
+5. 必要時 segmentation（`/segment/candidate`）
+6. annotation 保存（`/annotations/save`）
+7. export（`/export/dataset/bbox` / `/export/dataset/seg`）
 
-## 4. 自動アノテーション方式（現行コード）
-`POST /annotate/auto` の `method` は以下を受け付けます。
-- `combined`: 二値相関統合モード（`annotate_all`）
-- `scaled_templates`: ROIタイル等倍拡張モード（`annotate_all_manual`）
-- `scaled_templates_beta`: 全域精密探索モード（`annotate_all_global_precision`）
+## 4. 自動アノテーションモード
+`POST /annotate/auto` の `method`:
+- `combined`（二値相関統合）
+- `scaled_templates`（ROIタイル等倍拡張）
+- `scaled_templates_beta`（全域精密探索）
 
 ## 5. 保存先
 - Dataset: `data/datasets/<project_name>/`
-- テンプレート: `data/templates/<project>/<class>/*`
-- 単発画像アップロード: `data/images/`
-- YOLOダウンロード対象: `data/runs/`
+- Template: `data/templates/<project>/<class>/`
+- 単発アップロード画像: `data/images/`
+- 実行結果（一部）: `data/runs/`
 
-## 6. 境界と前提
-- 認証・認可は実装されていません（ローカル利用前提）。
-- CORS は全許可です。
-- テンプレートは起動時スキャンのため、反映には Backend 再起動が必要です。
+## 6. 運用前提
+- 認証/認可なし
+- CORS 全許可
+- ローカルまたは閉域ネットワーク運用前提
+- テンプレート反映は backend 再起動が必要（起動時キャッシュ）
 
-## 7. 参照
-- API: `docs/api.md`
-- Runbook: `docs/runbook.md`
-- Backend 詳細: `backend/app/docs/main.md`
-- Frontend 詳細: `frontend/docs/README.md`
+## 7. 関連
+- 使い方: `docs/usage.md`
+- API仕様: `docs/api.md`
+- 運用: `docs/runbook.md`
+- データ仕様: `docs/data_spec.md`

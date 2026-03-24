@@ -1,50 +1,36 @@
 # Development Plan
 
-本書は現行コードから仕様を抽出して記載しています。動作確認・実運用での検証は別途必要です。
+本書は「現行仕様」ではなく、現実装を踏まえた改善候補メモです。
 
-## 現在の設計制約
-- `App.tsx` が巨大で、状態・UI・操作ロジックが単一ファイルに集中。
-- backend も `main.py` 集約が強く、機能別分割が不十分。
-- テンプレは起動時キャッシュで、ホットリロードなし。
-- 出力系APIの一部に実装不整合（seg export 500リスク）。
+## 1. 優先度高
+1. `POST /export/dataset/seg` の未定義変数参照を修正
+2. Frontend / Backend 間の型差分解消（debug fields 含む）
+3. `App.tsx` の責務分割（状態管理・描画・業務ロジック）
 
-## スケール自動推定の拡張余地
-- 現状は `scale_min/max/steps` を固定入力。
-- 候補:
-  1. テンプレサイズ分布と画像解像度から初期スケール範囲を推定
-  2. クリック周辺の線密度から local scale を補正
-  3. クラス別に推奨スケール設定を保持
+## 2. 優先度中
+1. 自動アノテーション評価指標の整備（再現率・処理時間）
+2. テンプレート変更時の再読み込み体験の改善
+3. 大量 annotation 表示時の描画最適化
 
-## MPS (Metal Performance Shaders) 利用余地
-- 現状利用:
-  - SAM 推論時のみ `mps/cpu` 切替 (`sam_device.py`)
-- 余地:
-  - template matching のGPU化（現状 OpenCV CPU依存）
-  - バッチ化したROI推論
+## 3. 優先度低
+1. template matching の計算高速化（coarse-to-fine 等）
+2. タイル処理の並列化
+3. UI モジュール化とテスト容易性向上
 
-## template 数増加時の課題
-- スケール×テンプレ×タイルの積で計算量が増大。
-- 現状は `prepare_scaled_templates` など前処理はあるが、画像全体探索では依然コストが高い。
-- 候補:
-  1. クラス/テンプレ事前フィルタ
-  2. coarse-to-fine探索
-  3. ROI候補生成の前段導入
-
-## 高速化ポイント
-- Backend
-  - `annotate_all_manual` の stride/roi 設計最適化
-  - テンプレ前処理キャッシュのプロジェクト単位保持
-  - 並列処理（タイル並列）
+## 4. 技術的制約（現状）
 - Frontend
-  - `App.tsx` 分割（store/hooks/components）
-  - 大量アノテ表示時の仮想化
+  - `App.tsx` に状態・UI・操作ロジックが集中
+- Backend
+  - `main.py` 集約が強く、責務分離の余地あり
+- テンプレート
+  - 起動時キャッシュのため、動的反映なし
 
-## 近傍の優先タスク
-1. `/export/dataset/seg` の未定義変数修正
-2. API スキーマと frontend 型の差分解消（debug fields）
-3. `App.tsx` を機能単位に分離
-4. 自動アノテ結果の評価指標（速度・再現率）を定量化
+## 5. 調査トピック
+- MPS 利用拡張（現状は SAM 推論時のみ `mps/cpu` 選択）
+- template 数増加時のスケーリング戦略
+- 自動スケール推定の実装可能性
 
-## 未実装/未検証
-- 自動スケール推定は未実装。
-- MPS を template matching に使う実装は未着手。
+## 6. 進め方ガイド
+- 仕様変更を伴う場合は `README.md` と `docs/` を同PRで更新
+- API変更時は `docs/api.md` と `docs/data_spec.md` を優先更新
+- 既知不具合修正は最小差分で先行適用
